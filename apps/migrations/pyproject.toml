@@ -1,0 +1,17 @@
+[project]
+name = "zkast-migrations"
+version = "0.0.1"
+description = "Alembic migrations for zkast Postgres working store"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14,<2",
+  "psycopg[binary]>=3.2,<4",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alembic*"]

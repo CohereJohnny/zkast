@@ -1,0 +1,14 @@
+{
+  "name": "zkast",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint",
+    "test:pipeline": "bash scripts/run-pipeline-tests.sh"
+  }
+}
