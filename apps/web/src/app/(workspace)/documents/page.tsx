@@ -1,19 +1,13 @@
-import { EmptyState } from "@/components/empty-state";
+import { DocumentsPanel } from "@/components/documents-panel";
+import { getCurrentWorkspace } from "@/lib/auth";
 
-export default function DocumentsPage() {
+export const dynamic = "force-dynamic";
+
+export default async function DocumentsPage() {
+  const workspace = await getCurrentWorkspace();
   return (
-    <EmptyState
-      title="No documents yet"
-      description="Upload PDFs to triage ingestion runs and feed your working graph."
-      cta={
-        <button
-          type="button"
-          disabled
-          className="cursor-not-allowed rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-canvas opacity-45"
-        >
-          Upload a document
-        </button>
-      }
-    />
+    <div className="flex min-h-[520px] flex-col gap-4 p-2">
+      <DocumentsPanel workspaceId={workspace.id} variant="full" />
+    </div>
   );
 }

@@ -43,6 +43,9 @@ services:
       context: ./apps/migrations
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      # Inside Compose the DB is reachable at service name `postgres`, not localhost.
+      DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,8 +59,17 @@ services:
     environment:
       GRAPHITI_TELEMETRY_ENABLED: "false"
       EMBEDDING_DIM: "1536"
+      DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
+      REDIS_URL: redis://redis:6379/0
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+    ports:
+      # Host access when Next.js runs via `pnpm dev` (PIPELINE_INTERNAL_URL=http://127.0.0.1:8000).
+      - "8000:8000"
     expose:
       - "8000"
+    volumes:
+      - pipeline_storage:/var/zkast/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +92,31 @@ services:
       retries: 5
       start_period: 10s
 
+  worker:
+    build:
+      context: ./apps/pipeline
+      dockerfile: Dockerfile
+    command: ["arq", "app.tasks.WorkerSettings"]
+    env_file: .env
+    environment:
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+      EMBEDDING_DIM: "1536"
+      DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
+      REDIS_URL: redis://redis:6379/0
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+    volumes:
+      - pipeline_storage:/var/zkast/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   web:
     build:
       context: .
@@ -89,12 +126,17 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
+      PIPELINE_INTERNAL_URL: http://pipeline:8000
     depends_on:
       pipeline:
         condition: service_healthy
+      worker:
+        condition: service_started
 
 volumes:
   pgdata:
+  pipeline_storage:
 
 # Optional (uncomment): observability profile
 # profiles: [observability]

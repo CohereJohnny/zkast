@@ -13,7 +13,7 @@ export default async function WorkspaceLayout({
 }) {
   const workspace = await getCurrentWorkspace();
   return (
-    <WorkspaceShell workspaceName={workspace.name}>
+    <WorkspaceShell workspaceName={workspace.name} workspaceId={workspace.id}>
       <FirstRunCohereGate workspaceId={workspace.id}>{children}</FirstRunCohereGate>
     </WorkspaceShell>
   );

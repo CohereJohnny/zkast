@@ -82,6 +82,10 @@ export function FirstRunCohereGate({ workspaceId, children }: Props) {
               and Rerank v3. The key is encrypted locally (AES-256-GCM); it is never sent back from
               the API after save. Only Cohere is contacted when you test or run graph jobs.
             </p>
+            <p className="mt-2 text-caption text-muted">
+              PDF upload and parsing do not require this key — choose Later if you only want to try
+              ingestion first.
+            </p>
             <form className="mt-6 flex flex-col gap-4" onSubmit={save}>
               <label className="flex flex-col gap-1 text-caption text-secondary">
                 Label

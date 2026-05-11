@@ -80,13 +80,24 @@ Graphiti uses a semaphore for concurrent LLM/graph work. Tune **`SEMAPHORE_LIMIT
    openssl rand -hex 32      # INTERNAL_PIPELINE_TOKEN (opaque shared secret)
    ```
 
+   **URLs:** `docker-compose.yml` overrides `DATABASE_URL`, `REDIS_URL`, FalkorDB host/port, and `PIPELINE_INTERNAL_URL` for services inside the Compose network. Your `.env` can use `localhost` for host-side tools (`pnpm dev`, Alembic on the host); Compose still connects to `postgres`, `redis`, and `falkordb` containers.
+
 2. Start the stack (builds images, runs migrations once, then pipeline + web):
 
    ```bash
    docker compose up --build
    ```
 
-3. Open the UI: **http://localhost:3000** (redirects to `/documents`). Placeholder routes: Documents, Notes, Graph, Chat, Snapshots, External Targets, Settings.
+3. Open the UI: **http://localhost:3000** (redirects to `/documents`). Core routes: Documents (PDF upload + status), Notes, Graph, Chat, Snapshots, External Targets, Settings.
+
+When Next runs via **`pnpm dev`** on the host, keep **`PIPELINE_INTERNAL_URL=http://127.0.0.1:8000`** and ensure the **pipeline** container publishes **8000** (see `docker-compose.yml`). After adding or changing `ports:` for pipeline, recreate it so the bind appears: **`docker compose up -d pipeline --force-recreate`**.
+
+### PDF upload (storage)
+
+- **`MAX_UPLOAD_BYTES`** — upper bound per uploaded PDF (default **52428800**, i.e. 50 MiB). Set in `.env` for pipeline + web.
+- **`ZKAST_STORAGE_ROOT`** — directory where PDF bytes are written (default **`/var/zkast/storage`** in Compose). The **`pipeline`** and **`worker`** services mount the named volume **`pipeline_storage`** at this path so parsing can read what the API wrote.
+- **`worker`** runs **`arq app.tasks.WorkerSettings`** (Arq) against **`REDIS_URL`**; keep it running alongside **`pipeline`** for ingest jobs to complete.
+- To delete stored PDFs only, remove the Docker volume **`zkast_pipeline_storage`** (exact name depends on project prefix) or run **`docker compose down -v`** (this also deletes Postgres **`pgdata`**).
 
 4. Smoke-check aggregated readiness from the web tier:
 
@@ -131,6 +142,18 @@ export REDIS_URL=redis://localhost:6379/0
 export FALKORDB_HOST=localhost
 export FALKORDB_PORT=6380
 cd apps/pipeline && python -m pytest tests/test_graphiti_smoke.py -q
+```
+
+Optional ingestion parse smoke (Compose **up**, migration **0004** applied, same defaults as Graphiti smoke for DB/Redis/token):
+
+```bash
+export ZKAST_INGESTION_SMOKE=1
+export DATABASE_URL=postgresql://zkast:zkast@localhost:5432/zkast
+export INTERNAL_PIPELINE_TOKEN=...
+export MASTER_ENCRYPTION_KEY=...
+export REDIS_URL=redis://localhost:6379/0
+export ZKAST_STORAGE_ROOT=/tmp/zkast-ingest-test
+cd apps/pipeline && python -m pytest tests/test_ingestion_worker.py -q
 ```
 
 ## Security note (**FR-33**, **NFR-11**)

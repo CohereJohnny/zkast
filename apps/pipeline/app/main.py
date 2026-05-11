@@ -9,7 +9,10 @@ from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 from uuid import UUID
 
+import redis.asyncio as aioredis
 import structlog
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -18,6 +21,8 @@ from app.cohere_probe import probe_cohere_async
 from app.config import Settings, get_settings
 from app.deps_checks import readiness_report
 from app.graphiti_factory import resolve_stored_cohere_api_key
+from app.internal_ingestion import router as internal_ingestion_router
+from app.internal_jobs import router as internal_jobs_router
 from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
 logger = structlog.get_logger(__name__)
@@ -58,12 +63,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _configure_logging()
     _maybe_configure_otel(settings, app)
     app.state.settings = settings
+    app.state.redis_async = aioredis.from_url(settings.redis_url, decode_responses=True)
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     logger.info(
         "pipeline_start",
         version=settings.pipeline_version,
         otel_enabled=settings.zkast_otel_enabled,
     )
     yield
+    await app.state.arq_pool.close()
+    await app.state.redis_async.aclose()
     logger.info("pipeline_stop")
 
 
@@ -73,6 +82,9 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_url="/openapi.json",
 )
+
+app.include_router(internal_ingestion_router)
+app.include_router(internal_jobs_router)
 
 
 @app.middleware("http")
@@ -183,14 +195,6 @@ async def internal_cohere_test(body: CohereTestBody, request: Request) -> dict[s
             },
         }
     return {"ok": True}
-
-
-@app.post("/internal/v1/ingestion-runs")
-async def stub_ingestion_runs() -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content={"error": {"code": "not_implemented", "message": "Sprint 3+"}},
-    )
 
 
 @app.post("/internal/v1/persistence-jobs")

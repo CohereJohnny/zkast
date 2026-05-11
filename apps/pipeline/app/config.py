@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     pipeline_version: str = "0.0.1"
     api_contract_version: str = "v1"
 
+    zkast_storage_root: str = Field(
+        default="/var/zkast/storage",
+        validation_alias="ZKAST_STORAGE_ROOT",
+    )
+    max_upload_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        validation_alias="MAX_UPLOAD_BYTES",
+    )
+
     @field_validator("master_encryption_key")
     @classmethod
     def validate_master_key_b64(cls, value: str) -> str:

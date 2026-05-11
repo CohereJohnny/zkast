@@ -3,6 +3,8 @@ const INTERNAL_HEADER = "x-zkast-internal-token";
 export type PipelineFetchInit = RequestInit & {
   /** When false, skip throwing on non-OK responses (caller inspects `res.ok`). */
   throwOnError?: boolean;
+  /** Scope for internal job endpoints (header X-Zkast-Workspace-Id). */
+  workspaceId?: string;
 };
 
 /**
@@ -12,7 +14,7 @@ export async function pipelineFetch(
   path: string,
   init: PipelineFetchInit = {},
 ): Promise<Response> {
-  const { throwOnError = true, ...rest } = init;
+  const { throwOnError = true, workspaceId, ...rest } = init;
   const base = (process.env.PIPELINE_INTERNAL_URL ?? "http://localhost:8000").replace(
     /\/$/,
     "",
@@ -25,6 +27,9 @@ export async function pipelineFetch(
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
   const headers = new Headers(rest.headers);
   headers.set(INTERNAL_HEADER, token);
+  if (workspaceId) {
+    headers.set("X-Zkast-Workspace-Id", workspaceId);
+  }
 
   const res = await fetch(url, {
     ...rest,

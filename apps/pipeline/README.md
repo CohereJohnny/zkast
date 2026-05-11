@@ -46,7 +46,25 @@ export MASTER_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 python -m pytest
 ```
 
-Uses `MASTER_ENCRYPTION_KEY` from env for AES-GCM roundtrip smoke (`tests/test_secrets.py`).
+Uses `MASTER_ENCRYPTION_KEY` from env for AES-GCM roundtrip smoke (`tests/test_secrets.py`). Chunking + storage tests do not require Postgres.
+
+## PDF ingestion worker (Arq)
+
+With Redis + Postgres available and migrations applied (including `documents` / `episodes`), run a worker process **in addition to** uvicorn:
+
+```bash
+cd apps/pipeline
+source .venv/bin/activate
+export DATABASE_URL=postgresql://zkast:zkast@localhost:5432/zkast
+export REDIS_URL=redis://localhost:6379/0
+export ZKAST_STORAGE_ROOT=/var/zkast/storage   # must match pipeline API
+export INTERNAL_PIPELINE_TOKEN=dev-token
+export MASTER_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+
+arq app.tasks.WorkerSettings
+```
+
+Docker Compose starts this automatically as the **`worker`** service.
 
 ## Graphiti + Cohere
 
