@@ -89,6 +89,8 @@
 
 ## Sprint review (fill at end)
 
+Formal sprint wrap-up (summary, verification, carryovers): **[sprint_1_report.md](sprint_1_report.md)**.
+
 ### Demo readiness
 
 - Monorepo scaffold (**pnpm** workspace, `apps/web`, `apps/pipeline`, `apps/migrations`).
