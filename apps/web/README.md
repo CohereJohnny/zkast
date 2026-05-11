@@ -1,0 +1,53 @@
+# zkast web (Next.js 14)
+
+App Router + TypeScript + Tailwind v3. Uses React Server Components by default; client islands include TanStack Query provider, nav rail (active route), chat drawer stub, and error boundary.
+
+## Prerequisites
+
+- Node **22+**
+- **pnpm 9.x** (Corepack: `corepack enable`)
+
+## Local development
+
+From the **repository root**:
+
+```bash
+cp .env.example .env
+# Edit .env — set MASTER_ENCRYPTION_KEY, INTERNAL_PIPELINE_TOKEN, DATABASE_URL if hitting Postgres locally.
+
+pnpm install
+pnpm dev
+```
+
+Open `http://localhost:3000` (redirects to `/documents`).
+
+### Useful routes
+
+| Path | Purpose |
+| ---- | ------- |
+| `/api/v1/healthz` | Web liveness |
+| `/api/v1/readyz` | Aggregates pipeline `/readyz` (needs running pipeline + env) |
+| `/api/v1/version` | Web + pipeline versions |
+
+### Against Docker Compose pipeline only
+
+Point `PIPELINE_INTERNAL_URL` at `http://127.0.0.1:<published-port>` if you expose pipeline locally; in Compose, web uses `http://pipeline:8000`.
+
+## Build / lint
+
+```bash
+pnpm --filter web build
+pnpm --filter web lint
+```
+
+## Docker
+
+Built from repo root (see root `docker-compose.yml`): context `.`, Dockerfile `apps/web/Dockerfile`.
+
+## Telemetry stub
+
+When `ZKAST_OTEL_ENABLED=true`, `src/instrumentation.ts` loads `src/lib/otel-register.ts` (Node SDK). Default is off (**NFR-2**).
+
+## Theme
+
+Root layout sets `<html data-theme="dark">` only; light-theme tokens exist in CSS for a future Sprint 8 parity pass ([specs/uiux.md](../../specs/uiux.md)).

@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark theme (default) — token values from specs/uiux.md */
+:root {
+  --bg-canvas: #020617;
+  --bg-surface: #0f172a;
+  --bg-surface-raised: #1e293b;
+  --bg-surface-overlay: #0f172ae6;
+  --border-subtle: #1e293b;
+  --border-strong: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --accent-primary: #14b8a6;
+  --accent-primary-hover: #2dd4bf;
+  --accent-secondary: #a78bfa;
+  --semantic-success: #22c55e;
+  --semantic-warning: #f59e0b;
+  --semantic-danger: #ef4444;
+  --semantic-info: #38bdf8;
+}
+
+/* Light theme stub (full parity Sprint 8) */
+html[data-theme="light"] {
+  --bg-canvas: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-raised: #f1f5f9;
+  --bg-surface-overlay: #ffffffe6;
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent-primary: #0d9488;
+  --accent-primary-hover: #0f766e;
+  --accent-secondary: #7c3aed;
+}
+
+@layer base {
+  body {
+    @apply bg-canvas text-primary antialiased;
+  }
+
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:border focus:border-border-strong focus:bg-surface-raised focus:px-4 focus:py-2 focus:text-primary focus:shadow-lg;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-accent-primary ring-offset-2 ring-offset-canvas;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
