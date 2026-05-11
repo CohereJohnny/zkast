@@ -13,13 +13,15 @@ From the **repository root**:
 
 ```bash
 cp .env.example .env
-# Edit .env — set MASTER_ENCRYPTION_KEY, INTERNAL_PIPELINE_TOKEN, DATABASE_URL if hitting Postgres locally.
+# Edit .env — set MASTER_ENCRYPTION_KEY and INTERNAL_PIPELINE_TOKEN. Defaults use 127.0.0.1 for Postgres (Compose publishes 5432) and pipeline (Compose publishes 8000).
 
 pnpm install
 pnpm dev
 ```
 
 Open `http://localhost:3000` (redirects to `/documents`).
+
+Environment variables are read from the **repository root** `.env` / `.env.local` (via `next.config.mjs`), so you do not need to duplicate them under `apps/web/` for local dev. Optional overrides can still live in `apps/web/.env.local`.
 
 ### Useful routes
 
@@ -31,7 +33,7 @@ Open `http://localhost:3000` (redirects to `/documents`).
 
 ### Against Docker Compose pipeline only
 
-Point `PIPELINE_INTERNAL_URL` at `http://127.0.0.1:<published-port>` if you expose pipeline locally; in Compose, web uses `http://pipeline:8000`.
+Point `PIPELINE_INTERNAL_URL` at `http://127.0.0.1:8000` when Compose publishes pipeline port **8000** (default in root `docker-compose.yml`).
 
 ## Build / lint
 

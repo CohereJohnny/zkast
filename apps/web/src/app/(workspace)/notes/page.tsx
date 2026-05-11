@@ -3,8 +3,8 @@ import { EmptyState } from "@/components/empty-state";
 export default function NotesPage() {
   return (
     <EmptyState
-      title="No notes in this workspace"
-      description="Atomic notes appear here after documents are ingested — or create one manually later."
+      title="Notes aren’t wired up yet"
+      description="Ingestion stores PDF chunks as episodes in Postgres for the pipeline. Listing and editing them as notes in this UI ships in a later sprint."
       cta={
         <button
           type="button"

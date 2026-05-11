@@ -1061,13 +1061,16 @@ These apply to any job (IngestionRun, PersistenceJob, large cascade delete).
 This is **not** part of the public API. It is the contract between the web tier and the pipeline service, deployed together. Documented here so the contract is reviewable.
 
 - `POST /internal/v1/providers/cohere/test` — Connectivity probe against Cohere (OpenAI-compat chat + native embed + rerank); uses plaintext `api_key` or decrypts `llm_cohere` for `workspace_id`.
-- `POST /internal/v1/ingestion-runs` — Start an ingestion run for a document.
+- `POST /internal/v1/documents` — Multipart PDF upload (`workspace_id`, `file`, optional `replaces_document_id`); streams to local storage, inserts `Document` + `IngestionRun`, enqueues Arq `parse_document`. Optional `Idempotency-Key` header (24h replay). Returns **202** with `document` + `job_id`.
+- `DELETE /internal/v1/documents/{documentId}?workspace_id=` — Hard-delete document row, cascades episodes/runs; removes file from `ZKAST_STORAGE_ROOT`.
+- `POST /internal/v1/ingestion-runs` — Body `{ "document_id", "from_stage": "parsing" }`; starts a new parse attempt (new `IngestionRun`) and enqueues `parse_document`.
 - `POST /internal/v1/persistence-jobs` — Start a persistence job for a snapshot/target pair.
 - `POST /internal/v1/graph/search` — Hybrid search delegated to Graphiti.
 - `POST /internal/v1/extract/atomic-notes` — Run atomic-note generation on a set of episodes (used by manual re-runs).
 - `POST /internal/v1/chat/turns` — Run a single chat turn: retrieve, call Cohere Chat with grounding, stream tokens and citations. Returns an SSE stream consumed by the web tier and proxied to the browser.
 - `POST /internal/v1/chat/turns/{turnId}/cancel` — Cancel an in-flight chat turn.
-- `GET /internal/v1/jobs/{jobId}` and `GET /internal/v1/jobs/{jobId}/events` — Mirror of the public job interface.
+- `GET /internal/v1/jobs/{jobId}` — Poll job hash state (requires `X-Zkast-Workspace-Id`).
+- `GET /internal/v1/jobs/{jobId}/events` — SSE over Redis pub/sub for that job (requires `X-Zkast-Workspace-Id`).
 
 All internal endpoints authenticate with the shared `X-Zkast-Internal-Token` and are bound to the internal network in self-hosted mode.
 

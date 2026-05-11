@@ -1,0 +1,426 @@
+"""Postgres reads/writes for documents, ingestion runs, episodes (sync psycopg)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+
+
+def _uuid_str(row: dict[str, Any], key: str) -> None:
+    if row.get(key) is not None:
+        row[key] = str(row[key])
+
+
+def fetch_document_by_checksum(
+    database_url: str,
+    *,
+    workspace_id: str,
+    checksum: str,
+) -> dict[str, Any] | None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM documents
+            WHERE workspace_id = %s::uuid AND checksum = %s
+            LIMIT 1
+            """,
+            (workspace_id, checksum),
+        ).fetchone()
+        if not row:
+            return None
+        _uuid_str(row, "id")
+        _uuid_str(row, "workspace_id")
+        if row.get("replaces_document_id"):
+            _uuid_str(row, "replaces_document_id")
+        return row
+
+
+def fetch_document(
+    database_url: str,
+    *,
+    workspace_id: str,
+    document_id: str,
+) -> dict[str, Any] | None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM documents
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            LIMIT 1
+            """,
+            (document_id, workspace_id),
+        ).fetchone()
+        if not row:
+            return None
+        _uuid_str(row, "id")
+        _uuid_str(row, "workspace_id")
+        if row.get("replaces_document_id"):
+            _uuid_str(row, "replaces_document_id")
+        return row
+
+
+def list_documents_for_workspace(database_url: str, workspace_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM documents
+            WHERE workspace_id = %s::uuid
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (workspace_id, limit),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            _uuid_str(row, "id")
+            _uuid_str(row, "workspace_id")
+            if row.get("replaces_document_id"):
+                _uuid_str(row, "replaces_document_id")
+            out.append(row)
+        return out
+
+
+def list_ingestion_runs_for_document(
+    database_url: str,
+    *,
+    document_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM ingestion_runs
+            WHERE document_id = %s::uuid
+            ORDER BY started_at DESC
+            LIMIT %s
+            """,
+            (document_id, limit),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            _uuid_str(row, "id")
+            _uuid_str(row, "document_id")
+            out.append(row)
+        return out
+
+
+def insert_document(
+    database_url: str,
+    *,
+    document_id: str,
+    workspace_id: str,
+    original_filename: str,
+    mime_type: str,
+    byte_size: int,
+    storage_uri: str,
+    checksum: str,
+    replaces_document_id: str | None,
+    status: str,
+) -> dict[str, Any]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            INSERT INTO documents (
+              id, workspace_id, original_filename, mime_type, byte_size,
+              storage_uri, checksum, replaces_document_id, status
+            )
+            VALUES (
+              %s::uuid, %s::uuid, %s, %s, %s, %s, %s,
+              %s::uuid, %s
+            )
+            RETURNING *
+            """,
+            (
+                document_id,
+                workspace_id,
+                original_filename,
+                mime_type,
+                byte_size,
+                storage_uri,
+                checksum,
+                replaces_document_id,
+                status,
+            ),
+        ).fetchone()
+        conn.commit()
+        assert row
+        _uuid_str(row, "id")
+        _uuid_str(row, "workspace_id")
+        if row.get("replaces_document_id"):
+            _uuid_str(row, "replaces_document_id")
+        return row
+
+
+def insert_ingestion_run(
+    database_url: str,
+    *,
+    run_id: str,
+    document_id: str,
+    status: str,
+    pipeline_version: str,
+    llm_provider: str,
+    llm_model_small: str,
+    llm_model_large: str,
+    stats: dict[str, Any] | None = None,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            INSERT INTO ingestion_runs (
+              id, document_id, status, pipeline_version,
+              llm_provider, llm_model_small, llm_model_large, stats, trace_id
+            )
+            VALUES (
+              %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb, %s
+            )
+            RETURNING *
+            """,
+            (
+                run_id,
+                document_id,
+                status,
+                pipeline_version,
+                llm_provider,
+                llm_model_small,
+                llm_model_large,
+                Json(stats or {}),
+                trace_id,
+            ),
+        ).fetchone()
+        conn.commit()
+        assert row
+        _uuid_str(row, "id")
+        _uuid_str(row, "document_id")
+        return row
+
+
+def update_document(
+    database_url: str,
+    *,
+    document_id: str,
+    status: str | None = None,
+    page_count: int | None = None,
+    failure_reason: str | None = None,
+    byte_size: int | None = None,
+    clear_failure_reason: bool = False,
+) -> None:
+    sets: list[str] = ["updated_at = now()"]
+    params: list[Any] = []
+    if status is not None:
+        sets.append("status = %s")
+        params.append(status)
+    if page_count is not None:
+        sets.append("page_count = %s")
+        params.append(page_count)
+    if clear_failure_reason:
+        sets.append("failure_reason = NULL")
+    elif failure_reason is not None:
+        sets.append("failure_reason = %s")
+        params.append(failure_reason)
+    if byte_size is not None:
+        sets.append("byte_size = %s")
+        params.append(byte_size)
+    params.append(document_id)
+    q = f"UPDATE documents SET {', '.join(sets)} WHERE id = %s::uuid"
+    with psycopg.connect(database_url) as conn:
+        conn.execute(q, params)
+        conn.commit()
+
+
+def update_ingestion_run(
+    database_url: str,
+    *,
+    run_id: str,
+    status: str | None = None,
+    ended_at: datetime | None = None,
+    stats: dict[str, Any] | None = None,
+) -> None:
+    sets: list[str] = []
+    params: list[Any] = []
+    if status is not None:
+        sets.append("status = %s")
+        params.append(status)
+    if ended_at is not None:
+        sets.append("ended_at = %s")
+        params.append(ended_at)
+    if stats is not None:
+        sets.append("stats = %s::jsonb")
+        params.append(Json(stats))
+    if not sets:
+        return
+    params.append(run_id)
+    q = f"UPDATE ingestion_runs SET {', '.join(sets)} WHERE id = %s::uuid"
+    with psycopg.connect(database_url) as conn:
+        conn.execute(q, params)
+        conn.commit()
+
+
+def merge_run_stats_warning(database_url: str, *, run_id: str, warning: str) -> None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT stats FROM ingestion_runs WHERE id = %s::uuid",
+            (run_id,),
+        ).fetchone()
+        if not row:
+            return
+        stats = dict(row["stats"] or {})
+        warnings = list(stats.get("warnings") or [])
+        warnings.append(warning)
+        stats["warnings"] = warnings
+        conn.execute(
+            "UPDATE ingestion_runs SET stats = %s::jsonb WHERE id = %s::uuid",
+            (Json(stats), run_id),
+        )
+        conn.commit()
+
+
+def delete_episodes_for_document(database_url: str, *, document_id: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        conn.execute("DELETE FROM episodes WHERE document_id = %s::uuid", (document_id,))
+        conn.commit()
+
+
+def insert_episodes(
+    database_url: str,
+    *,
+    workspace_id: str,
+    document_id: str,
+    ingestion_run_id: str,
+    rows: list[tuple[str, str, int, int, int]],
+) -> None:
+    """rows: (episode_id, text, page_start, page_end, sequence)"""
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO episodes (
+                  id, workspace_id, document_id, ingestion_run_id,
+                  kind, text, page_start, page_end, sequence
+                )
+                VALUES (
+                  %s::uuid, %s::uuid, %s::uuid, %s::uuid,
+                  'pdf_chunk', %s, %s, %s, %s
+                )
+                """,
+                [
+                    (
+                        r[0],
+                        workspace_id,
+                        document_id,
+                        ingestion_run_id,
+                        r[1],
+                        r[2],
+                        r[3],
+                        r[4],
+                    )
+                    for r in rows
+                ],
+            )
+        conn.commit()
+
+
+def fetch_idempotency(
+    database_url: str,
+    *,
+    key: str,
+    workspace_id: str,
+) -> dict[str, Any] | None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT document_id, job_id
+            FROM upload_idempotency
+            WHERE key = %s AND workspace_id = %s::uuid
+              AND created_at > now() - interval '24 hours'
+            LIMIT 1
+            """,
+            (key, workspace_id),
+        ).fetchone()
+        if not row:
+            return None
+        return {"document_id": str(row["document_id"]), "job_id": row["job_id"]}
+
+
+def cleanup_expired_idempotency(database_url: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            "DELETE FROM upload_idempotency WHERE created_at < now() - interval '24 hours'",
+        )
+        conn.commit()
+
+
+def insert_idempotency(
+    database_url: str,
+    *,
+    key: str,
+    workspace_id: str,
+    document_id: str,
+    job_id: str,
+) -> None:
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            """
+            INSERT INTO upload_idempotency (key, workspace_id, document_id, job_id)
+            VALUES (%s, %s::uuid, %s::uuid, %s)
+            """,
+            (key, workspace_id, document_id, job_id),
+        )
+        conn.commit()
+
+
+def fetch_workspace_id_for_document(database_url: str, document_id: str) -> str | None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT workspace_id::text AS workspace_id FROM documents WHERE id = %s::uuid LIMIT 1",
+            (document_id,),
+        ).fetchone()
+        return str(row["workspace_id"]) if row else None
+
+
+def merge_run_completion_stats(
+    database_url: str,
+    *,
+    run_id: str,
+    extra: dict[str, Any],
+    status: str,
+) -> None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT stats FROM ingestion_runs WHERE id = %s::uuid",
+            (run_id,),
+        ).fetchone()
+        stats = dict(row["stats"] if row and row["stats"] else {})
+        stats.update(extra)
+        conn.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = %s, ended_at = now(), stats = %s::jsonb
+            WHERE id = %s::uuid
+            """,
+            (status, Json(stats), run_id),
+        )
+        conn.commit()
+
+
+def delete_document_row(database_url: str, *, workspace_id: str, document_id: str) -> dict[str, Any] | None:
+    """Returns deleted row (including storage_uri) or None."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            DELETE FROM documents
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            RETURNING *
+            """,
+            (document_id, workspace_id),
+        ).fetchone()
+        conn.commit()
+        return row
+
