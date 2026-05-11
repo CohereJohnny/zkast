@@ -1,6 +1,6 @@
 # zkast pipeline (FastAPI)
 
-Python **3.12** service for ingestion, Graphiti, and chat orchestration (stubs in Sprint 1).
+Python **3.12** service for ingestion, Graphiti, and chat orchestration.
 
 ## Prerequisites
 
@@ -47,6 +47,16 @@ python -m pytest
 ```
 
 Uses `MASTER_ENCRYPTION_KEY` from env for AES-GCM roundtrip smoke (`tests/test_secrets.py`).
+
+## Graphiti + Cohere
+
+- Installs `graphiti-core[falkordb]` (pinned in `requirements.txt`). Compose forces `GRAPHITI_TELEMETRY_ENABLED=false` and sets `EMBEDDING_DIM=1536` (embed v4 default width; must stay consistent with indexed vectors in FalkorDB).
+- Optional `COHERE_API_KEY` overrides decrypted workspace keys at runtime (developer convenience). Leave unset to use DB-only secrets.
+- Live smoke: `ZKAST_GRAPHITI_SMOKE=1`, full Compose connectivity, and `pytest tests/test_graphiti_smoke.py`.
+
+## Internal probes
+
+- `POST /internal/v1/providers/cohere/test` — Body `workspace_id` and/or `api_key`; verifies chat (OpenAI-compat), embed, and rerank.
 
 ## Telemetry
 

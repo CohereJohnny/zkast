@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version as pkg_version
+from uuid import UUID
 
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, model_validator
 
+from app.cohere_probe import probe_cohere_async
 from app.config import Settings, get_settings
 from app.deps_checks import readiness_report
+from app.graphiti_factory import resolve_stored_cohere_api_key
+from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
 logger = structlog.get_logger(__name__)
 
@@ -46,6 +53,7 @@ def _maybe_configure_otel(settings: Settings, app: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    os.environ.setdefault("GRAPHITI_TELEMETRY_ENABLED", "false")
     settings = get_settings()
     _configure_logging()
     _maybe_configure_otel(settings, app)
@@ -104,11 +112,77 @@ async def readyz(request: Request) -> dict[str, object]:
 @app.get("/version")
 async def version(request: Request) -> dict[str, str | None]:
     settings: Settings = request.app.state.settings
+    try:
+        gv = pkg_version("graphiti-core")
+    except PackageNotFoundError:
+        gv = None
     return {
         "pipeline": settings.pipeline_version,
         "contract": settings.api_contract_version,
-        "graphiti": None,
+        "graphiti": gv,
     }
+
+
+class CohereTestBody(BaseModel):
+    workspace_id: UUID | None = None
+    api_key: str | None = Field(default=None, min_length=8)
+
+    @model_validator(mode="after")
+    def require_target(self) -> CohereTestBody:
+        if self.workspace_id is None and self.api_key is None:
+            raise ValueError("Provide workspace_id and/or api_key")
+        return self
+
+
+@app.post("/internal/v1/providers/cohere/test")
+async def internal_cohere_test(body: CohereTestBody, request: Request) -> dict[str, object]:
+    settings: Settings = request.app.state.settings
+    ws_id = str(body.workspace_id) if body.workspace_id else None
+
+    if body.api_key:
+        key = body.api_key
+        pipe = (
+            fetch_pipeline_settings(settings.database_url, ws_id)
+            if ws_id
+            else merge_pipeline_settings(None)
+        )
+    elif ws_id:
+        key = resolve_stored_cohere_api_key(settings, ws_id)
+        if not key:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "no_key",
+                    "message": "No llm_cohere API key stored for this workspace",
+                },
+            }
+        pipe = fetch_pipeline_settings(settings.database_url, ws_id)
+    else:
+        return {
+            "ok": False,
+            "error": {"code": "validation_failed", "message": "Provide workspace_id or api_key"},
+        }
+
+    ok, err, stage = await probe_cohere_async(
+        key,
+        chat_model=str(pipe["large_model"]),
+        embed_model=str(pipe["embed_model"]),
+        rerank_model=str(pipe["rerank_model"]),
+    )
+    used_stored_key = ws_id is not None and body.api_key is None
+    if ok and used_stored_key:
+        touch_llm_cohere_last_used(settings.database_url, ws_id)
+
+    if not ok:
+        return {
+            "ok": False,
+            "error": {
+                "code": "provider_error",
+                "message": err or "Cohere probe failed",
+                "stage": stage,
+            },
+        }
+    return {"ok": True}
 
 
 @app.post("/internal/v1/ingestion-runs")

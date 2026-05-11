@@ -5,6 +5,9 @@ services:
       POSTGRES_USER: zkast
       POSTGRES_PASSWORD: zkast
       POSTGRES_DB: zkast
+    ports:
+      # Host access for local tools / pytest (services inside Compose still use hostname `postgres`).
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +18,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -24,6 +29,9 @@ services:
   falkordb:
     image: falkordb/falkordb:latest
     # FalkorDB exposes Redis protocol (working graph engine for Graphiti).
+    ports:
+      # Avoid clash with host-mapped Redis above (both use 6379 in-container).
+      - "6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-h", "127.0.0.1", "-p", "6379", "ping"]
       interval: 5s
@@ -45,6 +53,9 @@ services:
       context: ./apps/pipeline
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+      EMBEDDING_DIM: "1536"
     expose:
       - "8000"
     depends_on:

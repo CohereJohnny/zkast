@@ -4,6 +4,36 @@
 
 The product is specified as **self-hostable first** (Docker Compose, BYO Cohere key) with a path toward multi-user and SaaS later.
 
+## Architecture (Sprint 2+)
+
+zkast is a two-process system: **Next.js 14** (UI + public HTTP) and **FastAPI** (Graphiti, ingestion, chat orchestration). Both read the working store in **Postgres**; the pipeline talks to **FalkorDB** for the working graph and **Cohere** (Command via OpenAI-compat, Embed v3, Rerank v3) for all LLM operations in P0.
+
+```mermaid
+flowchart LR
+  Web["Next.js"]
+  PG[("Postgres")]
+  Pipe["Pipeline FastAPI"]
+  Falkor["FalkorDB"]
+  Cohere["Cohere API"]
+  Web -->|"REST"| PG
+  Web -->|"internal token"| Pipe
+  Pipe -->|"SQL"| PG
+  Pipe --> Falkor
+  Pipe --> Cohere
+```
+
+### Cohere API key
+
+1. Create a key in the [Cohere dashboard](https://dashboard.cohere.com/) (production tier as appropriate).
+2. At first launch, paste it in the onboarding modal or under **Settings → API keys**. It is encrypted with `MASTER_ENCRYPTION_KEY` (AES-256-GCM) and never returned from APIs.
+3. Optional dev shortcut: set `COHERE_API_KEY` in `.env`; when present it overrides the DB-stored workspace key for pipeline runtime (local convenience). **Test Cohere** in Settings uses the **saved** workspace key so you verify what is stored for production.
+
+Default models are seeded in workspace `pipeline_settings`: `command-r7b-12-2024` (small), `command-a-plus-05-2026` (large), `embed-v4.0`, `rerank-v4.0-fast`. **`EMBEDDING_DIM`** defaults to **1536** for embed v4 (override if you truncate vectors / rebuild indexes).
+
+### Graphiti concurrency
+
+Graphiti uses a semaphore for concurrent LLM/graph work. Tune **`SEMAPHORE_LIMIT`** (integer) if you hit provider rate limits or want lower parallelism; see upstream Graphiti docs.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -87,6 +117,20 @@ python3 -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\act
 pip install -r requirements.txt
 export MASTER_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 python -m pytest
+```
+
+Optional live Graphiti + Cohere + FalkorDB smoke (Compose **up**, real `COHERE_API_KEY`, host ports published by `docker-compose.yml`: Postgres **5432**, Redis **6379**, FalkorDB **6380→6379**):
+
+```bash
+export ZKAST_GRAPHITI_SMOKE=1
+export COHERE_API_KEY="..."
+export DATABASE_URL=postgresql://zkast:zkast@localhost:5432/zkast
+export INTERNAL_PIPELINE_TOKEN=...
+export MASTER_ENCRYPTION_KEY=...
+export REDIS_URL=redis://localhost:6379/0
+export FALKORDB_HOST=localhost
+export FALKORDB_PORT=6380
+cd apps/pipeline && python -m pytest tests/test_graphiti_smoke.py -q
 ```
 
 ## Security note (**FR-33**, **NFR-11**)
