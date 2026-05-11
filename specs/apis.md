@@ -1060,6 +1060,7 @@ These apply to any job (IngestionRun, PersistenceJob, large cascade delete).
 
 This is **not** part of the public API. It is the contract between the web tier and the pipeline service, deployed together. Documented here so the contract is reviewable.
 
+- `POST /internal/v1/providers/cohere/test` — Connectivity probe against Cohere (OpenAI-compat chat + native embed + rerank); uses plaintext `api_key` or decrypts `llm_cohere` for `workspace_id`.
 - `POST /internal/v1/ingestion-runs` — Start an ingestion run for a document.
 - `POST /internal/v1/persistence-jobs` — Start a persistence job for a snapshot/target pair.
 - `POST /internal/v1/graph/search` — Hybrid search delegated to Graphiti.

@@ -190,9 +190,9 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 
 **P0 — single provider, Cohere**:
 
-- **Cohere Command** for chat / atomic-note generation / extraction. Default model `command-r-plus`; small model `command-r`. Wired into Graphiti through Cohere's OpenAI-compatible endpoint (`https://api.cohere.com/compatibility/v1`) via Graphiti's `OpenAIGenericClient`.
-- **Cohere Embed v3** for embeddings used by Graphiti's hybrid retrieval. Default model `embed-english-v3.0`; multilingual workspaces use `embed-multilingual-v3.0`. Implemented as a thin custom embedder that wraps Cohere's native Embed API.
-- **Cohere Rerank v3** as the cross-encoder for Graphiti's reranking stage. Default model `rerank-english-v3.0`. Implemented as a thin custom cross-encoder that wraps Cohere's native Rerank API. (Cohere Rerank is a natural fit here — it is the same family of models Graphiti's reranker slot was designed for.)
+- **Cohere Command** for chat / atomic-note generation / extraction. Repository defaults: large `command-a-plus-05-2026`, small `command-r7b-12-2024` (overridable per workspace in `pipeline_settings`). Wired into Graphiti through Cohere's OpenAI-compatible endpoint (`https://api.cohere.com/compatibility/v1`) via Graphiti's `OpenAIGenericClient`.
+- **Cohere Embed** for embeddings used by Graphiti's hybrid retrieval. Default model `embed-v4.0` (Matryoshka-friendly widths; deployment default embedding dimension **1536** via `EMBEDDING_DIM`). Multilingual or other Cohere embed variants remain selectable per workspace.
+- **Cohere Rerank** as the cross-encoder for Graphiti's reranking stage. Default model `rerank-v4.0-fast`. Implemented as a thin custom cross-encoder that wraps Cohere's native Rerank API.
 - The user supplies a single **Cohere production API key** at first run; the same key is used for chat, embeddings, and rerank.
 
 **P1+ — additional providers** (deferred, not in P0):
@@ -203,13 +203,13 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 - **Ollama** (local; chat + embeddings via `OpenAIGenericClient`).
 - **Generic OpenAI-compatible** (LM Studio, vLLM, Together, Groq).
 
-Per-workspace settings choose distinct **small** and **large** models so users can use a cheap model for extraction and a stronger one for note generation. In P0 both default to Cohere Command variants.
+Per-workspace settings choose distinct **small** and **large** models so users can use a cheaper model for extraction and a stronger one for note generation. In P0 defaults follow the seeded `pipeline_settings` (Command R7B small, Command A large).
 
 ### Why Cohere First
 
 - **The user has a Cohere production API key already**; shipping P0 against a credential they own removes a procurement step.
 - **Embed + Rerank in one provider**: most LLM providers cover chat well but rerank poorly. Cohere is the inverse — its Rerank model is widely considered best-in-class and slots directly into Graphiti's cross-encoder interface, materially improving hybrid retrieval quality on day one.
-- **Structured outputs are supported**: Command R/R+ supports JSON-mode and tool calls via the OpenAI compatibility layer, satisfying Graphiti's structured-output requirement.
+- **Structured outputs are supported**: Default Command-line models support JSON-mode and tool calls via the OpenAI compatibility layer, satisfying Graphiti's structured-output requirement.
 - **Single-provider P0 simplifies operations**: one set of credentials, one set of rate limits, one provider's quirks to understand.
 - **No lock-in**: the data model (see [datamodel.md](datamodel.md)) treats Cohere as one entry in an `ApiKey.kind` enum that already includes future providers. The pipeline service abstracts the LLM behind an internal interface so adding the next provider in P1 is additive, not structural.
 

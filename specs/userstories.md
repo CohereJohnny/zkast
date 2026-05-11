@@ -302,7 +302,7 @@ Satisfies: FR-33, NFR-2, NFR-3.
 **Acceptance criteria**:
 
 - AC-1: In P0 only one provider is supported (Cohere). The provider selector is visible but disabled with explanatory copy ("More providers coming in the next release.").
-- AC-2: Within Cohere, the user can choose distinct models for "small" (extraction; default `command-r`) and "large" (reasoning / note generation; default `command-r-plus`) tasks, plus an embedding model (`embed-english-v3.0` or `embed-multilingual-v3.0`) and a rerank model (`rerank-english-v3.0` or `rerank-multilingual-v3.0`).
+- AC-2: Within Cohere, the user can choose distinct models for "small" (extraction; default `command-r7b-12-2024`) and "large" (reasoning / note generation; default `command-a-plus-05-2026`) tasks, plus an embedding model (default `embed-v4.0`) and a rerank model (default `rerank-v4.0-fast`). Other Cohere embed/rerank IDs remain valid workspace overrides.
 - AC-3: Changing models does not break in-flight jobs; they finish on the model they started with.
 - AC-4: In P1, the provider selector becomes active and adds OpenAI, OpenAI-compatible generic, Ollama, Gemini, and Anthropic.
 

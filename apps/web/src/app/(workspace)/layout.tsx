@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { FirstRunCohereGate } from "@/components/first-run-cohere-gate";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import { getCurrentWorkspace } from "@/lib/auth";
 
@@ -11,5 +12,9 @@ export default async function WorkspaceLayout({
   children: ReactNode;
 }) {
   const workspace = await getCurrentWorkspace();
-  return <WorkspaceShell workspaceName={workspace.name}>{children}</WorkspaceShell>;
+  return (
+    <WorkspaceShell workspaceName={workspace.name}>
+      <FirstRunCohereGate workspaceId={workspace.id}>{children}</FirstRunCohereGate>
+    </WorkspaceShell>
+  );
 }

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
         description="Base64-encoded 32-byte AES key",
     )
 
+    # Optional dev bypass. When unset, the workspace `llm_cohere` key from Postgres is used.
+    cohere_api_key: str | None = Field(default=None, validation_alias="COHERE_API_KEY")
+
     zkast_otel_enabled: bool = False
     graphiti_telemetry_enabled: bool = False
 
