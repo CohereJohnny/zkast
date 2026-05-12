@@ -27,6 +27,12 @@ from app.graph_edit_repo import (
     unmerge_entity,
 )
 from app.evidence_repo import list_evidence_for_entity
+from app.filter_options_repo import (
+    list_edge_type_counts,
+    list_entity_type_counts,
+    list_tag_counts,
+    search_entities_typeahead,
+)
 from app.graph_repo import get_entity_detail, list_graph
 from app.graphiti_factory import graphiti_for_workspace
 from app.snapshots_repo import (
@@ -182,6 +188,64 @@ async def internal_get_entity(
     if not detail:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Entity not found"}})
     return JSONResponse(content={"entity": detail})
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/graph/types")
+async def internal_list_graph_types(
+    workspace_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    """Filter-picker data: distinct entity + edge types in this workspace.
+
+    Sprint 5c Phase 4 — backs the entity-type / edge-type multi-select
+    chips in the graph filter bar so users no longer have to know type
+    names upfront.
+    """
+    settings: Settings = request.app.state.settings
+    entity_types, edge_types = await asyncio.gather(
+        asyncio.to_thread(list_entity_type_counts, settings.database_url, workspace_id=str(workspace_id)),
+        asyncio.to_thread(list_edge_type_counts, settings.database_url, workspace_id=str(workspace_id)),
+    )
+    return JSONResponse(content={"entity_types": entity_types, "edge_types": edge_types})
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/notes/tags")
+async def internal_list_note_tags(
+    workspace_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    """Filter-picker data: distinct atomic-note tags with counts."""
+    settings: Settings = request.app.state.settings
+    tags = await asyncio.to_thread(
+        list_tag_counts, settings.database_url, workspace_id=str(workspace_id)
+    )
+    return JSONResponse(content={"tags": tags})
+
+
+@router.get(
+    "/internal/v1/workspaces/{workspace_id}/graph/entities/search-typeahead"
+)
+async def internal_search_entities_typeahead(
+    workspace_id: uuid.UUID,
+    request: Request,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> JSONResponse:
+    """Typeahead search over entity names for the seed-entity picker.
+
+    Distinct from the existing ``/graph/search`` endpoint which does a
+    full Graphiti hybrid retrieval. This one is a cheap ILIKE so the
+    picker stays responsive to every keystroke.
+    """
+    settings: Settings = request.app.state.settings
+    items = await asyncio.to_thread(
+        search_entities_typeahead,
+        settings.database_url,
+        workspace_id=str(workspace_id),
+        q=q,
+        limit=limit,
+    )
+    return JSONResponse(content={"items": items})
 
 
 @router.get(
