@@ -431,7 +431,15 @@ def merge_notes(
     other_note_id: str,
     field_selection: dict[str, str],
 ) -> dict[str, Any] | None:
-    """field_selection keys: title, body, tags — values 'survivor' | 'other'."""
+    """field_selection keys: title, body, tags — values 'survivor' | 'other'.
+
+    Sprint 5b: writes a ``merge_audit_log`` row capturing victim payload +
+    survivor pre-merge fields + victim's episode provenance so
+    :func:`unmerge_note` can restore everything.
+    """
+    from app.merge_audit_repo import insert_merge_audit
+    from psycopg import errors as pg_errors
+
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         a = conn.execute(
             "SELECT * FROM atomic_notes WHERE id = %s::uuid AND workspace_id = %s::uuid",
@@ -450,6 +458,30 @@ def merge_notes(
         tags_other = list(db.get("tags") or []) if field_selection.get("tags", "survivor") == "survivor" else list(da.get("tags") or [])
         merged_tags = sorted(set(tags_src) | set(tags_other))
 
+        # Snapshot the victim + survivor state for unmerge.
+        victim_episodes = [
+            str(r["episode_id"])
+            for r in conn.execute(
+                "SELECT episode_id FROM note_episodes WHERE note_id = %s::uuid",
+                (other_note_id,),
+            ).fetchall()
+        ]
+        victim_payload = {
+            "title": db.get("title"),
+            "body": db.get("body"),
+            "tags": list(db.get("tags") or []),
+            "origin": db.get("origin"),
+            "is_user_edited": bool(db.get("is_user_edited")),
+        }
+        survivor_before = {
+            "title": da.get("title"),
+            "body": da.get("body"),
+            "tags": list(da.get("tags") or []),
+            "origin": da.get("origin"),
+            "is_user_edited": bool(da.get("is_user_edited")),
+        }
+        victim_provenance = {"episodes": victim_episodes}
+
         union_note_episodes(database_url, conn, survivor_note_id, other_note_id)
         rewrite_links_for_merge(database_url, conn, survivor_note_id, other_note_id)
 
@@ -466,8 +498,108 @@ def merge_notes(
             "DELETE FROM atomic_notes WHERE id = %s::uuid AND workspace_id = %s::uuid",
             (other_note_id, workspace_id),
         )
+        try:
+            insert_merge_audit(
+                conn,
+                workspace_id=workspace_id,
+                kind="note",
+                survivor_id=survivor_note_id,
+                victim_id=other_note_id,
+                victim_payload=victim_payload,
+                survivor_before=survivor_before,
+                victim_provenance=victim_provenance,
+            )
+        except pg_errors.UndefinedTable:
+            # merge_audit_log not yet migrated; merge still succeeds, unmerge
+            # just isn't available for this row.
+            pass
+
         conn.commit()
     return fetch_note(database_url, workspace_id=workspace_id, note_id=survivor_note_id)
+
+
+def unmerge_note(
+    database_url: str,
+    *,
+    workspace_id: str,
+    survivor_note_id: str,
+) -> dict[str, Any] | None:
+    """Restore a merge victim note from its audit row."""
+    from app.merge_audit_repo import fetch_latest_audit, mark_audit_undone
+
+    audit = fetch_latest_audit(
+        database_url,
+        workspace_id=workspace_id,
+        kind="note",
+        survivor_id=survivor_note_id,
+    )
+    if not audit:
+        return None
+
+    victim_id = str(audit["victim_id"])
+    victim_payload = dict(audit["victim_payload"] or {})
+    survivor_before = dict(audit["survivor_before"] or {})
+    provenance = dict(audit["victim_provenance"] or {})
+
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        existing = conn.execute(
+            "SELECT id FROM atomic_notes WHERE id = %s::uuid",
+            (victim_id,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                """
+                INSERT INTO atomic_notes
+                  (id, workspace_id, title, body, tags, origin,
+                   is_user_edited, created_at, updated_at)
+                VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, now(), now())
+                """,
+                (
+                    victim_id,
+                    workspace_id,
+                    (victim_payload.get("title") or "Restored note")[:200],
+                    (victim_payload.get("body") or "")[:10000],
+                    list(victim_payload.get("tags") or []),
+                    (victim_payload.get("origin") or "manual"),
+                    bool(victim_payload.get("is_user_edited", False)),
+                ),
+            )
+        for ep_id in provenance.get("episodes") or []:
+            conn.execute(
+                """
+                INSERT INTO note_episodes (note_id, episode_id)
+                VALUES (%s::uuid, %s::uuid)
+                ON CONFLICT DO NOTHING
+                """,
+                (victim_id, ep_id),
+            )
+
+        conn.execute(
+            """
+            UPDATE atomic_notes
+            SET title = %s, body = %s, tags = %s, origin = %s,
+                is_user_edited = %s, updated_at = now()
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            """,
+            (
+                (survivor_before.get("title") or "")[:200],
+                (survivor_before.get("body") or "")[:10000],
+                list(survivor_before.get("tags") or []),
+                survivor_before.get("origin") or "manual",
+                bool(survivor_before.get("is_user_edited", False)),
+                survivor_note_id,
+                workspace_id,
+            ),
+        )
+
+        mark_audit_undone(conn, audit_id=str(audit["id"]))
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM atomic_notes WHERE id = %s::uuid AND workspace_id = %s::uuid",
+            (victim_id, workspace_id),
+        ).fetchone()
+        return _serialize_note_row(dict(row)) if row else None
 
 
 def split_note(

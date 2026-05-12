@@ -13,7 +13,11 @@ from pydantic import BaseModel, Field
 from psycopg.errors import UniqueViolation
 from starlette.responses import Response
 
-from app.cascade import execute_exclusive_derivatives_delete, preview_document_delete
+from app.cascade import (
+    cleanup_orphan_graph_rows,
+    execute_exclusive_derivatives_delete,
+    preview_document_delete,
+)
 from app.config import Settings
 from app.documents_repo import (
     cleanup_expired_idempotency,
@@ -196,7 +200,7 @@ async def post_internal_document(
         document_id=doc_id,
         ingestion_run_id=run_id,
         job_id=job_id,
-        _job_id=job_id,
+        _job_id=f"{job_id}:parse",
     )
 
     if idempotency_key:
@@ -282,7 +286,7 @@ async def post_internal_ingestion_runs(body: IngestionRetryBody, request: Reques
             document_id=doc_id,
             ingestion_run_id=run_id,
             job_id=job_id,
-            _job_id=job_id,
+            _job_id=f"{job_id}:parse",
         )
 
     elif body.from_stage == "generating_notes":
@@ -328,7 +332,7 @@ async def post_internal_ingestion_runs(body: IngestionRetryBody, request: Reques
             ingestion_run_id=run_id,
             job_id=job_id,
             episode_ids=None,
-            _job_id=job_id,
+            _job_id=f"{job_id}:notes",
         )
 
     else:  # extracting_graph
@@ -372,7 +376,7 @@ async def post_internal_ingestion_runs(body: IngestionRetryBody, request: Reques
             document_id=doc_id,
             ingestion_run_id=run_id,
             job_id=job_id,
-            _job_id=job_id,
+            _job_id=f"{job_id}:graph",
         )
 
     doc_row = fetch_document(db, workspace_id=ws_str, document_id=doc_id)
@@ -441,7 +445,7 @@ async def post_extract_atomic_notes(body: AtomicNotesExtractBody, request: Reque
         ingestion_run_id=run_id,
         job_id=job_id,
         episode_ids=ep_ids,
-        _job_id=job_id,
+        _job_id=f"{job_id}:notes",
     )
 
     doc_row = fetch_document(db, workspace_id=ws_str, document_id=doc_id)
@@ -487,6 +491,7 @@ async def delete_internal_document(
     request: Request,
     workspace_id: Annotated[uuid.UUID, Query()],
     cascade: Annotated[str, Query()] = "document_only",
+    force: Annotated[bool, Query()] = False,
 ) -> Response:
     if cascade not in ("document_only", "exclusive_derivatives"):
         raise HTTPException(
@@ -506,7 +511,20 @@ async def delete_internal_document(
         )
 
     if is_document_ingestion_active(settings.database_url, document_id=doc_id):
-        raise HTTPException(status_code=409, detail=_BUSY_DETAIL)
+        if not force:
+            raise HTTPException(status_code=409, detail=_BUSY_DETAIL)
+        # User opted in to cancel-then-delete. Mark any in-flight ingestion runs as cancelled
+        # and move the document to a terminal status so the busy gate no longer fires. The
+        # background worker checks document status before writing, so leftover task progress
+        # against a deleted row is harmless.
+        fail_running_ingestion_runs_for_document(settings.database_url, document_id=doc_id)
+        update_document(
+            settings.database_url,
+            document_id=doc_id,
+            status="failed",
+            failure_reason="cancelled_by_delete",
+        )
+        logger.info("document_force_delete_cancel", document_id=doc_id, workspace_id=ws_str)
 
     if cascade == "exclusive_derivatives":
         execute_exclusive_derivatives_delete(
@@ -520,6 +538,18 @@ async def delete_internal_document(
         raise HTTPException(
             status_code=404,
             detail={"error": {"code": "not_found", "message": "Document not found"}},
+        )
+    if cascade == "exclusive_derivatives":
+        # Run AFTER the document row is gone, so the ON DELETE CASCADE on
+        # episodes has already pruned entity_episodes/note_episodes — only
+        # rows that are truly orphaned now get removed.
+        cleanup = cleanup_orphan_graph_rows(settings.database_url, workspace_id=ws_str)
+        logger.info(
+            "document_delete_orphans_cleaned",
+            document_id=doc_id,
+            workspace_id=ws_str,
+            removed_entities=cleanup["removed_entities"],
+            removed_relationships=cleanup["removed_relationships"],
         )
     try:
         path = LocalStorage.absolute_path_from_uri(deleted["storage_uri"], settings.zkast_storage_root)

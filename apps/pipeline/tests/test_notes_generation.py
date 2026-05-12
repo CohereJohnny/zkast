@@ -33,6 +33,7 @@ async def test_respects_max_notes() -> None:
             model="m",
             episodes=episodes,
             max_notes=3,
+            streaming=False,
         )
 
     assert len(notes) == 3

@@ -3,6 +3,7 @@ import { Crimson_Pro, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google
 import { Suspense, type ReactNode } from "react";
 
 import { ErrorBoundary } from "@/components/error-boundary";
+import { FeedbackProvider } from "@/components/feedback-provider";
 import { QueryProvider } from "@/components/query-provider";
 
 import "./globals.css";
@@ -50,9 +51,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           Skip to main content
         </a>
         <QueryProvider>
-          <ErrorBoundary>
-            <Suspense fallback={<LoadingShell />}>{children}</Suspense>
-          </ErrorBoundary>
+          <FeedbackProvider>
+            <ErrorBoundary>
+              <Suspense fallback={<LoadingShell />}>{children}</Suspense>
+            </ErrorBoundary>
+          </FeedbackProvider>
         </QueryProvider>
       </body>
     </html>

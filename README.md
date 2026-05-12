@@ -90,6 +90,54 @@ Graphiti bounds concurrent LLM, embedding, and rerank calls (`max_coroutines`). 
 
 3. Open the UI: **http://localhost:3000** (redirects to `/documents`). Core routes: Documents (PDF upload + status), Notes, Graph, Chat, Snapshots, External Targets, Settings.
 
+### Ingestion observability (Sprint 5b)
+
+- **Pipeline log drawer**: a collapsible bottom panel on every workspace
+  route streams live worker events (parse / notes / graph stages, per-episode
+  progress, Cohere token counts) via SSE. Closed by default; click the
+  console tab to expand. The drawer subscribes to all active ingestion jobs
+  registered by the documents panel.
+- **Heartbeats + reconciler**: each pipeline task writes
+  `ingestion_runs.last_heartbeat_at` every 10 seconds. A worker cron
+  (`reconcile_stuck_documents`) sweeps once a minute and flips any document
+  still in an active status whose heartbeat is older than 90 s to **failed**
+  with `failure_reason='worker_crashed_during_<stage>'` — so a hard worker
+  kill no longer leaves zombies in the UI.
+- **`CancelledError` handling**: a `docker compose restart worker` mid-flight
+  now flips the document to `failed:cancelled_by_worker_shutdown` cleanly
+  (Python 3.8+ makes `CancelledError` a `BaseException`; the worker explicitly
+  catches it).
+- **Streaming notes synthesis**: `notes_llm` now calls Cohere with
+  `stream=True`, `timeout=120 s`, `max_retries=1`. Per-50-token progress
+  bumps appear in the log drawer. Disable with
+  `pipeline_settings.notes_llm_streaming = false` if a model misbehaves.
+- **Parallel graph extraction**: `extract_graph` processes episodes via
+  `asyncio.gather` with a configurable semaphore
+  (`pipeline_settings.graph_extract_concurrency`, default 4, max 8). Expect
+  ~3–4× wall-time speedup on a 19-page PDF vs Sprint 5.
+- **Diagnostics page**: **Settings → Diagnostics** (`/settings/diagnostics`)
+  shows arq queue depth + in-progress, stalled documents, per-stage P50/P95
+  for the last 24 h, and a safe **Clean terminal job hashes** action that
+  only deletes Redis hashes whose status is succeeded / failed / cancelled.
+
+### Merge undo (Sprint 5b)
+
+Both entity and note merge dialogs now offer two roll-back paths after a
+successful merge:
+
+- **Full undo** — restores the deleted victim row and re-attaches its
+  provenance from `merge_audit_log`. Calls `POST .../entities/{id}/unmerge`
+  or `POST .../notes/{id}/unmerge`.
+- **Revert survivor fields** — keeps the merge but PATCHes the survivor's
+  field values back to their pre-merge state. Faster, narrower.
+
+### Graph view & snapshots (Sprint 5)
+
+- **Graph** (`/graph` and workspace right rail): loads the working graph from **`GET /api/v1/workspaces/{id}/graph`** with URL-synced filters (`view`, `document_id`, `tag`, `entity_type`, `edge_type`, `valid_at`, `node_limit`, `depth`, `seed_entity_ids`). Large workspaces may return **`truncated: true`** — narrow filters or raise `node_limit` (max **25000**).
+- **Canvas**: Sigma + graphology; **ForceAtlas2** runs in a **Web Worker** for a few seconds, then the layout is imported into Sigma. Use **Accessible list** (or automatic fallback on canvas error / reduced motion) for a keyboard-friendly entity list.
+- **Editing**: selection panel supports **merge** (with optional **revert survivor fields** after merge), **manual edges** (create / PATCH / end via `DELETE` on the relationship route), and provenance links to notes.
+- **Snapshots** (`/snapshots`): **`POST …/snapshots`** freezes entities, relationships, and notes under **`graph_snapshots`** (Alembic `0006_graph_snapshots`). Empty workspaces return **`business_rule_violation`**.
+
 When Next runs via **`pnpm dev`** on the host, keep **`PIPELINE_INTERNAL_URL=http://127.0.0.1:8000`** and ensure the **pipeline** container publishes **8000** (see `docker-compose.yml`). After adding or changing `ports:` for pipeline, recreate it so the bind appears: **`docker compose up -d pipeline --force-recreate`**.
 
 ### PDF upload (storage)

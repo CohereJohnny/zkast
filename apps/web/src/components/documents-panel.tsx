@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DocumentDetailPanel } from "@/components/document-detail-panel";
+import { emitGraphInvalidated } from "@/lib/graph-events";
+import { useJobEvents } from "@/lib/job-events";
 
 /** Document rows in these states advance in the worker; poll the list so UI stays in sync with the DB. */
 const INGESTION_ACTIVE_STATUSES = new Set([
@@ -205,13 +207,20 @@ export function DocumentsPanel({
     (docId: string) => {
       clearJob(docId);
       void load();
+      emitGraphInvalidated();
     },
     [clearJob, load],
   );
 
-  const registerJob = useCallback((docId: string, jobId: string) => {
-    setActiveJobs((m) => ({ ...m, [docId]: jobId }));
-  }, []);
+  const { registerActiveJob } = useJobEvents();
+
+  const registerJob = useCallback(
+    (docId: string, jobId: string) => {
+      setActiveJobs((m) => ({ ...m, [docId]: jobId }));
+      registerActiveJob(jobId, docId, "document_parse");
+    },
+    [registerActiveJob],
+  );
 
   const uploadFiles = async (files: File[]) => {
     setUploadError(null);
@@ -252,7 +261,10 @@ export function DocumentsPanel({
       const mapping: Record<string, string> = {};
       body.documents.forEach((d, i) => {
         const jid = d.job_id ?? body.job_ids[i];
-        if (jid) mapping[d.id] = jid;
+        if (jid) {
+          mapping[d.id] = jid;
+          registerActiveJob(jid, d.id, "document_parse");
+        }
       });
       setActiveJobs((m) => ({ ...m, ...mapping }));
       await load();

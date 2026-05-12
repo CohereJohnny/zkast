@@ -402,6 +402,24 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 **Auth**: Editor.
 
+> **Sprint 5b**: writes a `merge_audit_log` row capturing the victim's
+> payload + survivor pre-merge fields + episode provenance so
+> `POST /notes/{noteId}/unmerge` can restore everything.
+
+#### `POST /workspaces/{workspaceId}/notes/{noteId}/unmerge`
+
+> **Sprint 5b — implemented**.
+
+**Purpose**: Restore the most recently merged victim note from the audit log.
+
+**Inputs**: empty body.
+
+**Outputs**: `{ note: <restored victim> }`.
+
+**Errors**: `not_found` when no audit row exists.
+
+**Auth**: Editor.
+
 #### `POST /workspaces/{workspaceId}/notes/{noteId}/split`
 
 **Purpose**: Split a note into two atomic notes.
@@ -436,6 +454,8 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 ### Knowledge Graph
 
+> **Sprint 5 — implemented** (web `GET/POST/PATCH/DELETE …/graph*`, `…/snapshots*`, pipeline `internal/v1/workspaces/{workspace_id}/graph*`, `…/snapshots*`). Layout in the UI uses **Sigma.js + graphology** with **ForceAtlas2 in a Web Worker** (`graphology-layout-forceatlas2/worker`) when motion is allowed; `prefers-reduced-motion` uses a static circular layout. Filters are mirrored in the URL query string (`graph-filter-bar`). `GET …/graph/entities/{entityId}` returns **`incident_relationships`** (edges touching the entity) for the selection panel.
+
 #### `GET /workspaces/{workspaceId}/graph`
 
 **Purpose**: Return the current working graph in a form suitable for the visualization layer.
@@ -447,9 +467,40 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 - Filters: `entity_types[]`, `edge_types[]`, `document_id`, `tag`, `valid_at` (timestamp).
 - `node_limit` (default 5000, max 25000).
 
-**Outputs**: `nodes[]` (id, type, name, summary, properties), `edges[]` (id, source, target, type, fact, valid_from, valid_to, confidence), `truncated` (boolean).
+**Outputs**: `nodes[]` (id, type, name, summary, properties, aliases, is_user_edited), `edges[]` (id, source, target, type, fact, valid_from, valid_to, confidence, origin, is_user_edited), `truncated` (boolean).
 
-**Auth**: Member.
+**Example** (shape only):
+
+```json
+{
+  "nodes": [
+    {
+      "id": "b2c3d4e5-f6a7-4890-b1c2-d3e4f5a67890",
+      "type": "Person",
+      "name": "Ada Lovelace",
+      "summary": "",
+      "properties": {},
+      "aliases": [],
+      "is_user_edited": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "a1b2c3d-e4f5-6789-a012-b3c4d5e6f708",
+      "source": "b2c3d4e5-f6a7-4890-b1c2-d3e4f5a67890",
+      "target": "c3d4e5f6-a7b8-4901-c2d3-e4f5a6b78901",
+      "type": "RELATED_TO",
+      "fact": "",
+      "valid_from": null,
+      "valid_to": null,
+      "confidence": 1.0,
+      "origin": "generated",
+      "is_user_edited": false
+    }
+  ],
+  "truncated": false
+}
+```
 
 #### `GET /workspaces/{workspaceId}/graph/entities`
 
@@ -465,7 +516,7 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 **Purpose**: Get a single entity with full detail and provenance.
 
-**Outputs**: Entity, neighbors summary, source notes, source episodes.
+**Outputs**: Entity, neighbors summary, source notes, source episodes, **`incident_relationships[]`** (same edge shape as `/graph`).
 
 **Auth**: Member.
 
@@ -511,9 +562,9 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 **Purpose**: Create a relationship manually.
 
-**Inputs**: `source_entity_id`, `target_entity_id`, `type`, optional `fact`, `valid_from`, `valid_to`, `properties`.
+**Inputs**: `source_entity_id`, `target_entity_id`, `type`, optional `fact`, `valid_from`, `valid_to`.
 
-**Outputs**: The created relationship.
+**Outputs**: The created relationship (`origin: manual`, `is_user_edited: true`).
 
 **Auth**: Editor.
 
@@ -523,7 +574,7 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 **Purpose**: Update a relationship's fields, including ending it by setting `valid_to`.
 
-**Inputs**: Any subset of `type`, `fact`, `valid_from`, `valid_to`, `properties`.
+**Inputs**: Any subset of `type`, `fact`, `valid_from`, `valid_to`.
 
 **Outputs**: Updated relationship.
 
@@ -539,13 +590,27 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 #### `GET /workspaces/{workspaceId}/graph/search`
 
+> **Sprint 5b — implemented**. Calls Graphiti `search()` (hybrid: text + vector + rerank) scoped to the workspace `group_id`.
+
 **Purpose**: Hybrid search over the working graph (semantic + keyword + graph traversal — Graphiti-backed).
 
-**Query**: `q`, optional `seed_entity_id`, `limit`.
+**Query**: `q` (1–500 chars, required), `limit` (1–100, default 20).
 
-**Outputs**: Ranked list of entities, relationships, and notes with scores and a brief explanation.
+**Outputs**: `results[]` (edges with `source_entity_id`, `target_entity_id`, `type`, `fact`, `uuid`), `query`, `limit`.
 
 **Auth**: Member.
+
+#### `POST /workspaces/{workspaceId}/graph/entities/{entityId}/unmerge`
+
+> **Sprint 5b — implemented**. Restores the most recently merged victim entity from `merge_audit_log`. Re-creates the deleted row, restores its provenance junctions, rolls back the survivor's fields to their pre-merge values, and rewires audited incident relationships.
+
+**Inputs**: empty body.
+
+**Outputs**: `{ entity: <restored victim> }`.
+
+**Errors**: `not_found` when no audit row exists for this survivor (no recent merge to undo, or already undone).
+
+**Auth**: Editor.
 
 ---
 
@@ -795,7 +860,7 @@ When `seed_context` is provided, the server computes the equivalent `scope` (e.g
 
 **Auth**: Editor.
 
-**Errors**: `conflict` (name already used), `business_rule_violation` (graph is empty).
+**Errors**: `conflict` (name already used), `business_rule_violation` with message **Cannot snapshot an empty graph** when the workspace has zero entities.
 
 #### `GET /workspaces/{workspaceId}/snapshots/{snapshotId}`
 
@@ -807,11 +872,13 @@ When `seed_context` is provided, the server computes the equivalent `scope` (e.g
 
 #### `POST /workspaces/{workspaceId}/snapshots/{snapshotId}/review`
 
+> **Sprint 5b — implemented**. Single-row-per-snapshot semantics: re-submitting overwrites.
+
 **Purpose**: Record a review decision for a snapshot.
 
-**Inputs**: `decision` (`approved | rejected`), optional `notes`.
+**Inputs**: `decision` (`approved | rejected`), optional `notes` (≤2000 chars).
 
-**Outputs**: Review record.
+**Outputs**: `{ review: { snapshot_id, decision, notes, reviewed_by_user_id, reviewed_at } }`.
 
 **Auth**: Member.
 

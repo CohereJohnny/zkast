@@ -21,6 +21,8 @@ from app.cohere_probe import probe_cohere_async
 from app.config import Settings, get_settings
 from app.deps_checks import readiness_report
 from app.graphiti_factory import resolve_stored_cohere_api_key
+from app.internal_admin import router as internal_admin_router
+from app.internal_graph import router as internal_graph_router
 from app.internal_ingestion import router as internal_ingestion_router
 from app.internal_jobs import router as internal_jobs_router
 from app.internal_notes import router as internal_notes_router
@@ -87,6 +89,8 @@ app = FastAPI(
 app.include_router(internal_ingestion_router)
 app.include_router(internal_jobs_router)
 app.include_router(internal_notes_router)
+app.include_router(internal_graph_router)
+app.include_router(internal_admin_router)
 
 
 @app.middleware("http")

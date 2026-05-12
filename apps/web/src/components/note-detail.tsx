@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useConfirm, usePrompt, useToast } from "@/components/feedback-provider";
 import { NoteMergeDialog } from "@/components/note-merge-dialog";
 import { NoteSplitControl } from "@/components/note-split-control";
 
@@ -64,6 +65,9 @@ export function NoteDetail({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inflight = useRef<AbortController | null>(null);
   const baseline = useRef({ title: "", body: "", tags: "" });
+  const toast = useToast();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -162,7 +166,16 @@ export function NoteDetail({
 
   const doSplit = async () => {
     if (!selection?.trim()) return;
-    const nt = window.prompt("Title for the new note?", "Split note");
+    const nt = await prompt({
+      title: "Name the new note",
+      description: `The selected ${selection.length} characters will be moved into a new note linked to this one (extends).`,
+      label: "Title",
+      defaultValue: "Split note",
+      placeholder: "Title for the new note",
+      confirmLabel: "Create split",
+      required: true,
+      maxLength: 200,
+    });
     if (!nt?.trim()) return;
     setSplitBusy(true);
     try {
@@ -174,7 +187,11 @@ export function NoteDetail({
       const raw = await res.text();
       const j = JSON.parse(raw) as { note?: { id: string }; error?: { message?: string } };
       if (!res.ok) {
-        window.alert(j.error?.message ?? "Split failed");
+        toast({
+          variant: "error",
+          message: "Split failed",
+          description: j.error?.message,
+        });
         return;
       }
       if (j.note?.id) {
@@ -183,7 +200,7 @@ export function NoteDetail({
         onSplitCreated(j.note.id);
       }
     } catch {
-      window.alert("Split failed");
+      toast({ variant: "error", message: "Split failed" });
     } finally {
       setSplitBusy(false);
     }
@@ -205,12 +222,17 @@ export function NoteDetail({
     });
     if (!res.ok) {
       const j = (await res.json()) as { error?: { message?: string } };
-      window.alert(j.error?.message ?? "Link failed");
+      toast({
+        variant: "error",
+        message: "Could not add link",
+        description: j.error?.message,
+      });
       return;
     }
     setTargetLink("");
     setCustomLabel("");
     await load();
+    toast({ variant: "success", message: "Link added" });
   };
 
   const removeLink = async (linkId: string) => {
@@ -222,9 +244,20 @@ export function NoteDetail({
   };
 
   const delNote = async () => {
-    if (!window.confirm("Delete this note permanently?")) return;
+    const ok = await confirm({
+      title: "Delete note?",
+      description: "This note will be permanently removed. Linked notes are preserved.",
+      confirmLabel: "Delete note",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/notes/${noteId}`, { method: "DELETE" });
-    if (res.ok) onDeleted();
+    if (res.ok) {
+      toast({ variant: "success", message: "Note deleted" });
+      onDeleted();
+    } else {
+      toast({ variant: "error", message: "Could not delete note" });
+    }
   };
 
   if (loadError) {
