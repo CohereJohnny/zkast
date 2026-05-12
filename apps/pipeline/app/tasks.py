@@ -25,6 +25,7 @@ import psycopg
 import structlog
 from arq import create_pool, cron
 from arq.connections import RedisSettings
+from arq.worker import func as arq_func
 from graphiti_core.nodes import EpisodeType
 
 from app.chunking import chunk_page_text
@@ -70,6 +71,25 @@ HEARTBEAT_INTERVAL_S = 10
 HEARTBEAT_STALE_THRESHOLD_S = 90
 RECONCILER_LOCK_KEY = "zkast:cron:reconcile_lock"
 RECONCILER_LOCK_TTL_S = 50
+
+# Per-stage arq job_timeout budgets. Defaults are tuned for a ~20-page PDF on
+# Cohere with Graphiti retries. They can be tightened later once the
+# Graphiti edge-timestamp 400 storm (TD-010) is resolved.
+#
+# arq's default is 300s, which is too tight for ``extract_graph`` whose
+# critical path is dominated by Graphiti's per-edge `_extract_edge_timestamps`
+# retries (2 attempts of ~5s each per failed edge). Bumping to 40 minutes is
+# generous; the heartbeat-based reconciler catches genuinely stuck jobs
+# regardless of this ceiling.
+TIMEOUT_PARSE_S = 600       # 10 min
+TIMEOUT_NOTES_S = 1_200     # 20 min
+TIMEOUT_GRAPH_S = 2_400     # 40 min
+# Used as the global ceiling; per-function settings override per task.
+TIMEOUT_WORKER_DEFAULT_S = TIMEOUT_GRAPH_S
+
+# If a CancelledError fires within this many seconds of the per-stage timeout,
+# we classify it as a timeout (not a shutdown) for a clearer failure_reason.
+TIMEOUT_CLASSIFY_WINDOW_S = 15
 
 
 async def worker_startup(ctx: dict[str, Any]) -> None:
@@ -167,6 +187,45 @@ class _Heartbeat:
                 logger.warning("heartbeat_write_failed", error=str(exc))
 
 
+def _describe_exception(exc: BaseException, *, max_len: int = 500) -> str:
+    """Build a non-empty human-readable failure_reason from an exception.
+
+    Some libraries (notably ``httpx``/``httpcore``) raise errors with no message
+    string — ``str(httpx.ConnectError())`` is the empty string. If we wrote that
+    straight to ``documents.failure_reason``, the UI shows "Job failed:" with
+    nothing after the colon. This helper guarantees we always have at least the
+    exception type name.
+    """
+    msg = (str(exc) or "").strip()
+    name = type(exc).__name__
+    text = f"{name}: {msg}" if msg else name
+    return text[:max_len]
+
+
+def _classify_cancel_reason(stage: str, elapsed_s: float) -> tuple[str, dict[str, Any]]:
+    """Pick a human-readable failure_reason for a CancelledError.
+
+    arq fires a ``CancelledError`` into the task both when the worker is
+    shutting down and when a per-job timeout fires (arq wraps the task in
+    ``asyncio.wait_for``). From inside the task the two are indistinguishable,
+    but the elapsed time is a reliable tell: if we're within
+    ``TIMEOUT_CLASSIFY_WINDOW_S`` of the configured per-stage timeout, this is
+    overwhelmingly a timeout, not a SIGTERM.
+    """
+    budget = {
+        "parsing": TIMEOUT_PARSE_S,
+        "generating_notes": TIMEOUT_NOTES_S,
+        "extracting_graph": TIMEOUT_GRAPH_S,
+    }.get(stage, TIMEOUT_WORKER_DEFAULT_S)
+    extra: dict[str, Any] = {
+        "elapsed_s": round(elapsed_s, 1),
+        "timeout_s": budget,
+    }
+    if elapsed_s >= budget - TIMEOUT_CLASSIFY_WINDOW_S:
+        return f"cancelled_by_job_timeout (stage {stage} ran {elapsed_s:.0f}s of {budget}s budget)", extra
+    return "cancelled_by_worker_shutdown", extra
+
+
 def _is_document_active(database_url: str, document_id: str) -> bool:
     """Return True while the document is in any pre-terminal status."""
     active = ("queued", "parsing", "generating_notes", "extracting_graph", "building_graph")
@@ -259,6 +318,7 @@ async def parse_document(
         progress=json.dumps({"percent": 0, "stage": "parsing"}),
     )
     await publish_job_event(redis, job_id, "stage_started", stage="parsing")
+    _started_at = asyncio.get_event_loop().time()
 
     try:
         async with _Heartbeat(database_url, ingestion_run_id):
@@ -453,9 +513,12 @@ async def parse_document(
                 await asyncio.to_thread(pdf.close)
 
     except asyncio.CancelledError:
-        # B2.5 — worker SIGTERM / shutdown cancels in-flight tasks; surface a
-        # clean failure with a recoverable reason. Then re-raise so arq still
-        # sees the cancellation.
+        # B2.5 — both arq job_timeout and worker SIGTERM raise CancelledError
+        # into the task; we use elapsed-time heuristics to distinguish the two
+        # so the operator sees the right failure_reason.
+        _reason, _extra = _classify_cancel_reason(
+            "parsing", asyncio.get_event_loop().time() - _started_at
+        )
         await _mark_task_failed(
             redis,
             database_url,
@@ -463,7 +526,8 @@ async def parse_document(
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
             stage="parsing",
-            reason="cancelled_by_worker_shutdown",
+            reason=_reason,
+            extra=_extra,
         )
         raise
     except FileNotFoundError as exc:
@@ -488,7 +552,7 @@ async def parse_document(
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
             stage="parsing",
-            reason=str(exc)[:500],
+            reason=_describe_exception(exc),
         )
 
 
@@ -511,6 +575,7 @@ async def generate_atomic_notes(
         progress=json.dumps({"percent": 0, "stage": "generating_notes"}),
     )
     await publish_job_event(redis, job_id, "stage_started", stage="generating_notes")
+    _started_at = asyncio.get_event_loop().time()
 
     try:
         # B2 — pre-check: if the document was force-deleted while we were
@@ -683,6 +748,9 @@ async def generate_atomic_notes(
             )
 
     except asyncio.CancelledError:
+        _reason, _extra = _classify_cancel_reason(
+            "generating_notes", asyncio.get_event_loop().time() - _started_at
+        )
         await _mark_task_failed(
             redis,
             database_url,
@@ -690,7 +758,8 @@ async def generate_atomic_notes(
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
             stage="generating_notes",
-            reason="cancelled_by_worker_shutdown",
+            reason=_reason,
+            extra=_extra,
         )
         raise
     except Exception as exc:  # noqa: BLE001
@@ -702,7 +771,7 @@ async def generate_atomic_notes(
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
             stage="generating_notes",
-            reason=str(exc)[:500],
+            reason=_describe_exception(exc),
         )
 
 
@@ -719,6 +788,7 @@ async def extract_graph(
     settings = get_settings()
 
     await publish_job_event(redis, job_id, "stage_started", stage="extracting_graph")
+    _started_at = asyncio.get_event_loop().time()
     await asyncio.to_thread(
         update_document,
         database_url,
@@ -1007,10 +1077,50 @@ async def extract_graph(
                         ),
                     )
 
-            await asyncio.gather(
-                *(_process_episode(i, ep) for i, ep in enumerate(episodes))
+            # ``return_exceptions=True`` keeps a single transient Cohere /
+            # Graphiti failure from killing the whole batch (BUG-008). We tally
+            # per-episode failures, log them, and only fail the job if zero
+            # episodes succeeded.
+            ep_results = await asyncio.gather(
+                *(_process_episode(i, ep) for i, ep in enumerate(episodes)),
+                return_exceptions=True,
             )
-            await asyncio.gather(*(_process_note(nid) for nid in note_ids))
+            note_results = await asyncio.gather(
+                *(_process_note(nid) for nid in note_ids),
+                return_exceptions=True,
+            )
+            failures = [
+                r for r in (*ep_results, *note_results) if isinstance(r, BaseException)
+            ]
+            successes = (len(ep_results) + len(note_results)) - len(failures)
+            if failures:
+                # Re-raise CancelledError immediately — never swallow it (it
+                # comes from arq timeout or worker shutdown).
+                for exc in failures:
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise exc
+                first = failures[0]
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    stage="extracting_graph",
+                    message=(
+                        f"{len(failures)} of {len(ep_results) + len(note_results)} items "
+                        f"failed during extraction (first: {type(first).__name__}: {str(first) or 'no message'})"
+                    ),
+                    data={
+                        "failures": len(failures),
+                        "total": len(ep_results) + len(note_results),
+                        "first_error_type": type(first).__name__,
+                    },
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+                if successes == 0:
+                    # Total wipeout — surface the first exception so the
+                    # operator-facing failure_reason is informative.
+                    raise failures[0]
 
             entity_count = counters["entity"]
             edge_count = counters["edge"]
@@ -1064,6 +1174,9 @@ async def extract_graph(
             )
 
     except asyncio.CancelledError:
+        _reason, _extra = _classify_cancel_reason(
+            "extracting_graph", asyncio.get_event_loop().time() - _started_at
+        )
         await _mark_task_failed(
             redis,
             database_url,
@@ -1071,7 +1184,8 @@ async def extract_graph(
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
             stage="extracting_graph",
-            reason="cancelled_by_worker_shutdown",
+            reason=_reason,
+            extra=_extra,
         )
         raise
     except Exception as exc:  # noqa: BLE001
@@ -1083,7 +1197,7 @@ async def extract_graph(
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
             stage="extracting_graph",
-            reason=str(exc)[:500],
+            reason=_describe_exception(exc),
         )
 
 
@@ -1152,7 +1266,20 @@ async def reconcile_stuck_documents(ctx: dict[str, Any]) -> None:
 
 class WorkerSettings:
     redis_settings = _redis_settings_for_worker()
-    functions = [parse_document, generate_atomic_notes, extract_graph]
-    cron_jobs = [cron(reconcile_stuck_documents, minute=set(range(60)))]
+    # Per-function timeouts override arq's 300s default. ``extract_graph``
+    # gets the most generous budget because Graphiti's edge-timestamp
+    # extractor currently retries 2× per failed edge against Cohere (TD-010).
+    functions = [
+        arq_func(parse_document, timeout=TIMEOUT_PARSE_S, max_tries=1),
+        arq_func(generate_atomic_notes, timeout=TIMEOUT_NOTES_S, max_tries=1),
+        arq_func(extract_graph, timeout=TIMEOUT_GRAPH_S, max_tries=1),
+    ]
+    # Global ceiling for any task that doesn't override (e.g. cron jobs).
+    job_timeout = TIMEOUT_WORKER_DEFAULT_S
+    # ``minute=None`` plus ``second=0`` is arq's canonical "once a minute"
+    # config and prevents the catch-up burst we saw with ``set(range(60))``
+    # where a freshly-started worker would re-fire the cron several times in
+    # quick succession.
+    cron_jobs = [cron(reconcile_stuck_documents, second=0)]
     on_startup = worker_startup
     on_shutdown = worker_shutdown

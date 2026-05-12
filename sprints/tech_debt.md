@@ -131,3 +131,58 @@ Use this file for **non-blocking** refactors, dependency upgrades, and cleanup d
   `graph-canvas.tsx`) toggles `hidden` per node/edge using
   `graph.setNodeAttribute`. Only the heavy filters (view, seeds,
   document_id, valid_at, node_limit, depth) trigger a refetch + relayout.
+
+### TD-010 — Graphiti edge-timestamp 400 storm against Cohere
+- **Date**: 2026-05-12
+- **Area**: pipeline + upstream library
+- **Description**: `graphiti_core.utils.maintenance.edge_operations._extract_edge_timestamps`
+  calls the underlying LLM client (Cohere via OpenAI-compatible adapter)
+  with a `response_format.json_schema` whose `object` type has no
+  `required` field. Cohere rejects it with
+  `400 invalid 'json_schema' provided: 'object' type must have at least one
+  required field`. Graphiti retries 2× per edge, fails, logs
+  `Failed to extract timestamps for edge <uuid>`, and moves on. This burns
+  ~10–20s per failed edge and is the dominant cost in `extract_graph` on
+  Cohere — a 20-page PDF that should take ~2 minutes takes 10+.
+- **Reason**: With this fixed, the per-stage timeouts in BUG-006 can be
+  tightened significantly (graph stage back toward 5–10 min instead of 40).
+  It also restores edge `valid_from` / `valid_to` data that we lose today.
+- **Suggested sprint**: Sprint 6 or 7 — either monkey-patch Graphiti's
+  `_extract_edge_timestamps` to inject `required` into the JSON schema, or
+  switch the Graphiti LLM client to Cohere's native client which uses a
+  different schema shape. Upstream issue worth filing.
+- **Status**: Open
+
+### TD-012 — Checkpoint episode progress for resumable graph extraction
+- **Date**: 2026-05-12
+- **Area**: pipeline
+- **Description**: `extract_graph` is now resilient to per-episode failures
+  (BUG-008 fix), but a hard failure or worker shutdown still restarts the
+  entire graph stage from episode 0 on retry. With Cohere costs and
+  Graphiti's slow per-edge processing, this is wasteful. Idea: persist a
+  per-`ingestion_run` set of completed episode UUIDs (Redis Set or a new
+  `ingestion_run_episode_progress` table); when the stage starts, skip
+  episodes already in the set; `_process_episode` adds the episode UUID
+  to the set on success. The "Retry from stage" UI already exists — this
+  would make it cheap.
+- **Reason**: Today a 90% success run still requires re-extracting the
+  successful 90% on retry. Worst case: a 20-minute graph stage that fails
+  on the last episode costs 40 minutes total. With checkpointing it costs
+  ~22.
+- **Suggested sprint**: Sprint 6 or 7.
+- **Status**: Open
+
+### TD-011 — Add an end-to-end smoke test for the pipeline-log SSE drawer
+- **Date**: 2026-05-12
+- **Area**: web tests
+- **Description**: BUG-007 happened because no test exercises the full
+  EventSource path from `JobLogConsole` through the Next.js proxy. A
+  Playwright (or even a node + `eventsource` library) smoke test that uploads
+  a tiny PDF, asserts the drawer registers an active job, and asserts at
+  least one `log` event lands in the drawer would have caught the missing
+  `?workspaceId=` query parameter immediately.
+- **Reason**: The drawer is now the primary "is it stuck?" tool; if it
+  silently breaks again, sprints lose hours on the same diagnostic detour
+  we just resolved.
+- **Suggested sprint**: Sprint 6.
+- **Status**: Open

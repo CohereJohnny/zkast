@@ -17,6 +17,150 @@ Log **critical bugs that block sprint progress** here. Resume sprint work after 
 ## Entries
 
 ## Bug Entry: 2026-05-12
+- **ID**: BUG-009
+- **Description**: Notes stage failed with
+  `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. Root cause:
+  Cohere's OpenAI-compatible streaming endpoint occasionally returns HTTP
+  200 with zero content chunks when called with
+  `response_format={"type":"json_object"}` and `stream=True`. Sprint 5b's
+  streaming code in
+  [`apps/pipeline/app/notes_llm.py`](../apps/pipeline/app/notes_llm.py)
+  appended deltas into a `buf` list; when the stream produced no deltas,
+  `raw_text` was the empty string and `_extract_json_object("")` raised
+  immediately. The empty-response edge case had no fallback path.
+- **Discovered**: User retry after BUG-008's resilience fixes. Drawer
+  surfaced "Notes Job failed: JSONDecodeError: Expecting value:
+  line 1 column 1 (char 0)" — the message itself was a clue (the parser
+  saw nothing to parse).
+- **Context**: Sprint 5b post-merge polish.
+- **Fix**: Restructured `generate_notes_from_episodes` so both the
+  streaming and non-streaming paths share one `client.chat.completions.create`
+  invocation per attempt:
+  1. If `streaming=True` and the buffer comes back empty, log a
+     `notes_llm_empty_stream_fallback_to_nonstreaming` warning and retry
+     with `stream=False`.
+  2. If the response (streaming or not) is unparseable JSON and we used
+     streaming, retry once non-streaming with the same prompt.
+  3. If both paths produce empty content, raise a `RuntimeError` that
+     mentions Cohere / API key / quota so the operator-facing
+     `failure_reason` is actionable.
+- **Status**: Resolved
+- **Follow-up**: 3 new regression tests in
+  [`apps/pipeline/tests/test_notes_generation.py`](../apps/pipeline/tests/test_notes_generation.py)
+  pin (a) empty-stream fallback, (b) unparseable-stream fallback,
+  (c) both-paths-empty raises a clear error.
+
+## Bug Entry: 2026-05-12
+- **ID**: BUG-008
+- **Description**: `extract_graph` aborted on episode 25/33 with an empty
+  `failure_reason` ("Job failed:" with nothing after the colon). Two
+  underlying problems:
+  1. A single transient `httpx.ConnectError` while
+     `clients.embedder.create_batch` was reaching out to Cohere during
+     Graphiti's `_semantic_candidate_search`. `httpx.ConnectError()` has no
+     message, so `str(exc)` was the empty string and the failure_reason
+     column was blank.
+  2. The episode ran inside `asyncio.gather(*tasks)` (no
+     `return_exceptions=True`), so the one failure tore down all 30
+     in-flight episodes and threw away ~5 minutes of work (42 entities,
+     12 edges).
+- **Discovered**: User retry after BUG-006's timeout fix. Drawer showed
+  "Job failed:" with no detail. Worker logs revealed the
+  `httpcore.ConnectError → httpx.ConnectError` chain originating in
+  `app/cohere_adapters.py:41`.
+- **Context**: Sprint 5b post-merge polish.
+- **Fix**:
+  1. `_describe_exception(exc)` helper in
+     [`apps/pipeline/app/tasks.py`](../apps/pipeline/app/tasks.py) returns
+     `"<TypeName>: <message>"` (or just `<TypeName>` when the message is
+     empty) so `failure_reason` is never blank. Wired into all three
+     stage handlers (`parse_document`, `generate_atomic_notes`,
+     `extract_graph`).
+  2. New `_post_json_with_retry` helper in
+     [`apps/pipeline/app/cohere_adapters.py`](../apps/pipeline/app/cohere_adapters.py)
+     wraps both `CohereEmbedder.create_batch` and `CohereCrossEncoder.rank`
+     with 3-attempt exponential backoff (1s/2s/4s with ±25% jitter).
+     Retries `ConnectError`, `ConnectTimeout`, `ReadTimeout`,
+     `WriteTimeout`, `PoolTimeout`, `RemoteProtocolError`, plus 5xx and
+     429. Bubbles 4xx (auth / validation) immediately to avoid burning
+     budget on permanent errors.
+  3. `asyncio.gather(...)` in `extract_graph` now uses
+     `return_exceptions=True`. Per-episode/per-note failures are tallied;
+     the run only fails outright when **zero** items succeed. Partial
+     failures emit a `warning` log with the failure count and the first
+     error type. `CancelledError` is re-raised immediately (never
+     swallowed by partial-success logic).
+- **Status**: Resolved
+- **Follow-up**: TD-012 ("Checkpoint episode progress so retries resume
+  from the failed episode rather than from scratch") added to
+  `sprints/tech_debt.md`. Regression tests live in
+  [`apps/pipeline/tests/test_failure_resilience.py`](../apps/pipeline/tests/test_failure_resilience.py).
+
+## Bug Entry: 2026-05-12
+- **ID**: BUG-006
+- **Description**: `extract_graph` consistently failed at ~5 minutes with
+  `failure_reason='cancelled_by_worker_shutdown'` even though the worker
+  process was alive and heartbeating throughout. Root cause: arq's default
+  `job_timeout` is **300 seconds**, and `WorkerSettings` did not override it.
+  arq wraps every task in `asyncio.wait_for(..., timeout=job_timeout)`; when
+  the timeout fires it cancels the task, which raises `asyncio.CancelledError`
+  *inside* the task — indistinguishable from a SIGTERM. Sprint 5b's
+  CancelledError handler caught it correctly but mislabeled it as a worker
+  shutdown.
+- **Discovered**: User reported "ingestion failed after 4–5 minutes, 130
+  entities, 67 edges, then `cancelled_by_worker_shutdown`". Worker logs
+  showed only cron activity, no SIGTERM, no docker restart — ruling out the
+  shutdown explanation. The 5-minute mark is the smoking gun for arq's
+  default budget. Slow Graphiti `_extract_edge_timestamps` retries
+  (Cohere returns `400 invalid json_schema` per edge → 2 retries × ~5s) burn
+  through the 300s budget before the per-episode loop can finish.
+- **Context**: Sprint 5b polish (post-merge). The Sprint 5b heartbeat +
+  reconciler infrastructure correctly caught the resulting failure, but the
+  underlying ceiling was wrong.
+- **Fix**:
+  1. Wrapped each task in `arq.worker.func()` with explicit per-stage
+     timeouts in [`apps/pipeline/app/tasks.py`](../apps/pipeline/app/tasks.py)
+     — parse 600s, notes 1200s, graph 2400s.
+  2. Added `WorkerSettings.job_timeout = 2400` as a global ceiling.
+  3. New `_classify_cancel_reason(stage, elapsed_s)` helper picks
+     `cancelled_by_job_timeout` vs `cancelled_by_worker_shutdown` based on
+     how close elapsed time is to the per-stage budget, so the operator-facing
+     `failure_reason` is accurate. Elapsed/budget are also added to the log
+     `data` payload and the SSE event.
+  4. Fixed the reconciler cron config from `minute=set(range(60))` to
+     `cron(reconcile_stuck_documents, second=0)` — the previous spec caused
+     a startup catch-up burst of ~10 runs in 5 seconds.
+- **Status**: Resolved
+- **Follow-up**: TD-010 ("Graphiti edge-timestamp 400 storm") will let us
+  tighten these budgets back down once Graphiti stops burning ~15s per
+  failed edge.
+
+## Bug Entry: 2026-05-12
+- **ID**: BUG-007
+- **Description**: `JobLogConsole` drawer always showed "Waiting for events…"
+  because `useEventSource` built its URL as
+  `/api/v1/jobs/{jobId}/events` without the `?workspaceId=<uuid>` query
+  parameter that the Next.js proxy in
+  [`apps/web/src/app/api/v1/jobs/[jobId]/events/route.ts`](../apps/web/src/app/api/v1/jobs/[jobId]/events/route.ts)
+  requires. The proxy returned HTTP 400 immediately, the browser closed the
+  EventSource silently, and the drawer stayed empty even though the Redis
+  Stream `zkast:jobs:<id>:log` had 100+ events queued and pub/sub had a
+  live subscriber.
+- **Discovered**: User reported the drawer was empty during a fresh
+  ingestion. Confirmed via `redis-cli XLEN`, `PUBSUB NUMSUB`, and reading
+  the proxy route source.
+- **Context**: Sprint 5b polish — the SSE wiring shipped without an
+  end-to-end smoke check.
+- **Fix**: Added `workspaceId: string` to the `ActiveJob` shape in
+  [`apps/web/src/lib/job-events.tsx`](../apps/web/src/lib/job-events.tsx);
+  threaded it through both `registerActiveJob` call sites in
+  [`apps/web/src/components/documents-panel.tsx`](../apps/web/src/components/documents-panel.tsx);
+  `JobLogConsole.useEventSource` now includes `?workspaceId=...` in the URL.
+  `loadFromStorage` filters out legacy entries that lack `workspaceId` so
+  pre-fix localStorage entries are pruned silently on next page load.
+- **Status**: Resolved
+
+## Bug Entry: 2026-05-12
 - **ID**: BUG-001
 - **Description**: Pipeline stages 2 and 3 were silently no-op'd by arq's
   `_job_id` deduplication. Every chained `pool.enqueue_job(...)` reused the

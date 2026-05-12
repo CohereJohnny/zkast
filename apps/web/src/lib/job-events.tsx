@@ -29,6 +29,7 @@ export type ActiveJobKind =
 
 export type ActiveJob = {
   jobId: string;
+  workspaceId: string;
   documentId?: string | null;
   kind?: ActiveJobKind | null;
   startedAt: number;
@@ -38,6 +39,7 @@ type Ctx = {
   jobs: ActiveJob[];
   registerActiveJob: (
     jobId: string,
+    workspaceId: string,
     docId?: string | null,
     kind?: ActiveJobKind | null,
   ) => void;
@@ -61,7 +63,8 @@ function loadFromStorage(): ActiveJob[] {
         (j) =>
           j &&
           typeof j === "object" &&
-          typeof (j as Record<string, unknown>).jobId === "string",
+          typeof (j as Record<string, unknown>).jobId === "string" &&
+          typeof (j as Record<string, unknown>).workspaceId === "string",
       )
       .slice(0, STORAGE_LIMIT) as ActiveJob[];
   } catch {
@@ -92,12 +95,13 @@ export function JobEventsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const registerActiveJob = useCallback<Ctx["registerActiveJob"]>(
-    (jobId, docId, kind) => {
+    (jobId, workspaceId, docId, kind) => {
       setJobs((prev) => {
         const without = prev.filter((j) => j.jobId !== jobId);
         const next: ActiveJob[] = [
           {
             jobId,
+            workspaceId,
             documentId: docId ?? null,
             kind: kind ?? null,
             startedAt: Date.now(),

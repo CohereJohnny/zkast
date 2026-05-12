@@ -217,9 +217,9 @@ export function DocumentsPanel({
   const registerJob = useCallback(
     (docId: string, jobId: string) => {
       setActiveJobs((m) => ({ ...m, [docId]: jobId }));
-      registerActiveJob(jobId, docId, "document_parse");
+      registerActiveJob(jobId, workspaceId, docId, "document_parse");
     },
-    [registerActiveJob],
+    [registerActiveJob, workspaceId],
   );
 
   const uploadFiles = async (files: File[]) => {
@@ -263,7 +263,7 @@ export function DocumentsPanel({
         const jid = d.job_id ?? body.job_ids[i];
         if (jid) {
           mapping[d.id] = jid;
-          registerActiveJob(jid, d.id, "document_parse");
+          registerActiveJob(jid, workspaceId, d.id, "document_parse");
         }
       });
       setActiveJobs((m) => ({ ...m, ...mapping }));

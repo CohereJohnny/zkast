@@ -10,6 +10,12 @@ Sprint 5b changes:
 - ``streaming`` arg is a runtime feature flag (default ``True``); set
   ``pipeline_settings.notes_llm_streaming = false`` to revert if Cohere's
   stream impl misbehaves on a given model.
+
+Sprint 5b polish (BUG-009): Cohere's streaming endpoint occasionally yields
+zero content chunks while still returning HTTP 200, leaving us with an
+empty buffer and a ``JSONDecodeError: Expecting value: line 1 column 1
+(char 0)``. We now retry once with ``stream=False`` before bubbling so a
+brittle stream doesn't fail the whole notes stage.
 """
 
 from __future__ import annotations
@@ -87,61 +93,105 @@ async def generate_notes_from_episodes(
         max_retries=1,
     )
 
-    raw_text: str
-    try:
-        if streaming:
-            stream = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"},
-                stream=True,
-            )
-            buf: list[str] = []
-            token_count = 0
-            last_progress_at = 0
-            async for chunk in stream:
-                try:
-                    delta = chunk.choices[0].delta.content
-                except (AttributeError, IndexError):
-                    delta = None
-                if not delta:
-                    continue
-                buf.append(delta)
-                # Approximate token count via whitespace splits — cheap and
-                # close enough for a progress meter.
-                token_count += max(1, len(delta.split()))
-                if progress_callback and token_count - last_progress_at >= 50:
-                    last_progress_at = token_count
-                    try:
-                        await progress_callback(token_count)
-                    except Exception as cb_exc:  # noqa: BLE001
-                        logger.warning("notes_llm_progress_cb_failed", error=str(cb_exc))
-            raw_text = "".join(buf)
-            if progress_callback and token_count > last_progress_at:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    async def _non_streaming_call() -> str:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        return resp.choices[0].message.content or ""
+
+    async def _streaming_call() -> str:
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            stream=True,
+        )
+        buf: list[str] = []
+        token_count = 0
+        last_progress_at = 0
+        async for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content
+            except (AttributeError, IndexError):
+                delta = None
+            if not delta:
+                continue
+            buf.append(delta)
+            # Approximate token count via whitespace splits — cheap and
+            # close enough for a progress meter.
+            token_count += max(1, len(delta.split()))
+            if progress_callback and token_count - last_progress_at >= 50:
+                last_progress_at = token_count
                 try:
                     await progress_callback(token_count)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as cb_exc:  # noqa: BLE001
+                    logger.warning("notes_llm_progress_cb_failed", error=str(cb_exc))
+        if progress_callback and token_count > last_progress_at:
+            try:
+                await progress_callback(token_count)
+            except Exception:  # noqa: BLE001
+                pass
+        return "".join(buf)
+
+    raw_text: str = ""
+    used_streaming = streaming
+    try:
+        if streaming:
+            raw_text = await _streaming_call()
+            # BUG-009 — Cohere's stream sometimes completes with zero
+            # content chunks. Detect the empty / unparseable response and
+            # retry once non-streaming before giving up.
+            if not raw_text.strip():
+                logger.warning(
+                    "notes_llm_empty_stream_fallback_to_nonstreaming",
+                    episodes=len(episodes),
+                )
+                used_streaming = False
+                raw_text = await _non_streaming_call()
         else:
-            resp = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"},
-            )
-            raw_text = resp.choices[0].message.content or "{}"
+            raw_text = await _non_streaming_call()
     except Exception as exc:
-        logger.warning("notes_llm_call_failed", error=str(exc), streaming=streaming)
+        logger.warning(
+            "notes_llm_call_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            streaming=used_streaming,
+        )
         raise
 
-    data = _extract_json_object(raw_text)
+    if not raw_text.strip():
+        # Both paths produced an empty body. Surface a real error message —
+        # tasks.py already wraps this in ``_describe_exception`` for the UI.
+        raise RuntimeError(
+            "Cohere returned an empty notes response (streaming="
+            f"{used_streaming}); check API key, quota, or model name."
+        )
+
+    try:
+        data = _extract_json_object(raw_text)
+    except json.JSONDecodeError as exc:
+        if used_streaming:
+            # Streamed body was non-JSON (rare, but observed). Retry once
+            # without streaming, which uses Cohere's batched JSON path and
+            # is reliable for the ``response_format=json_object`` mode.
+            logger.warning(
+                "notes_llm_stream_unparseable_fallback_to_nonstreaming",
+                error=str(exc),
+                raw_preview=raw_text[:200],
+            )
+            raw_text = await _non_streaming_call()
+            data = _extract_json_object(raw_text)
+        else:
+            raise
     raw_notes = list(data.get("notes") or [])[:max_notes]
     links = list(data.get("suggested_links") or [])
 

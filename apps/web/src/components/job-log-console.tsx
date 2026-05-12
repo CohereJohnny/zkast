@@ -150,11 +150,12 @@ function ConsoleIcon() {
 
 function useEventSource(
   jobId: string,
+  workspaceId: string,
   onEvent: (ev: ServerEvent) => void,
   onTerminal: () => void,
 ) {
   useEffect(() => {
-    const url = `/api/v1/jobs/${encodeURIComponent(jobId)}/events`;
+    const url = `/api/v1/jobs/${encodeURIComponent(jobId)}/events?workspaceId=${encodeURIComponent(workspaceId)}`;
     const es = new EventSource(url);
     let closed = false;
     es.onmessage = (msg) => {
@@ -178,7 +179,7 @@ function useEventSource(
       closed = true;
       es.close();
     };
-  }, [jobId, onEvent, onTerminal]);
+  }, [jobId, workspaceId, onEvent, onTerminal]);
 }
 
 function JobSubscription({
@@ -195,7 +196,7 @@ function JobSubscription({
     [job.jobId, onEvent],
   );
   const terminal = useCallback(() => onTerminal(job.jobId), [job.jobId, onTerminal]);
-  useEventSource(job.jobId, event, terminal);
+  useEventSource(job.jobId, job.workspaceId, event, terminal);
   return null;
 }
 
