@@ -172,6 +172,24 @@ Use this file for **non-blocking** refactors, dependency upgrades, and cleanup d
 - **Suggested sprint**: Sprint 6 or 7.
 - **Status**: Open
 
+### TD-013 — React Testing Library setup + tests for the filter pickers
+- **Date**: 2026-05-12
+- **Area**: web tests
+- **Description**: Sprint 5c shipped four new filter components
+  (`DocumentPicker`, `TypeMultiselect`, `TagPicker`, `EntityTypeahead`)
+  without RTL coverage because the project doesn't currently have RTL +
+  jest configured for the Next.js app. Stand up the test runner once
+  and write smoke tests: pickers render their data, keyboard navigation
+  works (↑/↓/Enter/Escape), chips can be removed via Backspace, and
+  the debounced typeahead fires the right query.
+- **Reason**: These pickers are the new front door to graph filtering;
+  if they regress silently a future refactor could quietly break the
+  entire filter UX. The same RTL setup unlocks tests for the merge
+  dialog, edge popover, and JobLogConsole that have shipped without
+  coverage so far.
+- **Suggested sprint**: Sprint 6 or alongside Sprint 7.
+- **Status**: Open
+
 ### TD-011 — Add an end-to-end smoke test for the pipeline-log SSE drawer
 - **Date**: 2026-05-12
 - **Area**: web tests
