@@ -10,6 +10,7 @@ from pathlib import Path
 import fitz
 import pytest
 import redis.asyncio as aioredis
+from unittest.mock import AsyncMock, MagicMock
 
 from app.documents_repo import fetch_document, insert_document, insert_ingestion_run
 from app.tasks import parse_document
@@ -70,10 +71,14 @@ async def test_parse_document_direct_smoke(tmp_path, monkeypatch) -> None:
     )
 
     redis = await aioredis.from_url(settings.redis_url, decode_responses=True)
+    arq_pool = MagicMock()
+    arq_pool.enqueue_job = AsyncMock(return_value=None)
+
     ctx = {
         "redis": redis,
         "database_url": settings.database_url,
         "zkast_storage_root": str(tmp_path),
+        "arq_pool": arq_pool,
     }
 
     await parse_document(
@@ -86,7 +91,7 @@ async def test_parse_document_direct_smoke(tmp_path, monkeypatch) -> None:
 
     row = fetch_document(settings.database_url, workspace_id=DEFAULT_WS, document_id=doc_id)
     assert row is not None
-    assert row["status"] == "ready"
+    assert row["status"] in ("generating_notes", "ready")
     assert row["page_count"] == 1
 
     await redis.aclose()

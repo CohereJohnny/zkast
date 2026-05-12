@@ -59,6 +59,8 @@ services:
     environment:
       GRAPHITI_TELEMETRY_ENABLED: "false"
       EMBEDDING_DIM: "1536"
+      # Graphiti LLM/embed/rerank concurrency; lower reduces Cohere 429s (see specs/techstack.md).
+      SEMAPHORE_LIMIT: "10"
       DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
       REDIS_URL: redis://redis:6379/0
       FALKORDB_HOST: falkordb
@@ -101,6 +103,7 @@ services:
     environment:
       GRAPHITI_TELEMETRY_ENABLED: "false"
       EMBEDDING_DIM: "1536"
+      SEMAPHORE_LIMIT: "10"
       DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
       REDIS_URL: redis://redis:6379/0
       FALKORDB_HOST: falkordb

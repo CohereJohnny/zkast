@@ -150,6 +150,11 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 - Pluggable graph backends mean we can default to a zero-config option (FalkorDB) for self-hosting while still allowing Neo4j.
 - Mature project (25k+ stars, active releases) reduces our "build a graph engine" burden.
 
+**Concurrency (Graphiti × Cohere)**:
+
+- Graphiti schedules parallel LLM, embedding, and rerank work behind a semaphore (`max_coroutines` on `Graphiti`, surfaced internally via `graphiti_core.helpers.semaphore_gather`). The upstream library reads optional env **`SEMAPHORE_LIMIT`** at import time (default **20** in `graphiti_core.helpers`).
+- zkast’s **`build_graphiti`** passes an explicit `max_coroutines`: use **`SEMAPHORE_LIMIT`** from the environment when set (integer ≥ 1), otherwise **10** as a **default tuned for typical Cohere rate limits** during large `extract_graph` runs (many episode embeds plus extraction calls). Operators with higher quotas can set **16–20**; if **429** responses persist, try **4–6**. Docker Compose wires **`SEMAPHORE_LIMIT=10`** into **pipeline** and **worker** so self-hosted stacks behave consistently without editing code.
+
 **Working-graph backend (chosen by `graphiti-core`'s driver)**:
 
 - **Default in self-hosted**: **FalkorDB** (single Docker image, Redis-compatible, fast cold start).

@@ -32,7 +32,7 @@ Default models are seeded in workspace `pipeline_settings`: `command-r7b-12-2024
 
 ### Graphiti concurrency
 
-Graphiti uses a semaphore for concurrent LLM/graph work. Tune **`SEMAPHORE_LIMIT`** (integer) if you hit provider rate limits or want lower parallelism; see upstream Graphiti docs.
+Graphiti bounds concurrent LLM, embedding, and rerank calls (`max_coroutines`). zkast **`build_graphiti`** uses **`SEMAPHORE_LIMIT`** when set; otherwise it defaults to **10** (Cohere-friendly for `extract_graph` bursts). Docker Compose sets **`SEMAPHORE_LIMIT=10`** on **pipeline** and **worker**. Raise toward **16–20** if your Cohere quota allows; lower to **4–6** if you still see **429** throttling. Upstream `graphiti-core` also reads this env at import (default **20** there); zkast’s explicit `max_coroutines` wins for instances we construct.
 
 ## Repository layout
 
@@ -97,6 +97,9 @@ When Next runs via **`pnpm dev`** on the host, keep **`PIPELINE_INTERNAL_URL=htt
 - **`MAX_UPLOAD_BYTES`** — upper bound per uploaded PDF (default **52428800**, i.e. 50 MiB). Set in `.env` for pipeline + web.
 - **`ZKAST_STORAGE_ROOT`** — directory where PDF bytes are written (default **`/var/zkast/storage`** in Compose). The **`pipeline`** and **`worker`** services mount the named volume **`pipeline_storage`** at this path so parsing can read what the API wrote.
 - **`worker`** runs **`arq app.tasks.WorkerSettings`** (Arq) against **`REDIS_URL`**; keep it running alongside **`pipeline`** for ingest jobs to complete.
+- **Ingestion stages (Sprint 4)** — after PDF parse, the worker chains: **`generating_notes`** (Cohere → `atomic_notes` + optional `note_links`) → **`extracting_graph`** / **`building_graph`** (Graphiti `add_episode` with `group_id = workspace_id` → Postgres `entities` / `relationships` + Graphiti UUID maps) → **`ready`**. Tune note volume with workspace **`pipeline_settings.max_notes_per_document`** (default **50**, capped at 500 in the worker).
+- **Re-ingest** — upload a PDF via `POST /api/v1/workspaces/{id}/documents` with multipart field **`replaces_document_id`** set to an existing document UUID. The new document gets its own `IngestionRun` and episodes; prior documents’ notes and graph rows are **not** removed automatically (see FR-5).
+- **Document delete** — `DELETE .../documents/{id}?cascade=document_only` removes the document row (Postgres cascades episodes/runs). `cascade=exclusive_derivatives` first deletes notes that are **only** tied to that document’s episodes, then removes orphan entities/relationships that have no remaining episode or note provenance, then deletes the document. **`GET .../documents/{id}/delete-preview`** returns counts for the modal. Deletes and ingestion retries return **`409`** with `error.code: business_rule_violation` while the document is mid-pipeline (`queued`, `parsing`, `generating_notes`, `extracting_graph`, `building_graph`) or has an ingestion run still **`running`**.
 - To delete stored PDFs only, remove the Docker volume **`zkast_pipeline_storage`** (exact name depends on project prefix) or run **`docker compose down -v`** (this also deletes Postgres **`pgdata`**).
 
 4. Smoke-check aggregated readiness from the web tier:

@@ -46,7 +46,7 @@ flowchart LR
 | 1 | [sprint_1/](sprint_1/sprint_1_tasks.md) | Monorepo, Docker Compose, app shell, bypass auth, secrets, OTEL stubs, design tokens | NFR-1, NFR-3, NFR-7, FR-33, [uiux.md](../specs/uiux.md) Visual Design System |
 | 2 | [sprint_2/](sprint_2/sprint_2_tasks.md) | Cohere (Chat/Embed/Rerank), Graphiti + FalkorDB, ApiKey encryption, first-run | FR-29, FR-30, [techstack.md](../specs/techstack.md) |
 | 3 | [sprint_3/](sprint_3/sprint_3_tasks.md) | PDF upload, Episodes, IngestionRun, SSE progress | FR-1–FR-4, US-1.1–US-1.3 |
-| 4 | [sprint_4/](sprint_4/sprint_4_tasks.md) | Atomic notes, entities/relationships, Notes UI, re-ingest/delete | FR-5–FR-15, US-1.4–US-1.5, US-2.x |
+| 4 | [sprint_4/](sprint_4/sprint_4_tasks.md) | Atomic notes, entities/relationships, Notes UI, re-ingest/delete (**closed 2026-05-12** — [report](sprint_4/sprint_4_report.md)) | FR-5–FR-15, US-1.4–US-1.5, US-2.x |
 | 5 | [sprint_5/](sprint_5/sprint_5_tasks.md) | Graph viz (`react-force-graph`), filters, provenance, merge/split, snapshots | FR-16–FR-22, US-2.3–US-2.4, US-3.x |
 | 6 | [sprint_6/](sprint_6/sprint_6_tasks.md) | Chat data model, retrieval, Cohere grounded chat, SSE stream, refusal | FR-35–FR-39, FR-41, FR-45, US-8.1–US-8.2, US-8.4, US-8.8–US-8.9 |
 | 7 | [sprint_7/](sprint_7/sprint_7_tasks.md) | Chat Home/Drawer/View, citations UX, targets, persistence writer | FR-23–FR-28, US-4.x, US-8.3, US-8.5–US-8.7 |

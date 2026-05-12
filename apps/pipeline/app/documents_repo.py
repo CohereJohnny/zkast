@@ -86,6 +86,180 @@ def list_documents_for_workspace(database_url: str, workspace_id: str, *, limit:
         return out
 
 
+def list_episodes_for_ingestion_run(
+    database_url: str,
+    *,
+    ingestion_run_id: str,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, workspace_id, document_id, ingestion_run_id, kind, text,
+                   page_start, page_end, sequence, created_at
+            FROM episodes
+            WHERE ingestion_run_id = %s::uuid
+            ORDER BY sequence ASC
+            """,
+            (ingestion_run_id,),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            r = dict(row)
+            _uuid_str(r, "id")
+            _uuid_str(r, "workspace_id")
+            _uuid_str(r, "document_id")
+            _uuid_str(r, "ingestion_run_id")
+            out.append(r)
+        return out
+
+
+def merge_run_stats_incremental(database_url: str, *, run_id: str, extra: dict[str, Any]) -> None:
+    """Merge keys into ingestion_runs.stats without closing the run."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT stats FROM ingestion_runs WHERE id = %s::uuid",
+            (run_id,),
+        ).fetchone()
+        if not row:
+            return
+        stats = dict(row["stats"] if row["stats"] else {})
+        stats.update(extra)
+        conn.execute(
+            "UPDATE ingestion_runs SET stats = %s::jsonb WHERE id = %s::uuid",
+            (Json(stats), run_id),
+        )
+        conn.commit()
+
+
+def finalize_ingestion_run_success(
+    database_url: str,
+    *,
+    run_id: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Mark ingestion run succeeded with optional final stats merge."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT stats FROM ingestion_runs WHERE id = %s::uuid",
+            (run_id,),
+        ).fetchone()
+        stats = dict(row["stats"] if row and row["stats"] else {})
+        if extra:
+            stats.update(extra)
+        conn.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = 'succeeded', ended_at = now(), stats = %s::jsonb
+            WHERE id = %s::uuid
+            """,
+            (Json(stats), run_id),
+        )
+        conn.commit()
+
+
+def is_document_ingestion_active(database_url: str, *, document_id: str) -> bool:
+    """True while a document is mid-pipeline or has a run still marked running."""
+    active_statuses = (
+        "queued",
+        "parsing",
+        "generating_notes",
+        "extracting_graph",
+        "building_graph",
+    )
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT status FROM documents WHERE id = %s::uuid LIMIT 1",
+            (document_id,),
+        ).fetchone()
+        if not row:
+            return False
+        if row["status"] in active_statuses:
+            return True
+        run = conn.execute(
+            """
+            SELECT 1 AS ok
+            FROM ingestion_runs
+            WHERE document_id = %s::uuid AND status = 'running'
+            LIMIT 1
+            """,
+            (document_id,),
+        ).fetchone()
+        return run is not None
+
+
+def fail_running_ingestion_runs_for_document(database_url: str, *, document_id: str) -> int:
+    """Mark in-flight ingestion runs as cancelled when superseded (retry / new attempt). Not a pipeline error."""
+    with psycopg.connect(database_url) as conn:
+        cur = conn.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = 'cancelled', ended_at = now()
+            WHERE document_id = %s::uuid AND status = 'running'
+            """,
+            (document_id,),
+        )
+        n = cur.rowcount
+        conn.commit()
+    return int(n or 0)
+
+
+def restart_ingestion_run(database_url: str, *, run_id: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = 'running', ended_at = NULL
+            WHERE id = %s::uuid
+            """,
+            (run_id,),
+        )
+        conn.commit()
+
+
+def resolve_document_run_for_episodes(
+    database_url: str,
+    *,
+    workspace_id: str,
+    episode_ids: list[str],
+) -> tuple[str, str] | None:
+    """If all episodes exist in workspace and share one document + ingestion run, return (document_id, run_id)."""
+    if not episode_ids:
+        return None
+    uniq = list(dict.fromkeys(episode_ids))
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT document_id::text AS document_id, ingestion_run_id::text AS ingestion_run_id
+            FROM episodes
+            WHERE workspace_id = %s::uuid AND id = ANY(%s::uuid[])
+            """,
+            (workspace_id, uniq),
+        ).fetchall()
+        if len(rows) != len(uniq):
+            return None
+        doc_ids = {r["document_id"] for r in rows}
+        run_ids = {r["ingestion_run_id"] for r in rows}
+        if len(doc_ids) != 1 or len(run_ids) != 1:
+            return None
+        return (doc_ids.pop(), run_ids.pop())
+
+
+def fetch_latest_ingestion_run_with_episodes(database_url: str, *, document_id: str) -> str | None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT ir.id::text AS id
+            FROM ingestion_runs ir
+            WHERE ir.document_id = %s::uuid
+              AND EXISTS (SELECT 1 FROM episodes e WHERE e.ingestion_run_id = ir.id)
+            ORDER BY ir.started_at DESC
+            LIMIT 1
+            """,
+            (document_id,),
+        ).fetchone()
+        return str(row["id"]) if row else None
+
+
 def list_ingestion_runs_for_document(
     database_url: str,
     *,

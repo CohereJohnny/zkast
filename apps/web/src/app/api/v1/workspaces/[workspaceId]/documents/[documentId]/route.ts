@@ -82,7 +82,7 @@ export async function GET(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: { workspaceId: string; documentId: string } },
 ) {
   const { workspaceId, documentId } = params;
@@ -95,8 +95,17 @@ export async function DELETE(
   const denied = await requireMatchingWorkspace(workspaceId);
   if (denied) return denied;
 
+  const url = new URL(req.url);
+  const cascade = url.searchParams.get("cascade") ?? "document_only";
+  if (cascade !== "document_only" && cascade !== "exclusive_derivatives") {
+    return NextResponse.json(
+      { error: { code: "validation_failed", message: "Invalid cascade parameter" } },
+      { status: 400 },
+    );
+  }
+
   const res = await pipelineFetch(
-    `/internal/v1/documents/${documentId}?workspace_id=${encodeURIComponent(workspaceId)}`,
+    `/internal/v1/documents/${documentId}?workspace_id=${encodeURIComponent(workspaceId)}&cascade=${encodeURIComponent(cascade)}`,
     { method: "DELETE", throwOnError: false },
   );
 

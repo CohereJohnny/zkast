@@ -59,6 +59,7 @@ All errors return a structured body:
 | 403  | `forbidden`                     | Authenticated but lacks role for the action.                     |
 | 404  | `not_found`                     | Resource does not exist or caller cannot see it.                 |
 | 409  | `conflict`                      | State conflict (e.g., name already used, snapshot immutable).    |
+| 409  | `business_rule_violation`       | Semantic rule or resource busy (e.g., document delete/retry while ingestion is active — pipeline internal + web proxy). |
 | 413  | `payload_too_large`             | Upload exceeds configured limit.                                 |
 | 415  | `unsupported_media_type`        | File rejected by content type.                                   |
 | 422  | `business_rule_violation`       | Semantic rule failed (e.g., would remove last Owner).            |
@@ -1062,11 +1063,15 @@ This is **not** part of the public API. It is the contract between the web tier 
 
 - `POST /internal/v1/providers/cohere/test` — Connectivity probe against Cohere (OpenAI-compat chat + native embed + rerank); uses plaintext `api_key` or decrypts `llm_cohere` for `workspace_id`.
 - `POST /internal/v1/documents` — Multipart PDF upload (`workspace_id`, `file`, optional `replaces_document_id`); streams to local storage, inserts `Document` + `IngestionRun`, enqueues Arq `parse_document`. Optional `Idempotency-Key` header (24h replay). Returns **202** with `document` + `job_id`.
-- `DELETE /internal/v1/documents/{documentId}?workspace_id=` — Hard-delete document row, cascades episodes/runs; removes file from `ZKAST_STORAGE_ROOT`.
-- `POST /internal/v1/ingestion-runs` — Body `{ "document_id", "from_stage": "parsing" }`; starts a new parse attempt (new `IngestionRun`) and enqueues `parse_document`.
+- `DELETE /internal/v1/documents/{documentId}?workspace_id=&cascade=` — `cascade` is `document_only` (default) or `exclusive_derivatives` (removes notes exclusive to the document and orphan graph rows first). Returns **204**. Responds **409** with `error.code: business_rule_violation` while ingestion is still active on that document.
+- `GET /internal/v1/documents/{documentId}/delete-preview?workspace_id=&cascade=` — Returns counts of exclusive vs shared notes and touched entities/relationships for the delete modal.
+- `POST /internal/v1/ingestion-runs` — Body `{ "document_id", "from_stage" }` where `from_stage` is `parsing` (new `IngestionRun` + `parse_document`), `generating_notes` (reuse latest run that has episodes, clear generated notes for that run, enqueue `generate_atomic_notes`), or `extracting_graph` (reuse latest run with episodes, enqueue `extract_graph`). Returns **202** with `document`, `ingestion_run_id`, `job_id`. **409** `business_rule_violation` if the document is mid-pipeline.
+- `POST /internal/v1/extract/atomic-notes` — JSON `{ "workspace_id", "episode_ids": [...] }`; episodes must share one document + ingestion run. Clears note provenance for those episodes, restarts the run, enqueues `generate_atomic_notes` with an episode filter.
+- `GET/POST/PATCH/DELETE /internal/v1/notes` — Atomic notes CRUD, list filters (`q`, `tags`, `document_id`, `origin`, `is_user_edited`, `sort`, pagination); `POST .../notes/{id}/merge`, `POST .../notes/{id}/split`, link create/delete under `.../notes/{id}/links`.
+- **Merge body** — `{ "other_note_id": "<uuid>", "field_selection": { "title": "survivor"|"other", "body": "...", "tags": "..." } }` (per-field winner; merged tags are the union of both notes’ tags).
+- **Split body** — `{ "passage": "<verbatim substring of parent body>", "new_title": "..." }`; creates a new note with origin `split`, copies parent tags to the child, links parent → child with `related`, and removes the passage from the parent body.
 - `POST /internal/v1/persistence-jobs` — Start a persistence job for a snapshot/target pair.
 - `POST /internal/v1/graph/search` — Hybrid search delegated to Graphiti.
-- `POST /internal/v1/extract/atomic-notes` — Run atomic-note generation on a set of episodes (used by manual re-runs).
 - `POST /internal/v1/chat/turns` — Run a single chat turn: retrieve, call Cohere Chat with grounding, stream tokens and citations. Returns an SSE stream consumed by the web tier and proxied to the browser.
 - `POST /internal/v1/chat/turns/{turnId}/cancel` — Cancel an in-flight chat turn.
 - `GET /internal/v1/jobs/{jobId}` — Poll job hash state (requires `X-Zkast-Workspace-Id`).

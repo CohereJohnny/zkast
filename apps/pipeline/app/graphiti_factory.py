@@ -80,9 +80,13 @@ def build_graphiti(
 
     max_coroutines = semaphore_limit
     if max_coroutines is None:
-        raw = os.getenv("SEMAPHORE_LIMIT")
-        if raw and raw.isdigit():
-            max_coroutines = int(raw)
+        raw = os.getenv("SEMAPHORE_LIMIT", "").strip()
+        if raw.isdigit():
+            max_coroutines = max(1, int(raw))
+        else:
+            # Default below graphiti_core.helpers' import-time default (20): Cohere tiers
+            # often throttle burst embed + chat + rerank traffic during extract_graph.
+            max_coroutines = 10
 
     return Graphiti(
         graph_driver=driver,
