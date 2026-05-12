@@ -68,7 +68,7 @@ Docker Compose starts this automatically as the **`worker`** service.
 
 ## Graphiti + Cohere
 
-- Installs `graphiti-core[falkordb]` (pinned in `requirements.txt`). Compose forces `GRAPHITI_TELEMETRY_ENABLED=false` and sets `EMBEDDING_DIM=1536` (embed v4 default width; must stay consistent with indexed vectors in FalkorDB).
+- Installs `graphiti-core[falkordb]` (pinned in `requirements.txt`). Compose forces `GRAPHITI_TELEMETRY_ENABLED=false` and sets `EMBEDDING_DIM=1536` (embed v4 default width; must stay consistent with indexed vectors in FalkorDB). **`SEMAPHORE_LIMIT`** (default **10** in Compose; code falls back to **10** when unset) caps concurrent LLM/embed/rerank work for Cohere—tune per quota (`specs/techstack.md`).
 - Optional `COHERE_API_KEY` overrides decrypted workspace keys at runtime (developer convenience). Leave unset to use DB-only secrets.
 - Live smoke: `ZKAST_GRAPHITI_SMOKE=1`, full Compose connectivity, and `pytest tests/test_graphiti_smoke.py`.
 

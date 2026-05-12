@@ -116,6 +116,11 @@ export async function POST(
     upstream.append("workspace_id", workspaceId);
     upstream.append("file", file);
 
+    const replacesRaw = formData.get("replaces_document_id");
+    if (typeof replacesRaw === "string" && uuidParam.safeParse(replacesRaw).success) {
+      upstream.append("replaces_document_id", replacesRaw);
+    }
+
     const idem = req.headers.get("idempotency-key");
     const headers: HeadersInit = {};
     if (idem) headers["Idempotency-Key"] = idem;

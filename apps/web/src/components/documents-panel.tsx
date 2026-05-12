@@ -1,6 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { DocumentDetailPanel } from "@/components/document-detail-panel";
+
+/** Document rows in these states advance in the worker; poll the list so UI stays in sync with the DB. */
+const INGESTION_ACTIVE_STATUSES = new Set([
+  "queued",
+  "parsing",
+  "generating_notes",
+  "extracting_graph",
+  "building_graph",
+]);
 
 type DocRow = {
   id: string;
@@ -73,9 +84,30 @@ function statusStyles(status: string): string {
       return "bg-red-500/15 text-red-200 ring-1 ring-red-500/40";
     case "parsing":
     case "queued":
+    case "generating_notes":
+    case "extracting_graph":
+    case "building_graph":
       return "bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/35";
     default:
       return "bg-white/10 text-muted ring-1 ring-border-subtle";
+  }
+}
+
+/** When no live SSE % for this doc, approximate bar width from DB pipeline stage (distinct per stage). */
+function ingestionProgressFallbackPct(status: string): number {
+  switch (status) {
+    case "queued":
+      return 14;
+    case "parsing":
+      return 30;
+    case "generating_notes":
+      return 48;
+    case "extracting_graph":
+      return 68;
+    case "building_graph":
+      return 86;
+    default:
+      return 12;
   }
 }
 
@@ -94,9 +126,13 @@ export function DocumentsPanel({
   const [progressByDoc, setProgressByDoc] = useState<Record<string, number>>({});
   const [dragOver, setDragOver] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [listRefreshNonce, setListRefreshNonce] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeJobsRef = useRef<Record<string, string>>({});
 
   const uploadLimit = maxBytes();
+
+  activeJobsRef.current = activeJobs;
 
   const load = useCallback(async () => {
     setListError(null);
@@ -107,7 +143,17 @@ export function DocumentsPanel({
         setListError(body.error?.message ?? "Failed to load documents");
         return;
       }
-      setDocs(body.items ?? []);
+      const items = body.items ?? [];
+      setDocs(items);
+      setListRefreshNonce((n) => n + 1);
+      setProgressByDoc((prev) => {
+        const jobs = activeJobsRef.current;
+        const next = { ...prev };
+        for (const id of Object.keys(next)) {
+          if (!jobs[id]) delete next[id];
+        }
+        return next;
+      });
     } catch (e) {
       setListError(e instanceof Error ? e.message : "Failed to load documents");
     } finally {
@@ -118,6 +164,17 @@ export function DocumentsPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const hasActiveIngestion = useMemo(
+    () => docs.some((d) => INGESTION_ACTIVE_STATUSES.has(d.status)),
+    [docs],
+  );
+
+  useEffect(() => {
+    if (!hasActiveIngestion) return;
+    const t = window.setInterval(() => void load(), 4000);
+    return () => window.clearInterval(t);
+  }, [hasActiveIngestion, load]);
 
   const onProgress = useCallback((docId: string, pct: number | null) => {
     setProgressByDoc((prev) => {
@@ -151,6 +208,10 @@ export function DocumentsPanel({
     },
     [clearJob, load],
   );
+
+  const registerJob = useCallback((docId: string, jobId: string) => {
+    setActiveJobs((m) => ({ ...m, [docId]: jobId }));
+  }, []);
 
   const uploadFiles = async (files: File[]) => {
     setUploadError(null);
@@ -295,8 +356,19 @@ export function DocumentsPanel({
           <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface/40">
             {docs.map((d) => {
               const jobId = activeJobs[d.id];
-              const pct = progressByDoc[d.id];
-              const showBar = Boolean(jobId) || d.status === "queued" || d.status === "parsing";
+              const livePct = progressByDoc[d.id];
+              const stageFallback = ingestionProgressFallbackPct(d.status);
+              const barPct =
+                jobId && typeof livePct === "number"
+                  ? Math.min(100, Math.max(8, livePct))
+                  : Math.min(100, Math.max(8, d.status === "ready" ? 100 : stageFallback));
+              const showBar =
+                Boolean(jobId) ||
+                d.status === "queued" ||
+                d.status === "parsing" ||
+                d.status === "generating_notes" ||
+                d.status === "extracting_graph" ||
+                d.status === "building_graph";
               return (
                 <li key={d.id}>
                   <button
@@ -319,7 +391,7 @@ export function DocumentsPanel({
                       <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" aria-hidden>
                         <div
                           className="h-full bg-accent-primary transition-[width] duration-300"
-                          style={{ width: `${Math.min(100, Math.max(8, pct ?? (d.status === "ready" ? 100 : 12)))}%` }}
+                          style={{ width: `${barPct}%` }}
                         />
                       </div>
                     ) : null}
@@ -335,49 +407,17 @@ export function DocumentsPanel({
       </section>
 
       {variant === "full" && selected ? (
-        <aside
-          className="fixed inset-y-0 right-0 z-40 w-full max-w-md border-l border-border-strong bg-canvas p-4 shadow-xl"
-          aria-label="Document details"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <p className="text-title-3 text-secondary">{selected.original_filename}</p>
-              <p className="mt-1 text-caption text-muted">
-                {selected.page_count != null ? `${selected.page_count} pages · ` : ""}
-                {(selected.byte_size / 1024).toFixed(1)} KB
-              </p>
-            </div>
-            <button
-              type="button"
-              className="rounded-md border border-border-strong px-2 py-1 text-caption text-muted hover:bg-surface"
-              onClick={() => setSelectedId(null)}
-            >
-              Close
-            </button>
-          </div>
-          <div className="mt-4 flex gap-2">
-            <button
-              type="button"
-              className="rounded-md bg-red-500/80 px-3 py-1.5 text-caption font-medium text-white"
-              onClick={async () => {
-                const ok = window.confirm("Delete this document and its episodes?");
-                if (!ok) return;
-                const res = await fetch(`/api/v1/workspaces/${workspaceId}/documents/${selected.id}`, {
-                  method: "DELETE",
-                });
-                if (res.ok) {
-                  setSelectedId(null);
-                  await load();
-                }
-              }}
-            >
-              Delete document
-            </button>
-          </div>
-          <p className="mt-6 text-caption text-muted">
-            Full ingestion timeline and graph linkage ship in later sprints.
-          </p>
-        </aside>
+        <DocumentDetailPanel
+          workspaceId={workspaceId}
+          documentId={selected.id}
+          listRefreshNonce={listRefreshNonce}
+          onClose={() => setSelectedId(null)}
+          onDeleted={() => {
+            setSelectedId(null);
+            void load();
+          }}
+          onJobStarted={registerJob}
+        />
       ) : null}
     </div>
   );
