@@ -26,6 +26,7 @@ from app.graph_edit_repo import (
     patch_relationship,
     unmerge_entity,
 )
+from app.evidence_repo import list_evidence_for_entity
 from app.graph_repo import get_entity_detail, list_graph
 from app.graphiti_factory import graphiti_for_workspace
 from app.snapshots_repo import (
@@ -181,6 +182,34 @@ async def internal_get_entity(
     if not detail:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Entity not found"}})
     return JSONResponse(content={"entity": detail})
+
+
+@router.get(
+    "/internal/v1/workspaces/{workspace_id}/graph/entities/{entity_id}/evidence"
+)
+async def internal_list_entity_evidence(
+    workspace_id: uuid.UUID,
+    entity_id: uuid.UUID,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> JSONResponse:
+    """List source-grounded evidence rows linked to this entity.
+
+    Sprint 5c Phase 3 — backs the "Evidence" tab in the entity detail
+    panel. Each row is one LangExtract-extracted span with the source
+    document, page, character range, and a quoted snippet.
+    """
+    settings: Settings = request.app.state.settings
+    payload = await asyncio.to_thread(
+        list_evidence_for_entity,
+        settings.database_url,
+        workspace_id=str(workspace_id),
+        entity_id=str(entity_id),
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(content=payload)
 
 
 @router.patch("/internal/v1/workspaces/{workspace_id}/graph/entities/{entity_id}")
