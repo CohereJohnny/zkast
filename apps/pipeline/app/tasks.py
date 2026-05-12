@@ -30,6 +30,12 @@ from graphiti_core.nodes import EpisodeType
 
 from app.chunking import chunk_page_text
 from app.config import get_settings
+from app.entity_schemas import (
+    CUSTOM_EXTRACTION_INSTRUCTIONS,
+    EDGE_TYPE_MAP,
+    EDGE_TYPES,
+    ENTITY_TYPES,
+)
 from app.documents_repo import (
     delete_episodes_for_document,
     fail_running_ingestion_runs_for_document,
@@ -857,6 +863,12 @@ async def extract_graph(
                         reference_time=ref,
                         source=EpisodeType.text,
                         group_id=workspace_id,
+                        # Sprint 5c — type-constrained extraction so we
+                        # stop collapsing every entity into "Concept".
+                        entity_types=ENTITY_TYPES,
+                        edge_types=EDGE_TYPES,
+                        edge_type_map=EDGE_TYPE_MAP,
+                        custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                     )
                 ep_id = str(ep["id"])
                 local_entities = 0
@@ -993,6 +1005,10 @@ async def extract_graph(
                         reference_time=ref,
                         source=EpisodeType.text,
                         group_id=workspace_id,
+                        entity_types=ENTITY_TYPES,
+                        edge_types=EDGE_TYPES,
+                        edge_type_map=EDGE_TYPE_MAP,
+                        custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                     )
                 local_entities = 0
                 local_edges = 0
