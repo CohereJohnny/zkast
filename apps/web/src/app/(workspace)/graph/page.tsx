@@ -1,19 +1,13 @@
-import { EmptyState } from "@/components/empty-state";
+import { GraphWorkspacePanel } from "@/components/graph-workspace-panel";
+import { getCurrentWorkspace } from "@/lib/auth";
 
-export default function GraphPage() {
+export const dynamic = "force-dynamic";
+
+export default async function GraphPage() {
+  const workspace = await getCurrentWorkspace();
   return (
-    <EmptyState
-      title="Graph is empty"
-      description="Upload your first document to extract entities and relationships into the working graph."
-      cta={
-        <button
-          type="button"
-          disabled
-          className="cursor-not-allowed rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-canvas opacity-45"
-        >
-          Upload your first document
-        </button>
-      }
-    />
+    <div className="flex min-h-[calc(100vh-6rem)] flex-col p-2">
+      <GraphWorkspacePanel workspaceId={workspace.id} />
+    </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { useToast } from "@/components/feedback-provider";
 import { NoteDetail } from "@/components/note-detail";
 import { NotesList, type NoteListItem } from "@/components/notes-list";
 
@@ -18,6 +19,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     const t = window.setTimeout(() => setQDebounced(qInput), 400);
@@ -75,15 +77,20 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
     try {
       const j = JSON.parse(raw) as { note?: { id: string }; error?: { message?: string } };
       if (!res.ok) {
-        window.alert(j.error?.message ?? "Could not create note");
+        toast({
+          variant: "error",
+          message: "Could not create note",
+          description: j.error?.message,
+        });
         return;
       }
       if (j.note?.id) {
         setSelectedId(j.note.id);
         await refreshList();
+        toast({ variant: "success", message: "Note created" });
       }
     } catch {
-      window.alert("Could not create note");
+      toast({ variant: "error", message: "Could not create note" });
     }
   };
 
@@ -130,6 +137,12 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
               onSplitCreated={(newId) => {
                 setSelectedId(newId);
                 void refreshList();
+                toast({
+                  variant: "success",
+                  message: "Split created new note",
+                  description: `Bookmark: /notes?note=${newId}`,
+                  durationMs: 6000,
+                });
               }}
               onDeleted={() => {
                 setSelectedId(null);

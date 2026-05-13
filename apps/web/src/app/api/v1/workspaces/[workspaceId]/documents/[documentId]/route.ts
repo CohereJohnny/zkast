@@ -103,9 +103,16 @@ export async function DELETE(
       { status: 400 },
     );
   }
+  const force = url.searchParams.get("force") === "true";
+
+  const qs = new URLSearchParams({
+    workspace_id: workspaceId,
+    cascade,
+  });
+  if (force) qs.set("force", "true");
 
   const res = await pipelineFetch(
-    `/internal/v1/documents/${documentId}?workspace_id=${encodeURIComponent(workspaceId)}&cascade=${encodeURIComponent(cascade)}`,
+    `/internal/v1/documents/${documentId}?${qs.toString()}`,
     { method: "DELETE", throwOnError: false },
   );
 

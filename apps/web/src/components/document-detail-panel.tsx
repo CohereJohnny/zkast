@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useToast } from "@/components/feedback-provider";
+import { emitGraphInvalidated } from "@/lib/graph-events";
+
 type IngestionRun = {
   id: string;
   started_at: string;
@@ -114,6 +117,9 @@ export function DocumentDetailPanel({
     "exclusive_derivatives",
   );
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [force, setForce] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const toast = useToast();
 
   const reingestRef = useRef<HTMLInputElement>(null);
 
@@ -211,18 +217,43 @@ export function DocumentDetailPanel({
     }
   };
 
+  const ingestionActive = doc
+    ? new Set([
+        "queued",
+        "parsing",
+        "generating_notes",
+        "extracting_graph",
+        "building_graph",
+      ]).has(doc.status)
+    : false;
+
   const confirmDelete = async () => {
     setActionError(null);
-    const res = await fetch(
-      `/api/v1/workspaces/${workspaceId}/documents/${documentId}?cascade=${encodeURIComponent(cascade)}`,
-      { method: "DELETE" },
-    );
-    if (res.status === 204) {
-      onDeleted();
-      return;
+    setDeleteBusy(true);
+    try {
+      const qs = new URLSearchParams({ cascade });
+      if (force) qs.set("force", "true");
+      const res = await fetch(
+        `/api/v1/workspaces/${workspaceId}/documents/${documentId}?${qs.toString()}`,
+        { method: "DELETE" },
+      );
+      if (res.status === 204) {
+        emitGraphInvalidated();
+        toast({
+          variant: "success",
+          message: "Document deleted",
+          description: force ? "Running ingestion cancelled and orphan graph rows cleaned." : undefined,
+        });
+        onDeleted();
+        return;
+      }
+      const raw = await res.text();
+      const msg = messageFromApiJson(raw) ?? `Delete failed (${res.status})`;
+      setActionError(msg);
+      toast({ variant: "error", message: "Delete failed", description: msg });
+    } finally {
+      setDeleteBusy(false);
     }
-    const raw = await res.text();
-    setActionError(messageFromApiJson(raw) ?? `Delete failed (${res.status})`);
   };
 
   const onReingestPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -431,20 +462,42 @@ export function DocumentDetailPanel({
               Remove exclusive derivatives (notes only on this doc + orphan graph rows)
             </label>
           </fieldset>
+          {ingestionActive ? (
+            <label className="mt-3 flex items-start gap-2 rounded-md border border-amber-400/30 bg-amber-500/10 p-2 text-caption text-amber-100">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={force}
+                onChange={(e) => setForce(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Cancel running ingestion and delete anyway.</span>{" "}
+                The current pipeline run will be marked cancelled. Background work already in flight
+                will finish against a deleted row (no further effect).
+              </span>
+            </label>
+          ) : null}
           <div className="mt-4 flex gap-2">
             <button
               type="button"
               className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary"
               onClick={() => setDeleteOpen(false)}
+              disabled={deleteBusy}
             >
               Cancel
             </button>
             <button
               type="button"
-              className="rounded-md bg-red-600 px-3 py-1.5 text-caption font-medium text-white"
+              className="rounded-md bg-red-600 px-3 py-1.5 text-caption font-medium text-white disabled:opacity-60"
               onClick={() => void confirmDelete()}
+              disabled={deleteBusy || (ingestionActive && !force)}
+              title={
+                ingestionActive && !force
+                  ? "Document is mid-ingestion. Check the box above to force delete."
+                  : undefined
+              }
             >
-              Confirm delete
+              {deleteBusy ? "Deleting…" : "Confirm delete"}
             </button>
           </div>
         </div>

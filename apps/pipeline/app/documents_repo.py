@@ -208,12 +208,76 @@ def restart_ingestion_run(database_url: str, *, run_id: str) -> None:
         conn.execute(
             """
             UPDATE ingestion_runs
-            SET status = 'running', ended_at = NULL
+            SET status = 'running', ended_at = NULL, last_heartbeat_at = now()
             WHERE id = %s::uuid
             """,
             (run_id,),
         )
         conn.commit()
+
+
+def update_ingestion_run_heartbeat(database_url: str, *, run_id: str) -> None:
+    """Bump ``last_heartbeat_at`` so the reconciler treats this run as alive.
+
+    Sprint 5b: tasks call this every 10s via :class:`_Heartbeat`. The column
+    is added by migration ``0007_ingestion_observability``.
+    """
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            "UPDATE ingestion_runs SET last_heartbeat_at = now() WHERE id = %s::uuid",
+            (run_id,),
+        )
+        conn.commit()
+
+
+def list_stalled_active_documents(
+    database_url: str,
+    *,
+    stale_seconds: int = 90,
+) -> list[dict[str, Any]]:
+    """Find documents in an active status whose ingestion-run heartbeat is stale.
+
+    Returns rows ready to flip to ``failed``. Joins to the most recent
+    running ``ingestion_runs`` row for each document and filters those whose
+    ``last_heartbeat_at`` is older than ``stale_seconds`` (or NULL — older
+    runs from before migration 0007 land in this bucket too once their
+    document has been active beyond the threshold).
+    """
+    active_statuses = (
+        "queued",
+        "parsing",
+        "generating_notes",
+        "extracting_graph",
+        "building_graph",
+    )
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              d.id::text AS document_id,
+              d.workspace_id::text AS workspace_id,
+              d.status,
+              ir.id::text AS ingestion_run_id,
+              ir.last_heartbeat_at,
+              d.updated_at
+            FROM documents d
+            LEFT JOIN LATERAL (
+              SELECT id, last_heartbeat_at
+              FROM ingestion_runs
+              WHERE document_id = d.id AND status = 'running'
+              ORDER BY started_at DESC
+              LIMIT 1
+            ) ir ON true
+            WHERE d.status = ANY(%s::text[])
+              AND (
+                ir.last_heartbeat_at IS NULL
+                OR ir.last_heartbeat_at < (now() - make_interval(secs => %s))
+              )
+              AND d.updated_at < (now() - make_interval(secs => %s))
+            """,
+            (list(active_statuses), stale_seconds, stale_seconds),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def resolve_document_run_for_episodes(

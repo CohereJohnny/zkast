@@ -3,15 +3,28 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import uuid
+from datetime import datetime
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.config import Settings
+from app.ingestion_logs_repo import (
+    list_logs_for_document,
+    list_logs_for_run,
+)
 from app.job_redis import job_hgetall
 from app.jobs_stream import sse_job_events
 
 router = APIRouter(tags=["internal-jobs"])
+
+
+def _iso(v: Any) -> Any:
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return v
 
 
 def _workspace_header(request: Request) -> str:
@@ -77,3 +90,44 @@ async def get_internal_job_events(job_id: str, request: Request) -> StreamingRes
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _serialize_log_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    if "ts" in out:
+        out["ts"] = _iso(out["ts"])
+    return out
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/ingestion-runs/{run_id}/logs")
+async def get_internal_ingestion_run_logs(
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+    level: Annotated[str | None, Query()] = None,
+) -> JSONResponse:
+    settings: Settings = request.app.state.settings
+    rows = list_logs_for_run(
+        settings.database_url,
+        ingestion_run_id=str(run_id),
+        limit=limit,
+        level=level,
+    )
+    return JSONResponse(content={"items": [_serialize_log_row(r) for r in rows]})
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/documents/{document_id}/logs")
+async def get_internal_document_logs(
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+) -> JSONResponse:
+    settings: Settings = request.app.state.settings
+    rows = list_logs_for_document(
+        settings.database_url,
+        document_id=str(document_id),
+        limit=limit,
+    )
+    return JSONResponse(content={"items": [_serialize_log_row(r) for r in rows]})

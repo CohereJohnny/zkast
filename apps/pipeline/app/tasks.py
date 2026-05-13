@@ -1,4 +1,15 @@
-"""Arq worker: PDF parse -> atomic notes -> graph extraction."""
+"""Arq worker: PDF parse -> atomic notes -> graph extraction.
+
+Sprint 5b hardening:
+- Heartbeat coroutine writes ``ingestion_runs.last_heartbeat_at`` every 10s
+  so the reconciler can detect dead workers.
+- ``asyncio.CancelledError`` is caught and surfaced as a clean failure
+  (Python 3.8+: CancelledError is a BaseException subclass; the previous
+  ``except Exception`` branch let it through and left the document zombied).
+- ``arq_pool`` lookup uses ``ctx.get`` with a lazy fallback so a transient
+  Redis hiccup at ``worker_startup`` no longer poisons every subsequent job.
+- Reconciler cron sweeps stuck documents whose heartbeat has stalled.
+"""
 
 from __future__ import annotations
 
@@ -10,27 +21,37 @@ from typing import Any
 from uuid import uuid4
 
 import fitz  # PyMuPDF
+import psycopg
 import structlog
-from arq import create_pool
+from arq import create_pool, cron
 from arq.connections import RedisSettings
+from arq.worker import func as arq_func
 from graphiti_core.nodes import EpisodeType
 
 from app.chunking import chunk_page_text
 from app.config import get_settings
 from app.documents_repo import (
     delete_episodes_for_document,
+    fail_running_ingestion_runs_for_document,
     fetch_document,
     finalize_ingestion_run_success,
     list_episodes_for_ingestion_run,
+    list_stalled_active_documents,
     merge_run_stats_incremental,
     merge_run_stats_warning,
     update_document,
     update_ingestion_run,
+    update_ingestion_run_heartbeat,
     insert_episodes,
 )
 from app.entities_repo import upsert_entity_from_graphiti
 from app.graphiti_factory import graphiti_for_workspace, resolve_cohere_api_key
-from app.job_redis import job_hset, publish_job_event
+from app.job_redis import (
+    job_hset,
+    publish_job_event,
+    record_log,
+    record_metric,
+)
 from app.notes_llm import generate_notes_from_episodes
 from app.notes_repo import (
     add_note_link,
@@ -46,11 +67,43 @@ from app import entities_repo
 logger = structlog.get_logger(__name__)
 
 
+HEARTBEAT_INTERVAL_S = 10
+HEARTBEAT_STALE_THRESHOLD_S = 90
+RECONCILER_LOCK_KEY = "zkast:cron:reconcile_lock"
+RECONCILER_LOCK_TTL_S = 50
+
+# Per-stage arq job_timeout budgets. Defaults are tuned for a ~20-page PDF on
+# Cohere with Graphiti retries. They can be tightened later once the
+# Graphiti edge-timestamp 400 storm (TD-010) is resolved.
+#
+# arq's default is 300s, which is too tight for ``extract_graph`` whose
+# critical path is dominated by Graphiti's per-edge `_extract_edge_timestamps`
+# retries (2 attempts of ~5s each per failed edge). Bumping to 40 minutes is
+# generous; the heartbeat-based reconciler catches genuinely stuck jobs
+# regardless of this ceiling.
+TIMEOUT_PARSE_S = 600       # 10 min
+TIMEOUT_NOTES_S = 1_200     # 20 min
+TIMEOUT_GRAPH_S = 2_400     # 40 min
+# Used as the global ceiling; per-function settings override per task.
+TIMEOUT_WORKER_DEFAULT_S = TIMEOUT_GRAPH_S
+
+# If a CancelledError fires within this many seconds of the per-stage timeout,
+# we classify it as a timeout (not a shutdown) for a clearer failure_reason.
+TIMEOUT_CLASSIFY_WINDOW_S = 15
+
+
 async def worker_startup(ctx: dict[str, Any]) -> None:
     s = get_settings()
     ctx["database_url"] = s.database_url
     ctx["zkast_storage_root"] = s.zkast_storage_root
-    ctx["arq_pool"] = await create_pool(_redis_settings_for_worker())
+    try:
+        ctx["arq_pool"] = await create_pool(_redis_settings_for_worker())
+    except Exception as exc:  # noqa: BLE001
+        # Fail fast so the arq supervisor restarts the worker. The previous
+        # silent swallow left ctx['arq_pool'] missing and every job blew up
+        # with a confusing KeyError('arq_pool').
+        logger.exception("worker_startup_failed", error=str(exc))
+        raise
 
 
 async def worker_shutdown(ctx: dict[str, Any]) -> None:
@@ -62,6 +115,184 @@ async def worker_shutdown(ctx: dict[str, Any]) -> None:
 def _redis_settings_for_worker() -> RedisSettings:
     url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
     return RedisSettings.from_dsn(url)
+
+
+async def _ensure_arq_pool(ctx: dict[str, Any]) -> Any:
+    """Return ``ctx['arq_pool']`` or lazily create one with a structured warning.
+
+    Defends against a transient Redis failure during ``worker_startup``: if
+    the pool is missing we recreate it on demand so the in-flight job can
+    still enqueue its successor.
+    """
+    pool = ctx.get("arq_pool")
+    if pool is not None:
+        return pool
+    logger.warning("worker_startup_miss_recovered", hint="arq_pool missing; creating on demand")
+    pool = await create_pool(_redis_settings_for_worker())
+    ctx["arq_pool"] = pool
+    return pool
+
+
+class _Heartbeat:
+    """Background heartbeat for an in-flight ingestion task.
+
+    The reconciler treats ``ingestion_runs.last_heartbeat_at`` older than
+    :data:`HEARTBEAT_STALE_THRESHOLD_S` as "worker died" — we tick it every
+    :data:`HEARTBEAT_INTERVAL_S` seconds. Cancellation-safe via an explicit
+    stop event so SIGTERM doesn't race with a half-finished write.
+    """
+
+    def __init__(self, database_url: str, ingestion_run_id: str) -> None:
+        self._database_url = database_url
+        self._ingestion_run_id = ingestion_run_id
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> "_Heartbeat":
+        # Tick once at the start so the row immediately looks alive.
+        await asyncio.to_thread(
+            update_ingestion_run_heartbeat,
+            self._database_url,
+            run_id=self._ingestion_run_id,
+        )
+        self._task = asyncio.create_task(self._loop(), name="ingestion-heartbeat")
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        self._stop.set()
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(self._task, timeout=HEARTBEAT_INTERVAL_S + 1)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._task.cancel()
+
+    async def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=HEARTBEAT_INTERVAL_S)
+            except asyncio.TimeoutError:
+                pass
+            if self._stop.is_set():
+                return
+            try:
+                await asyncio.to_thread(
+                    update_ingestion_run_heartbeat,
+                    self._database_url,
+                    run_id=self._ingestion_run_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Heartbeat failures must not kill the task — log once and
+                # continue. The reconciler will eventually do the right
+                # thing even if our heartbeats stop landing.
+                logger.warning("heartbeat_write_failed", error=str(exc))
+
+
+def _describe_exception(exc: BaseException, *, max_len: int = 500) -> str:
+    """Build a non-empty human-readable failure_reason from an exception.
+
+    Some libraries (notably ``httpx``/``httpcore``) raise errors with no message
+    string — ``str(httpx.ConnectError())`` is the empty string. If we wrote that
+    straight to ``documents.failure_reason``, the UI shows "Job failed:" with
+    nothing after the colon. This helper guarantees we always have at least the
+    exception type name.
+    """
+    msg = (str(exc) or "").strip()
+    name = type(exc).__name__
+    text = f"{name}: {msg}" if msg else name
+    return text[:max_len]
+
+
+def _classify_cancel_reason(stage: str, elapsed_s: float) -> tuple[str, dict[str, Any]]:
+    """Pick a human-readable failure_reason for a CancelledError.
+
+    arq fires a ``CancelledError`` into the task both when the worker is
+    shutting down and when a per-job timeout fires (arq wraps the task in
+    ``asyncio.wait_for``). From inside the task the two are indistinguishable,
+    but the elapsed time is a reliable tell: if we're within
+    ``TIMEOUT_CLASSIFY_WINDOW_S`` of the configured per-stage timeout, this is
+    overwhelmingly a timeout, not a SIGTERM.
+    """
+    budget = {
+        "parsing": TIMEOUT_PARSE_S,
+        "generating_notes": TIMEOUT_NOTES_S,
+        "extracting_graph": TIMEOUT_GRAPH_S,
+    }.get(stage, TIMEOUT_WORKER_DEFAULT_S)
+    extra: dict[str, Any] = {
+        "elapsed_s": round(elapsed_s, 1),
+        "timeout_s": budget,
+    }
+    if elapsed_s >= budget - TIMEOUT_CLASSIFY_WINDOW_S:
+        return f"cancelled_by_job_timeout (stage {stage} ran {elapsed_s:.0f}s of {budget}s budget)", extra
+    return "cancelled_by_worker_shutdown", extra
+
+
+def _is_document_active(database_url: str, document_id: str) -> bool:
+    """Return True while the document is in any pre-terminal status."""
+    active = ("queued", "parsing", "generating_notes", "extracting_graph", "building_graph")
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            "SELECT status FROM documents WHERE id = %s::uuid LIMIT 1",
+            (document_id,),
+        ).fetchone()
+        return bool(row and row[0] in active)
+
+
+async def _mark_task_failed(
+    redis: Any,
+    database_url: str,
+    *,
+    job_id: str,
+    document_id: str,
+    ingestion_run_id: str,
+    stage: str,
+    reason: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Flip Postgres + Redis state to ``failed`` and emit the SSE event.
+
+    Centralises the failure-marking code path so every ``except`` branch in
+    every task uses the exact same fields. The original ``except Exception``
+    handlers each open-coded this and one of them missed the
+    ``ingestion_runs`` update, leaving a half-failed state.
+    """
+    truncated = reason[:500]
+    try:
+        await asyncio.to_thread(
+            update_document,
+            database_url,
+            document_id=document_id,
+            status="failed",
+            failure_reason=truncated,
+        )
+        await asyncio.to_thread(
+            update_ingestion_run,
+            database_url,
+            run_id=ingestion_run_id,
+            status="failed",
+            ended_at=datetime.now(UTC),
+        )
+    except Exception:  # noqa: BLE001
+        # Postgres being temporarily unreachable should not block us from
+        # publishing the failure event — the reconciler will catch up later.
+        logger.exception("mark_task_failed_db_error", document_id=document_id)
+
+    await publish_job_event(redis, job_id, "job_failed", reason=truncated, stage=stage)
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="error",
+        stage=stage,
+        message=truncated,
+        data=extra,
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+    await job_hset(
+        redis,
+        job_id,
+        status="failed",
+        progress=json.dumps({"percent": 0, "stage": stage, "error": truncated}),
+    )
 
 
 async def parse_document(
@@ -87,165 +318,241 @@ async def parse_document(
         progress=json.dumps({"percent": 0, "stage": "parsing"}),
     )
     await publish_job_event(redis, job_id, "stage_started", stage="parsing")
+    _started_at = asyncio.get_event_loop().time()
 
     try:
-        await asyncio.to_thread(
-            update_document,
-            database_url,
-            document_id=document_id,
-            status="parsing",
-        )
-
-        doc = await asyncio.to_thread(
-            fetch_document,
-            database_url,
-            workspace_id=workspace_id,
-            document_id=document_id,
-        )
-        if not doc:
-            raise RuntimeError("document not found")
-
-        pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
-        chunk_tokens = int(pipe.get("chunk_size") or 512)
-        max_chars = max(256, chunk_tokens * 4)
-
-        path = LocalStorage.absolute_path_from_uri(doc["storage_uri"], storage_root)
-        if not os.path.isfile(path):
-            raise RuntimeError(
-                f"PDF missing at {path}. Pipeline and worker must use the same "
-                f"ZKAST_STORAGE_ROOT (Compose: shared pipeline_storage volume). "
-                f"Re-upload if the DB row survived a volume reset."
-            )
-
-        def _open_doc() -> fitz.Document:
-            return fitz.open(path)
-
-        pdf = await asyncio.to_thread(_open_doc)
-        try:
-            page_count = pdf.page_count
+        async with _Heartbeat(database_url, ingestion_run_id):
             await asyncio.to_thread(
                 update_document,
                 database_url,
                 document_id=document_id,
-                page_count=page_count,
+                status="parsing",
+            )
+            await record_log(
+                redis,
+                job_id=job_id,
+                level="info",
+                stage="parsing",
+                message="Parsing PDF",
+                database_url=database_url,
+                ingestion_run_id=ingestion_run_id,
             )
 
-            await asyncio.to_thread(delete_episodes_for_document, database_url, document_id=document_id)
+            doc = await asyncio.to_thread(
+                fetch_document,
+                database_url,
+                workspace_id=workspace_id,
+                document_id=document_id,
+            )
+            if not doc:
+                raise RuntimeError("document not found")
 
-            episode_rows: list[tuple[str, str, int, int, int]] = []
-            sequence = 0
-            throttle = max(1, page_count // 20) if page_count else 1
+            pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
+            chunk_tokens = int(pipe.get("chunk_size") or 512)
+            max_chars = max(256, chunk_tokens * 4)
 
-            for i in range(page_count):
-                page_num = i + 1
+            path = LocalStorage.absolute_path_from_uri(doc["storage_uri"], storage_root)
+            if not os.path.isfile(path):
+                # B4 — storage file race: the PDF was deleted (force-delete,
+                # volume reset, or path mismatch). Surface a clean message
+                # instead of the previous generic RuntimeError.
+                raise FileNotFoundError(path)
+
+            def _open_doc() -> fitz.Document:
                 try:
+                    return fitz.open(path)
+                except RuntimeError as exc:
+                    # PyMuPDF raises RuntimeError for missing files too.
+                    if "no such file" in str(exc).lower():
+                        raise FileNotFoundError(path) from exc
+                    raise
 
-                    def _page_text(idx: int = i) -> str:
-                        return pdf.load_page(idx).get_text()
-
-                    text = await asyncio.to_thread(_page_text)
-                    for chunk_text, ps, pe in chunk_page_text(page_num, text, max_chars):
-                        episode_rows.append((str(uuid4()), chunk_text, ps, pe, sequence))
-                        sequence += 1
-                except Exception as exc:  # noqa: BLE001
-                    msg = f"page {page_num}: {exc}"
-                    logger.warning("page_parse_warning", document_id=document_id, error=str(exc))
-                    await asyncio.to_thread(
-                        merge_run_stats_warning,
-                        database_url,
-                        run_id=ingestion_run_id,
-                        warning=msg[:500],
-                    )
-                    await publish_job_event(
-                        redis,
-                        job_id,
-                        "warning",
-                        stage="parsing",
-                        message=msg[:500],
-                        page=page_num,
-                    )
-
-                if page_num % throttle == 0 or page_num == page_count:
-                    pct = int(100 * page_num / page_count) if page_count else 100
-                    prog = {"percent": pct, "stage": "parsing", "page": page_num, "total_pages": page_count}
-                    await job_hset(redis, job_id, progress=json.dumps(prog))
-                    await publish_job_event(
-                        redis,
-                        job_id,
-                        "stage_progress",
-                        stage="parsing",
-                        current=page_num,
-                        total=page_count,
-                        percent=pct,
-                    )
-
-            if episode_rows:
+            pdf = await asyncio.to_thread(_open_doc)
+            try:
+                page_count = pdf.page_count
                 await asyncio.to_thread(
-                    insert_episodes,
+                    update_document,
                     database_url,
+                    document_id=document_id,
+                    page_count=page_count,
+                )
+
+                await asyncio.to_thread(
+                    delete_episodes_for_document, database_url, document_id=document_id
+                )
+
+                episode_rows: list[tuple[str, str, int, int, int]] = []
+                sequence = 0
+                throttle = max(1, page_count // 20) if page_count else 1
+
+                for i in range(page_count):
+                    page_num = i + 1
+                    try:
+
+                        def _page_text(idx: int = i) -> str:
+                            return pdf.load_page(idx).get_text()
+
+                        text = await asyncio.to_thread(_page_text)
+                        for chunk_text, ps, pe in chunk_page_text(page_num, text, max_chars):
+                            episode_rows.append((str(uuid4()), chunk_text, ps, pe, sequence))
+                            sequence += 1
+                    except Exception as exc:  # noqa: BLE001
+                        msg = f"page {page_num}: {exc}"
+                        logger.warning("page_parse_warning", document_id=document_id, error=str(exc))
+                        await asyncio.to_thread(
+                            merge_run_stats_warning,
+                            database_url,
+                            run_id=ingestion_run_id,
+                            warning=msg[:500],
+                        )
+                        await publish_job_event(
+                            redis,
+                            job_id,
+                            "warning",
+                            stage="parsing",
+                            message=msg[:500],
+                            page=page_num,
+                        )
+                        await record_log(
+                            redis,
+                            job_id=job_id,
+                            level="warning",
+                            stage="parsing",
+                            message=msg[:500],
+                            data={"page": page_num},
+                            database_url=database_url,
+                            ingestion_run_id=ingestion_run_id,
+                        )
+
+                    if page_num % throttle == 0 or page_num == page_count:
+                        pct = int(100 * page_num / page_count) if page_count else 100
+                        prog = {
+                            "percent": pct,
+                            "stage": "parsing",
+                            "page": page_num,
+                            "total_pages": page_count,
+                        }
+                        await job_hset(redis, job_id, progress=json.dumps(prog))
+                        await publish_job_event(
+                            redis,
+                            job_id,
+                            "stage_progress",
+                            stage="parsing",
+                            current=page_num,
+                            total=page_count,
+                            percent=pct,
+                        )
+
+                if episode_rows:
+                    await asyncio.to_thread(
+                        insert_episodes,
+                        database_url,
+                        workspace_id=workspace_id,
+                        document_id=document_id,
+                        ingestion_run_id=ingestion_run_id,
+                        rows=episode_rows,
+                    )
+
+                chunk_count = len(episode_rows)
+                await asyncio.to_thread(
+                    merge_run_stats_incremental,
+                    database_url,
+                    run_id=ingestion_run_id,
+                    extra={
+                        "chunk_count": chunk_count,
+                        "page_count": page_count,
+                        "stage": "parsing_done",
+                    },
+                )
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="info",
+                    stage="parsing",
+                    message=f"Parsed {page_count} pages into {chunk_count} chunks",
+                    data={"page_count": page_count, "chunk_count": chunk_count},
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+
+                await publish_job_event(redis, job_id, "stage_completed", stage="parsing")
+
+                pool = await _ensure_arq_pool(ctx)
+                # arq de-dupes on `_job_id`; each pipeline stage must use a
+                # unique key or the chained enqueue is silently dropped (which
+                # leaves the document stuck in `generating_notes` with no work
+                # ever running). Suffix the parent SSE job id per stage.
+                enqueued = await pool.enqueue_job(
+                    "generate_atomic_notes",
                     workspace_id=workspace_id,
                     document_id=document_id,
                     ingestion_run_id=ingestion_run_id,
-                    rows=episode_rows,
+                    job_id=job_id,
+                    _job_id=f"{job_id}:notes",
+                )
+                if enqueued is None:
+                    raise RuntimeError(
+                        "Failed to enqueue generate_atomic_notes — arq returned None "
+                        "(stage may already be queued/in-flight)."
+                    )
+                await asyncio.to_thread(
+                    update_document,
+                    database_url,
+                    document_id=document_id,
+                    status="generating_notes",
                 )
 
-            chunk_count = len(episode_rows)
-            await asyncio.to_thread(
-                merge_run_stats_incremental,
-                database_url,
-                run_id=ingestion_run_id,
-                extra={"chunk_count": chunk_count, "page_count": page_count, "stage": "parsing_done"},
-            )
+                await job_hset(
+                    redis,
+                    job_id,
+                    progress=json.dumps(
+                        {"percent": 100, "stage": "parsing", "message": "queued_notes"}
+                    ),
+                )
+            finally:
+                await asyncio.to_thread(pdf.close)
 
-            await publish_job_event(redis, job_id, "stage_completed", stage="parsing")
-
-            pool = ctx["arq_pool"]
-            await pool.enqueue_job(
-                "generate_atomic_notes",
-                workspace_id=workspace_id,
-                document_id=document_id,
-                ingestion_run_id=ingestion_run_id,
-                job_id=job_id,
-                _job_id=job_id,
-            )
-            await asyncio.to_thread(
-                update_document,
-                database_url,
-                document_id=document_id,
-                status="generating_notes",
-            )
-
-            await job_hset(
-                redis,
-                job_id,
-                progress=json.dumps({"percent": 100, "stage": "parsing", "message": "queued_notes"}),
-            )
-        finally:
-            await asyncio.to_thread(pdf.close)
-
+    except asyncio.CancelledError:
+        # B2.5 — both arq job_timeout and worker SIGTERM raise CancelledError
+        # into the task; we use elapsed-time heuristics to distinguish the two
+        # so the operator sees the right failure_reason.
+        _reason, _extra = _classify_cancel_reason(
+            "parsing", asyncio.get_event_loop().time() - _started_at
+        )
+        await _mark_task_failed(
+            redis,
+            database_url,
+            job_id=job_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="parsing",
+            reason=_reason,
+            extra=_extra,
+        )
+        raise
+    except FileNotFoundError as exc:
+        # B4 — storage file vanished mid-parse (force-delete + cascade).
+        await _mark_task_failed(
+            redis,
+            database_url,
+            job_id=job_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="parsing",
+            reason="source_pdf_deleted",
+            extra={"path": str(exc)},
+        )
+        logger.warning("parse_document_pdf_missing", document_id=document_id, path=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.exception("parse_document_failed", document_id=document_id, job_id=job_id)
-        reason = str(exc)[:500]
-        await asyncio.to_thread(
-            update_document,
-            database_url,
-            document_id=document_id,
-            status="failed",
-            failure_reason=reason,
-        )
-        await asyncio.to_thread(
-            update_ingestion_run,
-            database_url,
-            run_id=ingestion_run_id,
-            status="failed",
-            ended_at=datetime.now(UTC),
-        )
-        await publish_job_event(redis, job_id, "job_failed", reason=reason, stage="parsing")
-        await job_hset(
+        await _mark_task_failed(
             redis,
-            job_id,
-            status="failed",
-            progress=json.dumps({"percent": 0, "stage": "parsing", "error": reason}),
+            database_url,
+            job_id=job_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="parsing",
+            reason=_describe_exception(exc),
         )
 
 
@@ -268,125 +575,203 @@ async def generate_atomic_notes(
         progress=json.dumps({"percent": 0, "stage": "generating_notes"}),
     )
     await publish_job_event(redis, job_id, "stage_started", stage="generating_notes")
+    _started_at = asyncio.get_event_loop().time()
 
     try:
-        episodes = await asyncio.to_thread(
-            list_episodes_for_ingestion_run,
-            database_url,
-            ingestion_run_id=ingestion_run_id,
-        )
-        if episode_ids:
-            allow = set(episode_ids)
-            episodes = [e for e in episodes if e.get("id") in allow]
-        if not episodes:
-            raise RuntimeError("No episodes to generate notes from (check episode_ids filter)")
-        pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
-        max_notes = min(500, max(1, int(pipe.get("max_notes_per_document") or 50)))
-        model = str(pipe.get("large_model") or "command-a-plus-05-2026")
+        # B2 — pre-check: if the document was force-deleted while we were
+        # waiting in the queue, short-circuit cleanly instead of writing
+        # provenance rows referencing now-deleted episodes.
+        if not await asyncio.to_thread(_is_document_active, database_url, document_id):
+            raise RuntimeError("Document no longer active (deleted or already failed)")
 
-        api_key = resolve_cohere_api_key(settings, workspace_id)
-        if not api_key:
-            raise RuntimeError("No Cohere API key for note generation")
-
-        note_payloads: list[dict[str, Any]] = []
-        suggested_links: list[dict[str, Any]] = []
-        if episodes:
-            note_payloads, suggested_links = await generate_notes_from_episodes(
-                api_key=api_key,
-                model=model,
-                episodes=episodes,
-                max_notes=max_notes,
-            )
-
-        created_ids: list[str] = []
-        for payload in note_payloads:
-            nid = str(uuid4())
-            await asyncio.to_thread(
-                insert_note,
+        async with _Heartbeat(database_url, ingestion_run_id):
+            episodes = await asyncio.to_thread(
+                list_episodes_for_ingestion_run,
                 database_url,
-                note_id=nid,
-                workspace_id=workspace_id,
-                title=payload["title"],
-                body=payload["body"],
-                tags=payload.get("tags") or [],
-                origin="generated",
-                created_by_user_id=None,
-                episode_ids=payload["source_episode_ids"],
-                is_user_edited=False,
+                ingestion_run_id=ingestion_run_id,
             )
-            created_ids.append(nid)
+            if episode_ids:
+                allow = set(episode_ids)
+                episodes = [e for e in episodes if e.get("id") in allow]
+            if not episodes:
+                raise RuntimeError("No episodes to generate notes from (check episode_ids filter)")
+            pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
+            max_notes = min(500, max(1, int(pipe.get("max_notes_per_document") or 50)))
+            model = str(pipe.get("large_model") or "command-a-plus-05-2026")
+            streaming_enabled = bool(pipe.get("notes_llm_streaming", True))
 
-        for ln in suggested_links:
-            fr = ln["from"]
-            to = ln["to"]
-            if 0 <= fr < len(created_ids) and 0 <= to < len(created_ids):
+            api_key = resolve_cohere_api_key(settings, workspace_id)
+            if not api_key:
+                raise RuntimeError("No Cohere API key for note generation")
+
+            await record_log(
+                redis,
+                job_id=job_id,
+                level="info",
+                stage="generating_notes",
+                message=f"Synthesising notes from {len(episodes)} chunks (max {max_notes})",
+                data={"episodes": len(episodes), "max_notes": max_notes, "model": model},
+                database_url=database_url,
+                ingestion_run_id=ingestion_run_id,
+            )
+
+            async def _progress_cb(tokens: int) -> None:
+                await record_metric(
+                    redis,
+                    job_id=job_id,
+                    name="tokens_consumed",
+                    value=tokens,
+                    stage="generating_notes",
+                )
+
+            note_payloads: list[dict[str, Any]] = []
+            suggested_links: list[dict[str, Any]] = []
+            if episodes:
+                note_payloads, suggested_links = await generate_notes_from_episodes(
+                    api_key=api_key,
+                    model=model,
+                    episodes=episodes,
+                    max_notes=max_notes,
+                    streaming=streaming_enabled,
+                    progress_callback=_progress_cb,
+                )
+
+            created_ids: list[str] = []
+            skipped = 0
+            for payload in note_payloads:
+                nid = str(uuid4())
                 try:
                     await asyncio.to_thread(
-                        add_note_link,
+                        insert_note,
                         database_url,
+                        note_id=nid,
                         workspace_id=workspace_id,
-                        source_note_id=created_ids[fr],
-                        target_note_id=created_ids[to],
-                        kind=ln.get("kind", "related"),
-                        custom_label=None,
+                        title=payload["title"],
+                        body=payload["body"],
+                        tags=payload.get("tags") or [],
                         origin="generated",
+                        created_by_user_id=None,
+                        episode_ids=payload["source_episode_ids"],
+                        is_user_edited=False,
                     )
-                except Exception as link_exc:  # noqa: BLE001
-                    logger.warning("note_link_skip", error=str(link_exc))
+                    created_ids.append(nid)
+                except psycopg.errors.ForeignKeyViolation as fk_exc:
+                    # B2 — race: episodes were deleted between our list_*
+                    # call and this insert. Skip this note rather than
+                    # failing the whole stage.
+                    skipped += 1
+                    logger.warning(
+                        "note_skipped_provenance_gone",
+                        document_id=document_id,
+                        note_title=str(payload.get("title"))[:80],
+                        error=str(fk_exc)[:200],
+                    )
+                    await record_log(
+                        redis,
+                        job_id=job_id,
+                        level="warning",
+                        stage="generating_notes",
+                        message="Skipping note — source episode missing (likely concurrent delete)",
+                        data={"note_title": str(payload.get("title"))[:120]},
+                        database_url=database_url,
+                        ingestion_run_id=ingestion_run_id,
+                    )
 
-        await asyncio.to_thread(
-            merge_run_stats_incremental,
-            database_url,
-            run_id=ingestion_run_id,
-            extra={"note_count": len(created_ids), "stage": "notes_done"},
+            for ln in suggested_links:
+                fr = ln["from"]
+                to = ln["to"]
+                if 0 <= fr < len(created_ids) and 0 <= to < len(created_ids):
+                    try:
+                        await asyncio.to_thread(
+                            add_note_link,
+                            database_url,
+                            workspace_id=workspace_id,
+                            source_note_id=created_ids[fr],
+                            target_note_id=created_ids[to],
+                            kind=ln.get("kind", "related"),
+                            custom_label=None,
+                            origin="generated",
+                        )
+                    except Exception as link_exc:  # noqa: BLE001
+                        logger.warning("note_link_skip", error=str(link_exc))
+
+            await asyncio.to_thread(
+                merge_run_stats_incremental,
+                database_url,
+                run_id=ingestion_run_id,
+                extra={"note_count": len(created_ids), "stage": "notes_done"},
+            )
+            await record_metric(
+                redis,
+                job_id=job_id,
+                name="note_count",
+                value=len(created_ids),
+                stage="generating_notes",
+            )
+            await record_log(
+                redis,
+                job_id=job_id,
+                level="info",
+                stage="generating_notes",
+                message=f"Created {len(created_ids)} notes (skipped {skipped})",
+                data={"created": len(created_ids), "skipped": skipped},
+                database_url=database_url,
+                ingestion_run_id=ingestion_run_id,
+            )
+
+            pool = await _ensure_arq_pool(ctx)
+            enqueued = await pool.enqueue_job(
+                "extract_graph",
+                workspace_id=workspace_id,
+                document_id=document_id,
+                ingestion_run_id=ingestion_run_id,
+                job_id=job_id,
+                _job_id=f"{job_id}:graph",
+            )
+            if enqueued is None:
+                raise RuntimeError(
+                    "Failed to enqueue extract_graph — arq returned None "
+                    "(stage may already be queued/in-flight)."
+                )
+            await asyncio.to_thread(
+                update_document,
+                database_url,
+                document_id=document_id,
+                status="extracting_graph",
+            )
+
+            await publish_job_event(redis, job_id, "stage_completed", stage="generating_notes")
+            await job_hset(
+                redis,
+                job_id,
+                progress=json.dumps({"percent": 50, "stage": "extracting_graph"}),
+            )
+
+    except asyncio.CancelledError:
+        _reason, _extra = _classify_cancel_reason(
+            "generating_notes", asyncio.get_event_loop().time() - _started_at
         )
-
-        pool = ctx["arq_pool"]
-        await pool.enqueue_job(
-            "extract_graph",
-            workspace_id=workspace_id,
+        await _mark_task_failed(
+            redis,
+            database_url,
+            job_id=job_id,
             document_id=document_id,
             ingestion_run_id=ingestion_run_id,
-            job_id=job_id,
-            _job_id=job_id,
+            stage="generating_notes",
+            reason=_reason,
+            extra=_extra,
         )
-        await asyncio.to_thread(
-            update_document,
-            database_url,
-            document_id=document_id,
-            status="extracting_graph",
-        )
-
-        await publish_job_event(redis, job_id, "stage_completed", stage="generating_notes")
-        await job_hset(
-            redis,
-            job_id,
-            progress=json.dumps({"percent": 50, "stage": "extracting_graph"}),
-        )
-
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("generate_atomic_notes_failed", document_id=document_id)
-        reason = str(exc)[:500]
-        await asyncio.to_thread(
-            update_document,
-            database_url,
-            document_id=document_id,
-            status="failed",
-            failure_reason=reason,
-        )
-        await asyncio.to_thread(
-            update_ingestion_run,
-            database_url,
-            run_id=ingestion_run_id,
-            status="failed",
-            ended_at=datetime.now(UTC),
-        )
-        await publish_job_event(redis, job_id, "job_failed", reason=reason, stage="generating_notes")
-        await job_hset(
+        await _mark_task_failed(
             redis,
-            job_id,
-            status="failed",
-            progress=json.dumps({"percent": 0, "stage": "generating_notes", "error": reason}),
+            database_url,
+            job_id=job_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="generating_notes",
+            reason=_describe_exception(exc),
         )
 
 
@@ -403,6 +788,7 @@ async def extract_graph(
     settings = get_settings()
 
     await publish_job_event(redis, job_id, "stage_started", stage="extracting_graph")
+    _started_at = asyncio.get_event_loop().time()
     await asyncio.to_thread(
         update_document,
         database_url,
@@ -411,203 +797,489 @@ async def extract_graph(
     )
 
     ref = datetime.now(timezone.utc)
-    entity_count = 0
-    edge_count = 0
+    counters: dict[str, int] = {"entity": 0, "edge": 0, "items_done": 0}
 
     try:
-        graphiti = await graphiti_for_workspace(settings, workspace_id)
-        episodes = await asyncio.to_thread(
-            list_episodes_for_ingestion_run,
-            database_url,
-            ingestion_run_id=ingestion_run_id,
-        )
+        # B2 — pre-check active state.
+        if not await asyncio.to_thread(_is_document_active, database_url, document_id):
+            raise RuntimeError("Document no longer active (deleted or already failed)")
 
-        for ep in episodes:
-            body = (ep.get("text") or "")[:50000]
-            if not body.strip():
-                continue
-            res = await graphiti.add_episode(
-                name=f"pdf-chunk-{ep.get('sequence')}",
-                episode_body=body,
-                source_description=f"PDF pages {ep.get('page_start')}-{ep.get('page_end')}",
-                reference_time=ref,
-                source=EpisodeType.text,
-                group_id=workspace_id,
+        async with _Heartbeat(database_url, ingestion_run_id):
+            graphiti = await graphiti_for_workspace(settings, workspace_id)
+            episodes = await asyncio.to_thread(
+                list_episodes_for_ingestion_run,
+                database_url,
+                ingestion_run_id=ingestion_run_id,
             )
-            ep_id = str(ep["id"])
-            for node in res.nodes:
-                await asyncio.to_thread(
-                    upsert_entity_from_graphiti,
-                    database_url,
-                    workspace_id=workspace_id,
-                    graphiti_uuid=node.uuid,
-                    name=node.name,
-                    labels=list(node.labels or []),
-                    summary=node.summary or "",
-                    attributes=dict(node.attributes or {}),
-                    episode_id=ep_id,
-                    note_id=None,
-                )
-                entity_count += 1
-            for edge in res.edges:
-                src = await asyncio.to_thread(
-                    entities_repo.fetch_entity_id_for_graphiti_uuid,
-                    database_url,
-                    edge.source_node_uuid,
-                )
-                tgt = await asyncio.to_thread(
-                    entities_repo.fetch_entity_id_for_graphiti_uuid,
-                    database_url,
-                    edge.target_node_uuid,
-                )
-                if not src or not tgt:
-                    continue
-                await asyncio.to_thread(
-                    insert_relationship_from_graphiti,
-                    database_url,
-                    workspace_id=workspace_id,
-                    graphiti_edge_uuid=edge.uuid,
-                    source_entity_id=src,
-                    target_entity_id=tgt,
-                    rel_type=edge.name,
-                    fact=edge.fact,
-                    confidence=1.0,
-                    valid_from=edge.valid_at,
-                    valid_to=edge.invalid_at,
-                    episode_id=ep_id,
-                    note_id=None,
-                )
-                edge_count += 1
-
-        note_ids = await asyncio.to_thread(
-            list_note_ids_for_document,
-            database_url,
-            workspace_id=workspace_id,
-            document_id=document_id,
-        )
-        for nid in note_ids:
-            note_row = await asyncio.to_thread(
-                fetch_note,
+            note_ids = await asyncio.to_thread(
+                list_note_ids_for_document,
                 database_url,
                 workspace_id=workspace_id,
-                note_id=nid,
+                document_id=document_id,
             )
-            if not note_row:
-                continue
-            body = f"# {note_row['title']}\n\n{note_row['body']}"[:50000]
-            res = await graphiti.add_episode(
-                name=f"note-{nid[:8]}",
-                episode_body=body,
-                source_description="Atomic note",
-                reference_time=ref,
-                source=EpisodeType.text,
-                group_id=workspace_id,
+
+            pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
+            concurrency = int(pipe.get("graph_extract_concurrency") or 4)
+            concurrency = max(1, min(8, concurrency))
+
+            total_items = sum(1 for ep in episodes if (ep.get("text") or "").strip()) + len(note_ids)
+            await record_log(
+                redis,
+                job_id=job_id,
+                level="info",
+                stage="extracting_graph",
+                message=(
+                    f"Extracting graph from {len(episodes)} episodes + {len(note_ids)} notes "
+                    f"(concurrency={concurrency})"
+                ),
+                data={
+                    "episodes": len(episodes),
+                    "notes": len(note_ids),
+                    "concurrency": concurrency,
+                    "total_items": total_items,
+                },
+                database_url=database_url,
+                ingestion_run_id=ingestion_run_id,
             )
-            for node in res.nodes:
-                await asyncio.to_thread(
-                    upsert_entity_from_graphiti,
+
+            sem = asyncio.Semaphore(concurrency)
+            counters_lock = asyncio.Lock()
+
+            async def _process_episode(idx: int, ep: dict[str, Any]) -> None:
+                body = (ep.get("text") or "")[:50000]
+                if not body.strip():
+                    return
+                async with sem:
+                    res = await graphiti.add_episode(
+                        name=f"pdf-chunk-{ep.get('sequence')}",
+                        episode_body=body,
+                        source_description=f"PDF pages {ep.get('page_start')}-{ep.get('page_end')}",
+                        reference_time=ref,
+                        source=EpisodeType.text,
+                        group_id=workspace_id,
+                    )
+                ep_id = str(ep["id"])
+                local_entities = 0
+                local_edges = 0
+                for node in res.nodes:
+                    try:
+                        await asyncio.to_thread(
+                            upsert_entity_from_graphiti,
+                            database_url,
+                            workspace_id=workspace_id,
+                            graphiti_uuid=node.uuid,
+                            name=node.name,
+                            labels=list(node.labels or []),
+                            summary=node.summary or "",
+                            attributes=dict(node.attributes or {}),
+                            episode_id=ep_id,
+                            note_id=None,
+                        )
+                        local_entities += 1
+                    except psycopg.errors.ForeignKeyViolation:
+                        # Concurrent delete removed the episode.
+                        logger.warning(
+                            "entity_skipped_provenance_gone",
+                            episode_id=ep_id,
+                            node_uuid=str(node.uuid),
+                        )
+                for edge in res.edges:
+                    src = await asyncio.to_thread(
+                        entities_repo.fetch_entity_id_for_graphiti_uuid,
+                        database_url,
+                        edge.source_node_uuid,
+                    )
+                    tgt = await asyncio.to_thread(
+                        entities_repo.fetch_entity_id_for_graphiti_uuid,
+                        database_url,
+                        edge.target_node_uuid,
+                    )
+                    if not src or not tgt:
+                        continue
+                    try:
+                        await asyncio.to_thread(
+                            insert_relationship_from_graphiti,
+                            database_url,
+                            workspace_id=workspace_id,
+                            graphiti_edge_uuid=edge.uuid,
+                            source_entity_id=src,
+                            target_entity_id=tgt,
+                            rel_type=edge.name,
+                            fact=edge.fact,
+                            confidence=1.0,
+                            valid_from=edge.valid_at,
+                            valid_to=edge.invalid_at,
+                            episode_id=ep_id,
+                            note_id=None,
+                        )
+                        local_edges += 1
+                    except psycopg.errors.ForeignKeyViolation:
+                        logger.warning(
+                            "relationship_skipped_provenance_gone",
+                            episode_id=ep_id,
+                            edge_uuid=str(edge.uuid),
+                        )
+
+                async with counters_lock:
+                    counters["entity"] += local_entities
+                    counters["edge"] += local_edges
+                    counters["items_done"] += 1
+                    items_done = counters["items_done"]
+                    total_entities = counters["entity"]
+                    total_edges = counters["edge"]
+
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="info",
+                    stage="extracting_graph",
+                    message=(
+                        f"episode {idx + 1}/{len(episodes)}: "
+                        f"+{local_entities} entities, +{local_edges} edges"
+                    ),
+                    data={
+                        "episode_index": idx,
+                        "episode_total": len(episodes),
+                        "delta_entities": local_entities,
+                        "delta_edges": local_edges,
+                    },
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+                await record_metric(
+                    redis,
+                    job_id=job_id,
+                    name="entity_count",
+                    value=total_entities,
+                    stage="extracting_graph",
+                )
+                await record_metric(
+                    redis,
+                    job_id=job_id,
+                    name="edge_count",
+                    value=total_edges,
+                    stage="extracting_graph",
+                )
+                if total_items:
+                    pct = 50 + int(45 * items_done / total_items)
+                    await job_hset(
+                        redis,
+                        job_id,
+                        progress=json.dumps(
+                            {
+                                "percent": pct,
+                                "stage": "building_graph",
+                                "current": items_done,
+                                "total": total_items,
+                            }
+                        ),
+                    )
+
+            async def _process_note(nid: str) -> None:
+                note_row = await asyncio.to_thread(
+                    fetch_note,
                     database_url,
                     workspace_id=workspace_id,
-                    graphiti_uuid=node.uuid,
-                    name=node.name,
-                    labels=list(node.labels or []),
-                    summary=node.summary or "",
-                    attributes=dict(node.attributes or {}),
-                    episode_id=None,
                     note_id=nid,
                 )
-                entity_count += 1
-            for edge in res.edges:
-                src = await asyncio.to_thread(
-                    entities_repo.fetch_entity_id_for_graphiti_uuid,
-                    database_url,
-                    edge.source_node_uuid,
-                )
-                tgt = await asyncio.to_thread(
-                    entities_repo.fetch_entity_id_for_graphiti_uuid,
-                    database_url,
-                    edge.target_node_uuid,
-                )
-                if not src or not tgt:
-                    continue
-                await asyncio.to_thread(
-                    insert_relationship_from_graphiti,
-                    database_url,
-                    workspace_id=workspace_id,
-                    graphiti_edge_uuid=edge.uuid,
-                    source_entity_id=src,
-                    target_entity_id=tgt,
-                    rel_type=edge.name,
-                    fact=edge.fact,
-                    confidence=1.0,
-                    valid_from=edge.valid_at,
-                    valid_to=edge.invalid_at,
-                    episode_id=None,
-                    note_id=nid,
-                )
-                edge_count += 1
+                if not note_row:
+                    return
+                body = f"# {note_row['title']}\n\n{note_row['body']}"[:50000]
+                async with sem:
+                    res = await graphiti.add_episode(
+                        name=f"note-{nid[:8]}",
+                        episode_body=body,
+                        source_description="Atomic note",
+                        reference_time=ref,
+                        source=EpisodeType.text,
+                        group_id=workspace_id,
+                    )
+                local_entities = 0
+                local_edges = 0
+                for node in res.nodes:
+                    try:
+                        await asyncio.to_thread(
+                            upsert_entity_from_graphiti,
+                            database_url,
+                            workspace_id=workspace_id,
+                            graphiti_uuid=node.uuid,
+                            name=node.name,
+                            labels=list(node.labels or []),
+                            summary=node.summary or "",
+                            attributes=dict(node.attributes or {}),
+                            episode_id=None,
+                            note_id=nid,
+                        )
+                        local_entities += 1
+                    except psycopg.errors.ForeignKeyViolation:
+                        logger.warning("entity_skipped_note_gone", note_id=nid)
+                for edge in res.edges:
+                    src = await asyncio.to_thread(
+                        entities_repo.fetch_entity_id_for_graphiti_uuid,
+                        database_url,
+                        edge.source_node_uuid,
+                    )
+                    tgt = await asyncio.to_thread(
+                        entities_repo.fetch_entity_id_for_graphiti_uuid,
+                        database_url,
+                        edge.target_node_uuid,
+                    )
+                    if not src or not tgt:
+                        continue
+                    try:
+                        await asyncio.to_thread(
+                            insert_relationship_from_graphiti,
+                            database_url,
+                            workspace_id=workspace_id,
+                            graphiti_edge_uuid=edge.uuid,
+                            source_entity_id=src,
+                            target_entity_id=tgt,
+                            rel_type=edge.name,
+                            fact=edge.fact,
+                            confidence=1.0,
+                            valid_from=edge.valid_at,
+                            valid_to=edge.invalid_at,
+                            episode_id=None,
+                            note_id=nid,
+                        )
+                        local_edges += 1
+                    except psycopg.errors.ForeignKeyViolation:
+                        logger.warning("relationship_skipped_note_gone", note_id=nid)
 
-        await asyncio.to_thread(
-            merge_run_stats_incremental,
-            database_url,
-            run_id=ingestion_run_id,
-            extra={
-                "graph_entity_extractions": entity_count,
-                "graph_edge_extractions": edge_count,
-                "stage": "graph_done",
-            },
-        )
-        await asyncio.to_thread(
-            finalize_ingestion_run_success,
-            database_url,
-            run_id=ingestion_run_id,
-            extra={"graph_entity_extractions": entity_count, "graph_edge_extractions": edge_count},
-        )
-        await asyncio.to_thread(
-            update_document,
-            database_url,
-            document_id=document_id,
-            status="ready",
-            clear_failure_reason=True,
-        )
+                async with counters_lock:
+                    counters["entity"] += local_entities
+                    counters["edge"] += local_edges
+                    counters["items_done"] += 1
+                    items_done = counters["items_done"]
 
-        await publish_job_event(redis, job_id, "stage_completed", stage="building_graph")
-        await publish_job_event(redis, job_id, "job_completed", status="succeeded")
-        await job_hset(
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="info",
+                    stage="building_graph",
+                    message=f"note {nid[:8]}: +{local_entities} entities, +{local_edges} edges",
+                    data={"note_id": nid, "delta_entities": local_entities, "delta_edges": local_edges},
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+                if total_items:
+                    pct = 50 + int(45 * items_done / total_items)
+                    await job_hset(
+                        redis,
+                        job_id,
+                        progress=json.dumps(
+                            {
+                                "percent": pct,
+                                "stage": "building_graph",
+                                "current": items_done,
+                                "total": total_items,
+                            }
+                        ),
+                    )
+
+            # ``return_exceptions=True`` keeps a single transient Cohere /
+            # Graphiti failure from killing the whole batch (BUG-008). We tally
+            # per-episode failures, log them, and only fail the job if zero
+            # episodes succeeded.
+            ep_results = await asyncio.gather(
+                *(_process_episode(i, ep) for i, ep in enumerate(episodes)),
+                return_exceptions=True,
+            )
+            note_results = await asyncio.gather(
+                *(_process_note(nid) for nid in note_ids),
+                return_exceptions=True,
+            )
+            failures = [
+                r for r in (*ep_results, *note_results) if isinstance(r, BaseException)
+            ]
+            successes = (len(ep_results) + len(note_results)) - len(failures)
+            if failures:
+                # Re-raise CancelledError immediately — never swallow it (it
+                # comes from arq timeout or worker shutdown).
+                for exc in failures:
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise exc
+                first = failures[0]
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    stage="extracting_graph",
+                    message=(
+                        f"{len(failures)} of {len(ep_results) + len(note_results)} items "
+                        f"failed during extraction (first: {type(first).__name__}: {str(first) or 'no message'})"
+                    ),
+                    data={
+                        "failures": len(failures),
+                        "total": len(ep_results) + len(note_results),
+                        "first_error_type": type(first).__name__,
+                    },
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+                if successes == 0:
+                    # Total wipeout — surface the first exception so the
+                    # operator-facing failure_reason is informative.
+                    raise failures[0]
+
+            entity_count = counters["entity"]
+            edge_count = counters["edge"]
+
+            await asyncio.to_thread(
+                merge_run_stats_incremental,
+                database_url,
+                run_id=ingestion_run_id,
+                extra={
+                    "graph_entity_extractions": entity_count,
+                    "graph_edge_extractions": edge_count,
+                    "stage": "graph_done",
+                },
+            )
+            await asyncio.to_thread(
+                finalize_ingestion_run_success,
+                database_url,
+                run_id=ingestion_run_id,
+                extra={
+                    "graph_entity_extractions": entity_count,
+                    "graph_edge_extractions": edge_count,
+                },
+            )
+            await asyncio.to_thread(
+                update_document,
+                database_url,
+                document_id=document_id,
+                status="ready",
+                clear_failure_reason=True,
+            )
+
+            await record_log(
+                redis,
+                job_id=job_id,
+                level="info",
+                stage="building_graph",
+                message=(
+                    f"Graph build complete: {entity_count} entities, {edge_count} edges"
+                ),
+                data={"entities": entity_count, "edges": edge_count},
+                database_url=database_url,
+                ingestion_run_id=ingestion_run_id,
+            )
+            await publish_job_event(redis, job_id, "stage_completed", stage="building_graph")
+            await publish_job_event(redis, job_id, "job_completed", status="succeeded")
+            await job_hset(
+                redis,
+                job_id,
+                status="succeeded",
+                progress=json.dumps({"percent": 100, "stage": "ready"}),
+            )
+
+    except asyncio.CancelledError:
+        _reason, _extra = _classify_cancel_reason(
+            "extracting_graph", asyncio.get_event_loop().time() - _started_at
+        )
+        await _mark_task_failed(
             redis,
-            job_id,
-            status="succeeded",
-            progress=json.dumps({"percent": 100, "stage": "ready"}),
+            database_url,
+            job_id=job_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="extracting_graph",
+            reason=_reason,
+            extra=_extra,
         )
-
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("extract_graph_failed", document_id=document_id)
-        reason = str(exc)[:500]
-        await asyncio.to_thread(
-            update_document,
-            database_url,
-            document_id=document_id,
-            status="failed",
-            failure_reason=reason,
-        )
-        await asyncio.to_thread(
-            update_ingestion_run,
-            database_url,
-            run_id=ingestion_run_id,
-            status="failed",
-            ended_at=datetime.now(UTC),
-        )
-        await publish_job_event(redis, job_id, "job_failed", reason=reason, stage="extracting_graph")
-        await job_hset(
+        await _mark_task_failed(
             redis,
-            job_id,
-            status="failed",
-            progress=json.dumps({"percent": 0, "stage": "extracting_graph", "error": reason}),
+            database_url,
+            job_id=job_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="extracting_graph",
+            reason=_describe_exception(exc),
         )
+
+
+async def reconcile_stuck_documents(ctx: dict[str, Any]) -> None:
+    """B1 — flip zombie documents to ``failed`` when their heartbeat dies.
+
+    Runs every minute. Uses a Redis NX lock so multiple worker replicas don't
+    double-mark. Any document in an active status whose ingestion_run
+    heartbeat is older than :data:`HEARTBEAT_STALE_THRESHOLD_S` becomes
+    ``failed`` with ``failure_reason='worker_crashed_during_<stage>'``.
+    """
+    database_url: str = ctx["database_url"]
+    redis = ctx["redis"]
+    try:
+        acquired = await redis.set(
+            RECONCILER_LOCK_KEY,
+            "1",
+            ex=RECONCILER_LOCK_TTL_S,
+            nx=True,
+        )
+    except Exception:  # noqa: BLE001
+        acquired = True  # be permissive if redis is briefly weird
+
+    if not acquired:
+        return
+
+    try:
+        stalled = await asyncio.to_thread(
+            list_stalled_active_documents,
+            database_url,
+            stale_seconds=HEARTBEAT_STALE_THRESHOLD_S,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("reconcile_query_failed", error=str(exc))
+        return
+
+    if not stalled:
+        return
+
+    logger.warning("reconciling_stuck_documents", count=len(stalled))
+    for row in stalled:
+        document_id = str(row["document_id"])
+        stage = str(row["status"])
+        ingestion_run_id = str(row.get("ingestion_run_id") or "")
+        try:
+            await asyncio.to_thread(
+                fail_running_ingestion_runs_for_document,
+                database_url,
+                document_id=document_id,
+            )
+            await asyncio.to_thread(
+                update_document,
+                database_url,
+                document_id=document_id,
+                status="failed",
+                failure_reason=f"worker_crashed_during_{stage}",
+            )
+            logger.warning(
+                "reconciled_stuck_document",
+                document_id=document_id,
+                previous_status=stage,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("reconcile_update_failed", document_id=document_id, error=str(exc))
 
 
 class WorkerSettings:
     redis_settings = _redis_settings_for_worker()
-    functions = [parse_document, generate_atomic_notes, extract_graph]
+    # Per-function timeouts override arq's 300s default. ``extract_graph``
+    # gets the most generous budget because Graphiti's edge-timestamp
+    # extractor currently retries 2× per failed edge against Cohere (TD-010).
+    functions = [
+        arq_func(parse_document, timeout=TIMEOUT_PARSE_S, max_tries=1),
+        arq_func(generate_atomic_notes, timeout=TIMEOUT_NOTES_S, max_tries=1),
+        arq_func(extract_graph, timeout=TIMEOUT_GRAPH_S, max_tries=1),
+    ]
+    # Global ceiling for any task that doesn't override (e.g. cron jobs).
+    job_timeout = TIMEOUT_WORKER_DEFAULT_S
+    # ``minute=None`` plus ``second=0`` is arq's canonical "once a minute"
+    # config and prevents the catch-up burst we saw with ``set(range(60))``
+    # where a freshly-started worker would re-fire the cron several times in
+    # quick succession.
+    cron_jobs = [cron(reconcile_stuck_documents, second=0)]
     on_startup = worker_startup
     on_shutdown = worker_shutdown

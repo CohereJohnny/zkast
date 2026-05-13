@@ -1,82 +1,46 @@
-# Sprint 5 — Graph Visualization and Editing
+# Sprint 5 — Graph Visualization, Editing, and Snapshots
 
-**Duration**: 2 weeks  
-**Goal**: Interactive **Graph Panel** (`react-force-graph` WebGL) with entity-type colors + **shape markers** ([uiux.md](../../specs/uiux.md)), filters, selection + provenance panel, CRUD on entities/relationships from graph context, **merge/split notes** from Sprint 4 if not finished, **hybrid search** via Graphiti, **Accessible Graph View** list fallback, **GraphSnapshot** create. **FR-17–FR-22**, **US-2.3–US-2.4**, **US-3.1–US-3.6**.
+**Goal**: Working knowledge graph (Sigma + graphology + FA2 worker), URL-synced filters, provenance panel, entity merge with survivor-field undo, relationship CRUD, named GraphSnapshots, Notes merge/split polish.
 
-## Inputs
-
-- Populated entities/relationships/notes from Sprint 4.
-
-## Outputs
-
-- Three-panel workspace: selecting document filters notes + graph (**uiux.md** cross-panel selection).
-- User creates named snapshot; snapshots listed (**US-3.6**, **FR-22**).
-
-## Dependencies
-
-- **Sprint 4** complete.
+**Inputs**: Sprint 5 plan (attached in repo context), `specs/apis.md`, `specs/datamodel.md`.
 
 ---
 
-## Web tier
+## Tasks (all complete)
 
-- [ ] `GET /graph` client: fetch subgraph with filters + node caps (**apis.md**, **NFR-4** truncation banner).
-- [ ] Implement **react-force-graph** canvas + mini-map + legend (**US-3.1**).
-- [ ] Filter bar: entity types, edge types, document, tags, time (**US-3.2**).
-- [ ] Selection panel: provenance drill-down to notes/docs (**US-3.3**).
-- [ ] Entity rename/merge/delete; edge add/edit/end-validity (**US-3.4–US-3.5**, **FR-20–FR-21**).
-- [ ] Accessible Graph View toggle: keyboard navigable list (**uiux.md**, **US-3.1** AC accessibility).
-- [ ] Command surface preparation for Sprint 8 (optional stub).
-- [ ] Snapshot creation modal (**US-3.6**).
-
-## Pipeline service
-
-- [ ] Graph search endpoint proxying Graphiti hybrid search (**apis.md** `GET /graph/search`).
-- [ ] Batch endpoints or efficient SQL for graph payload assembly.
-
-## Data + migrations
-
-- [ ] `graph_snapshots` table + immutable snapshot payload strategy (store ID sets + frozen JSON blobs per [datamodel.md](../../specs/datamodel.md)).
-
-## Infra + Docker
-
-- [ ] Memory flags for WebGL in dockerized browsers — document host GPU expectations.
-
-## Design + UX
-
-- [ ] Apply entity palette table + edge opacity rules (**uiux.md** Visual Design System).
-- [ ] Shape markers for nodes (circle vs hexagon implementation via sprite or SVG texture).
-
-## Docs
-
-- [ ] Performance tuning: default `node_limit` vs hardware.
+- [x] Alembic `0006_graph_snapshots`: `graph_snapshots`, `snapshot_entities`, `snapshot_relationships`, `snapshot_notes` + indexes
+- [x] Pipeline `graph_repo` + `internal_graph`: `GET /graph`, `GET/PATCH/DELETE …/graph/entities/{id}`, `POST …/merge`, relationship routes, snapshots routes
+- [x] `graph_edit_repo`: entity patch/merge/delete, manual relationship insert, patch, end (`valid_to`)
+- [x] `snapshots_repo`: `REPEATABLE READ` freeze transaction, list/get/delete, empty-graph `SnapshotError`
+- [x] Next.js API proxies under `apps/web/src/app/api/v1/workspaces/[workspaceId]/graph*` and `snapshots*`
+- [x] `graph-canvas.tsx`: Sigma + graphology + **ForceAtlas2 Web Worker**; type-based size/border; static layout when `prefers-reduced-motion`
+- [x] `graph-filter-bar.tsx` + URL state (`useSearchParams`)
+- [x] `graph-selection-panel.tsx`: provenance, merge dialog, `GraphEdgePopover` for incident edges + create/edit/end
+- [x] `entity-merge-dialog.tsx` + `graph-edge-popover.tsx`
+- [x] `snapshots-page-client.tsx` + snapshots route UI
+- [x] `graph-workspace-panel.tsx` + `workspace-main-grid` integration; `GraphCanvasErrorBoundary` + accessible list + retry
+- [x] `note-merge-dialog.tsx`: session stash + **revert survivor fields** after merge; split already creates `extends` link in pipeline
+- [x] `pytest` `tests/test_sprint5_graph.py`: overview/subgraph, merge, relationships, empty snapshot, snapshot CRUD
+- [x] Docs: `specs/apis.md` (Sprint 5 implemented callout + examples), `README.md` graph section
 
 ---
 
-## Definition of Done
-
-- [ ] Pan/zoom/select usable at **60fps** for **5k nodes / 15k edges** on target laptop (**NFR-4**) OR show truncation + Accessible fallback path documented if hardware fails.
-- [ ] Filters compose AND semantics (**US-3.2** AC-2).
-- [ ] Snapshot created is immutable (**FR-22** AC-3).
-
-## Risks and mitigations
-
-| Risk | Mitigation |
-| ---- | ---------- |
-| WebGL perf cliffs | Aggressive level-of-detail + optional Cytoscape fallback (**techstack.md**) |
-| URL bookmark for filters | Sync filter state to query string (**US-3.2** AC-3) |
-
-## Out of scope
-
-- Grounded chat (**Sprint 6–7**).
-- External persistence (**Sprint 7**).
-
----
-
-## Sprint review (fill at end)
+## Sprint review
 
 ### Demo readiness
 
+- Graph loads from Postgres canonical store; filters round-trip in the URL.
+- Selection panel shows notes, document/page refs, incident relationships, merge, and manual edge flows.
+- Snapshots create/list/delete against `graph_snapshots` family.
+- `pnpm run build` passes (Next.js 14).
+
 ### Gaps / issues
 
+- **Full merge undo** (restoring deleted victim entity / deleted other note) is not implemented — only **revert survivor fields** via PATCH (matches destructive merge semantics in DB).
+- `GET …/graph/search` remains future work (not Sprint 5).
+- `POST …/snapshots/{id}/review` not implemented in this sprint.
+
 ### Next sprint prep
+
+- Sprint 6: chat citation highlights on graph; “Ask about this” wiring.
+- Sprint 7: PersistenceJob gate on snapshot delete; external persistence.

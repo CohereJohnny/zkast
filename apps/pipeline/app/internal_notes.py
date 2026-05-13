@@ -22,6 +22,7 @@ from app.notes_repo import (
     list_notes,
     merge_notes,
     split_note,
+    unmerge_note,
     update_note,
 )
 
@@ -221,6 +222,32 @@ async def merge_internal_note(
     if not merged:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Note not found"}})
     return JSONResponse(content={"note": _serialize_note(merged)})
+
+
+@router.post("/internal/v1/notes/{note_id}/unmerge")
+async def unmerge_internal_note(
+    note_id: uuid.UUID,
+    request: Request,
+    workspace_id: Annotated[uuid.UUID, Query()],
+) -> JSONResponse:
+    """Restore the most recently merged victim note from the audit log."""
+    settings: Settings = request.app.state.settings
+    row = unmerge_note(
+        settings.database_url,
+        workspace_id=str(workspace_id),
+        survivor_note_id=str(note_id),
+    )
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "not_found",
+                    "message": "No merge audit row to undo for this note",
+                }
+            },
+        )
+    return JSONResponse(content={"note": _serialize_note(row)})
 
 
 @router.post("/internal/v1/notes/{note_id}/split")

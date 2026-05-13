@@ -90,11 +90,16 @@ def execute_exclusive_derivatives_delete(
     workspace_id: str,
     document_id: str,
 ) -> dict[str, int]:
-    """Delete notes exclusive to document; remove orphan entities/relationships."""
+    """Delete notes exclusive to this document.
+
+    Orphan entity/relationship cleanup is intentionally deferred to
+    `cleanup_orphan_graph_rows`, which must run *after* the document row is
+    deleted (so the `ON DELETE CASCADE` chain on `episodes` /
+    `entity_episodes` / `note_episodes` / `relationship_episodes` has fired
+    and the surviving entities/relationships have lost their provenance).
+    """
     preview = preview_document_delete(database_url, workspace_id=workspace_id, document_id=document_id)
     removed_notes = 0
-    removed_entities = 0
-    removed_relationships = 0
 
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         for nid in preview["exclusive_note_ids"]:
@@ -103,26 +108,35 @@ def execute_exclusive_derivatives_delete(
                 (nid, workspace_id),
             )
             removed_notes += cur.rowcount
+        conn.commit()
 
-        orphan_entities = conn.execute(
-            """
-            SELECT e.id FROM entities e
-            WHERE e.workspace_id = %s::uuid
-              AND NOT EXISTS (SELECT 1 FROM entity_episodes ee WHERE ee.entity_id = e.id)
-              AND NOT EXISTS (SELECT 1 FROM entity_notes en WHERE en.entity_id = e.id)
-            """,
-            (workspace_id,),
-        ).fetchall()
-        for row in orphan_entities:
-            cur = conn.execute("DELETE FROM entities WHERE id = %s", (row["id"],))
-            removed_entities += cur.rowcount
+    return {
+        "removed_notes": removed_notes,
+        "removed_entities": 0,
+        "removed_relationships": 0,
+    }
 
+
+def cleanup_orphan_graph_rows(
+    database_url: str,
+    *,
+    workspace_id: str,
+) -> dict[str, int]:
+    """Remove entities/relationships with no remaining episode or note provenance.
+
+    Safe to call repeatedly; idempotent. Intended to run after a document
+    cascade-delete so newly orphaned rows are pruned from the working graph.
+    """
+    removed_entities = 0
+    removed_relationships = 0
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
         orphan_rels = conn.execute(
             """
             SELECT r.id FROM relationships r
             WHERE r.workspace_id = %s::uuid
               AND NOT EXISTS (SELECT 1 FROM relationship_episodes re WHERE re.relationship_id = r.id)
               AND NOT EXISTS (SELECT 1 FROM relationship_notes rn WHERE rn.relationship_id = r.id)
+              AND r.origin <> 'manual'
             """,
             (workspace_id,),
         ).fetchall()
@@ -130,10 +144,23 @@ def execute_exclusive_derivatives_delete(
             cur = conn.execute("DELETE FROM relationships WHERE id = %s", (row["id"],))
             removed_relationships += cur.rowcount
 
+        orphan_entities = conn.execute(
+            """
+            SELECT e.id FROM entities e
+            WHERE e.workspace_id = %s::uuid
+              AND NOT EXISTS (SELECT 1 FROM entity_episodes ee WHERE ee.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM entity_notes en WHERE en.entity_id = e.id)
+              AND e.is_user_edited = false
+            """,
+            (workspace_id,),
+        ).fetchall()
+        for row in orphan_entities:
+            cur = conn.execute("DELETE FROM entities WHERE id = %s", (row["id"],))
+            removed_entities += cur.rowcount
+
         conn.commit()
 
     return {
-        "removed_notes": removed_notes,
         "removed_entities": removed_entities,
         "removed_relationships": removed_relationships,
     }
