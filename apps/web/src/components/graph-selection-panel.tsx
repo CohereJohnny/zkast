@@ -6,6 +6,110 @@ import { useCallback, useEffect, useState } from "react";
 import { EntityMergeDialog } from "@/components/entity-merge-dialog";
 import { GraphEdgePopover, type IncidentEdge } from "@/components/graph-edge-popover";
 
+type EvidenceRow = {
+  id: string;
+  document_id: string;
+  document_filename: string;
+  episode_id: string | null;
+  page: number;
+  char_start: number;
+  char_end: number;
+  quote: string;
+  method: string;
+  attributes: Record<string, string>;
+};
+
+function EvidenceSection({
+  workspaceId,
+  entityId,
+}: {
+  workspaceId: string;
+  entityId: string;
+}) {
+  const [rows, setRows] = useState<EvidenceRow[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    setError(null);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${workspaceId}/graph/entities/${entityId}/evidence?limit=10`,
+          { cache: "no-store" },
+        );
+        const body = (await res.json()) as {
+          items?: EvidenceRow[];
+          total?: number;
+          error?: { message?: string };
+        };
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(body.error?.message ?? "Failed to load evidence");
+          setRows([]);
+          return;
+        }
+        setRows(body.items ?? []);
+        setTotal(body.total ?? 0);
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Failed to load evidence");
+        setRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, entityId]);
+
+  if (rows === null) {
+    return (
+      <section className="mt-4" aria-busy="true">
+        <p className="font-medium text-secondary">Evidence</p>
+        <p className="mt-1 text-muted">Loading…</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-4" aria-label="Source evidence">
+      <p className="font-medium text-secondary">
+        Evidence{total > rows.length ? <span className="text-muted"> · {total} total</span> : null}
+      </p>
+      {error ? <p className="mt-1 text-red-300">{error}</p> : null}
+      {rows.length === 0 && !error ? (
+        <p className="mt-1 text-muted">
+          No source evidence recorded yet. Re-run ingestion with LangExtract enabled to populate.
+        </p>
+      ) : null}
+      <ul className="mt-2 space-y-2">
+        {rows.map((r) => (
+          <li
+            key={r.id}
+            className="rounded border border-border-subtle bg-surface/40 p-2"
+          >
+            <p className="text-muted">
+              <span className="text-secondary">{r.document_filename}</span>
+              {r.page > 0 ? <span> · p.{r.page}</span> : null}
+            </p>
+            <blockquote className="mt-1 border-l-2 border-accent-primary/60 pl-2 text-secondary">
+              {r.quote}
+            </blockquote>
+            <Link
+              className="mt-1 inline-block text-accent-primary hover:underline"
+              href={`/documents/${encodeURIComponent(r.document_id)}?page=${r.page}&highlight=${r.char_start}`}
+            >
+              View in document →
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 type EntityDetail = {
   id: string;
   type: string;
@@ -136,6 +240,8 @@ export function GraphSelectionPanel({
           )}
         </ul>
       </section>
+
+      <EvidenceSection workspaceId={workspaceId} entityId={entityId} />
 
       <section className="mt-4">
         <p className="font-medium text-secondary">Source documents / pages</p>

@@ -30,6 +30,19 @@ from graphiti_core.nodes import EpisodeType
 
 from app.chunking import chunk_page_text
 from app.config import get_settings
+from app.entity_schemas import (
+    CUSTOM_EXTRACTION_INSTRUCTIONS,
+    EDGE_TYPE_MAP,
+    EDGE_TYPES,
+    ENTITY_TYPES,
+)
+from app.evidence_extractor import (
+    _normalize_name as _normalize_evidence_name,
+    extract_evidence_spans,
+    link_spans_to_entities,
+    page_for_offset,
+)
+from app.evidence_repo import insert_evidence_rows
 from app.documents_repo import (
     delete_episodes_for_document,
     fail_running_ingestion_runs_for_document,
@@ -624,6 +637,21 @@ async def generate_atomic_notes(
                     stage="generating_notes",
                 )
 
+            async def _warning_cb(message: str, data: dict[str, Any] | None) -> None:
+                # Surface notes_llm warnings (empty stream, unparseable
+                # stream fallback) into the JobLogConsole drawer so the
+                # user can see "the system is recovering, not stuck".
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    stage="generating_notes",
+                    message=message,
+                    data=data,
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+
             note_payloads: list[dict[str, Any]] = []
             suggested_links: list[dict[str, Any]] = []
             if episodes:
@@ -634,6 +662,7 @@ async def generate_atomic_notes(
                     max_notes=max_notes,
                     streaming=streaming_enabled,
                     progress_callback=_progress_cb,
+                    warning_callback=_warning_cb,
                 )
 
             created_ids: list[str] = []
@@ -797,7 +826,31 @@ async def extract_graph(
     )
 
     ref = datetime.now(timezone.utc)
-    counters: dict[str, int] = {"entity": 0, "edge": 0, "items_done": 0}
+    counters: dict[str, int] = {
+        "entity": 0,
+        "edge": 0,
+        "items_done": 0,
+        "evidence_extracted": 0,
+        "evidence_linked": 0,
+    }
+
+    # Sprint 5c Phase 2 — resolve Cohere creds + the small-model name once so
+    # the per-episode LangExtract calls don't refetch from Postgres every
+    # time. Evidence extraction is best-effort: if any of these are missing
+    # we just skip it and the graph stage proceeds with Graphiti-only
+    # extraction (no evidence rows).
+    _evidence_api_key: str | None = None
+    _evidence_model: str | None = None
+    try:
+        _evidence_api_key = await asyncio.to_thread(
+            resolve_cohere_api_key, settings, workspace_id
+        )
+        _pipeline_for_evidence = await asyncio.to_thread(
+            fetch_pipeline_settings, database_url, workspace_id
+        )
+        _evidence_model = str(_pipeline_for_evidence.get("small_model") or "").strip() or None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("evidence_setup_failed", error=str(exc))
 
     try:
         # B2 — pre-check active state.
@@ -857,13 +910,23 @@ async def extract_graph(
                         reference_time=ref,
                         source=EpisodeType.text,
                         group_id=workspace_id,
+                        # Sprint 5c — type-constrained extraction so we
+                        # stop collapsing every entity into "Concept".
+                        entity_types=ENTITY_TYPES,
+                        edge_types=EDGE_TYPES,
+                        edge_type_map=EDGE_TYPE_MAP,
+                        custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                     )
                 ep_id = str(ep["id"])
                 local_entities = 0
                 local_edges = 0
+                # ``entity_index`` keys (normalized_name, type) → canonical
+                # entity uuid for this episode. Used by the LangExtract
+                # evidence link step below.
+                entity_index: dict[tuple[str, str], str] = {}
                 for node in res.nodes:
                     try:
-                        await asyncio.to_thread(
+                        eid = await asyncio.to_thread(
                             upsert_entity_from_graphiti,
                             database_url,
                             workspace_id=workspace_id,
@@ -876,6 +939,18 @@ async def extract_graph(
                             note_id=None,
                         )
                         local_entities += 1
+                        if eid:
+                            # Index by every non-Entity label so a LangExtract
+                            # span that picked a slightly different type can
+                            # still match.
+                            etype_keys = [
+                                lab for lab in (node.labels or []) if lab and lab != "Entity"
+                            ]
+                            if not etype_keys:
+                                etype_keys = ["Concept"]
+                            norm = _normalize_evidence_name(node.name or "")
+                            for k in etype_keys:
+                                entity_index[(norm, k)] = eid
                     except psycopg.errors.ForeignKeyViolation:
                         # Concurrent delete removed the episode.
                         logger.warning(
@@ -920,14 +995,70 @@ async def extract_graph(
                             edge_uuid=str(edge.uuid),
                         )
 
+                # Sprint 5c Phase 2 — LangExtract evidence linking.
+                # Best-effort: any failure inside extract_evidence_spans is
+                # caught at the source and returns []. We never let evidence
+                # extraction block the run.
+                local_evidence_extracted = 0
+                local_evidence_linked = 0
+                if _evidence_api_key and _evidence_model:
+                    spans = await extract_evidence_spans(
+                        text=body,
+                        api_key=_evidence_api_key,
+                        model=_evidence_model,
+                    )
+                    local_evidence_extracted = len(spans)
+                    if spans and entity_index:
+                        linked = link_spans_to_entities(spans, entity_index)
+                        rows = []
+                        page_default = int(ep.get("page_start") or 0)
+                        for eid, span in linked:
+                            rows.append(
+                                {
+                                    "entity_id": eid,
+                                    "document_id": document_id,
+                                    "episode_id": ep_id,
+                                    "page": page_default
+                                    + page_for_offset(span.char_start, []),
+                                    "char_start": span.char_start,
+                                    "char_end": span.char_end,
+                                    "quote": span.quote,
+                                    "attributes": span.attributes,
+                                }
+                            )
+                        if rows:
+                            try:
+                                local_evidence_linked = await asyncio.to_thread(
+                                    insert_evidence_rows,
+                                    database_url,
+                                    workspace_id=workspace_id,
+                                    rows=rows,
+                                )
+                            except psycopg.errors.ForeignKeyViolation:
+                                # Episode or document was removed mid-flight;
+                                # safe to drop the evidence rows quietly.
+                                logger.warning(
+                                    "evidence_skipped_fk_violation",
+                                    episode_id=ep_id,
+                                )
+
                 async with counters_lock:
                     counters["entity"] += local_entities
                     counters["edge"] += local_edges
                     counters["items_done"] += 1
+                    counters["evidence_extracted"] += local_evidence_extracted
+                    counters["evidence_linked"] += local_evidence_linked
                     items_done = counters["items_done"]
                     total_entities = counters["entity"]
                     total_edges = counters["edge"]
+                    total_evidence_extracted = counters["evidence_extracted"]
+                    total_evidence_linked = counters["evidence_linked"]
 
+                evidence_suffix = ""
+                if local_evidence_extracted or local_evidence_linked:
+                    evidence_suffix = (
+                        f", +{local_evidence_linked}/{local_evidence_extracted} evidence"
+                    )
                 await record_log(
                     redis,
                     job_id=job_id,
@@ -935,13 +1066,15 @@ async def extract_graph(
                     stage="extracting_graph",
                     message=(
                         f"episode {idx + 1}/{len(episodes)}: "
-                        f"+{local_entities} entities, +{local_edges} edges"
+                        f"+{local_entities} entities, +{local_edges} edges{evidence_suffix}"
                     ),
                     data={
                         "episode_index": idx,
                         "episode_total": len(episodes),
                         "delta_entities": local_entities,
                         "delta_edges": local_edges,
+                        "delta_evidence_extracted": local_evidence_extracted,
+                        "delta_evidence_linked": local_evidence_linked,
                     },
                     database_url=database_url,
                     ingestion_run_id=ingestion_run_id,
@@ -960,6 +1093,14 @@ async def extract_graph(
                     value=total_edges,
                     stage="extracting_graph",
                 )
+                if _evidence_api_key and _evidence_model:
+                    await record_metric(
+                        redis,
+                        job_id=job_id,
+                        name="evidence_spans_linked",
+                        value=total_evidence_linked,
+                        stage="extracting_graph",
+                    )
                 if total_items:
                     pct = 50 + int(45 * items_done / total_items)
                     await job_hset(
@@ -993,6 +1134,10 @@ async def extract_graph(
                         reference_time=ref,
                         source=EpisodeType.text,
                         group_id=workspace_id,
+                        entity_types=ENTITY_TYPES,
+                        edge_types=EDGE_TYPES,
+                        edge_type_map=EDGE_TYPE_MAP,
+                        custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                     )
                 local_entities = 0
                 local_edges = 0

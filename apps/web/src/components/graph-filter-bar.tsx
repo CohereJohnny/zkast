@@ -4,6 +4,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useConfirm, useToast } from "@/components/feedback-provider";
+import { DocumentPicker } from "@/components/filters/document-picker";
+import { EntityTypeahead } from "@/components/filters/entity-typeahead";
+import { TagPicker } from "@/components/filters/tag-picker";
+import { TypeMultiselect } from "@/components/filters/type-multiselect";
 import { emitGraphInvalidated } from "@/lib/graph-events";
 
 export type GraphFilterValues = Record<string, string | undefined>;
@@ -22,7 +26,7 @@ export function GraphFilterBar({
   const [entityTypes, setEntityTypes] = useState(sp.get("entity_types") ?? "");
   const [edgeTypes, setEdgeTypes] = useState(sp.get("edge_types") ?? "");
   const [view, setView] = useState(sp.get("view") ?? "overview");
-  const [seeds, setSeeds] = useState(sp.getAll("seed_entity_ids").join(", "));
+  const [seeds, setSeeds] = useState(sp.getAll("seed_entity_ids").join(","));
 
   const apply = useCallback(() => {
     const p = new URLSearchParams(sp.toString());
@@ -154,11 +158,11 @@ export function GraphFilterBar({
           <span className="text-caption text-muted">({chips.join(" · ")})</span>
         ) : null}
       </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="text-caption text-muted">
           View
           <select
-            className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 text-secondary"
+            className="mt-1 w-full cursor-pointer rounded border border-border-strong bg-surface px-2 py-1 text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
             value={view}
             onChange={(e) => setView(e.target.value)}
           >
@@ -166,50 +170,47 @@ export function GraphFilterBar({
             <option value="subgraph">Subgraph</option>
           </select>
         </label>
-        <label className="text-caption text-muted">
-          Seed entity IDs (comma, subgraph)
-          <input
-            className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
+        {workspaceId ? (
+          <EntityTypeahead
+            workspaceId={workspaceId}
             value={seeds}
-            onChange={(e) => setSeeds(e.target.value)}
-            placeholder="uuid, uuid…"
+            onChange={setSeeds}
           />
-        </label>
-        <label className="text-caption text-muted">
-          Document id
-          <input
-            className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
+        ) : (
+          <p className="text-caption text-muted">Seed entities (workspace loading…)</p>
+        )}
+        {workspaceId ? (
+          <DocumentPicker
+            workspaceId={workspaceId}
             value={documentId}
-            onChange={(e) => setDocumentId(e.target.value)}
-            placeholder="Document UUID"
+            onChange={setDocumentId}
           />
-        </label>
-        <label className="text-caption text-muted">
-          Tag
-          <input
-            className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 text-caption text-secondary"
-            value={tag}
-            onChange={(e) => setTag(e.target.value)}
-            placeholder="Note tag"
-          />
-        </label>
-        <label className="text-caption text-muted">
-          Entity types (comma)
-          <input
-            className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 text-caption text-secondary"
+        ) : (
+          <p className="text-caption text-muted">Document (workspace loading…)</p>
+        )}
+        {workspaceId ? (
+          <TagPicker workspaceId={workspaceId} value={tag} onChange={setTag} />
+        ) : (
+          <p className="text-caption text-muted">Tag (workspace loading…)</p>
+        )}
+        {workspaceId ? (
+          <TypeMultiselect
+            workspaceId={workspaceId}
+            kind="entity_types"
             value={entityTypes}
-            onChange={(e) => setEntityTypes(e.target.value)}
-            placeholder="Person, Organization…"
+            onChange={setEntityTypes}
+            label="Entity types"
           />
-        </label>
-        <label className="text-caption text-muted">
-          Edge types (comma)
-          <input
-            className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 text-caption text-secondary"
+        ) : null}
+        {workspaceId ? (
+          <TypeMultiselect
+            workspaceId={workspaceId}
+            kind="edge_types"
             value={edgeTypes}
-            onChange={(e) => setEdgeTypes(e.target.value)}
+            onChange={setEdgeTypes}
+            label="Edge types"
           />
-        </label>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button
