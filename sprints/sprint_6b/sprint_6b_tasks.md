@@ -13,8 +13,11 @@
 
 ## Outputs
 
-- A reproducible eval suite under `apps/pipeline/eval/` plus a UI surface (likely an admin-gated page) that runs the suite, shows per-question + aggregate metrics, and lets the user diff GraphRAG vs RAG vs Hybrid answers side-by-side.
-- Three production retrieval modes wired up: `rag` (vector-only against atomic notes), `graph` (current Sprint 6 + graph-context doc), `hybrid` (graph traversal handlers + supporting vector evidence).
+- A reproducible eval suite under `apps/pipeline/eval/` plus a UI surface (likely an admin-gated page) that runs the suite, shows per-question + aggregate metrics, and lets the user diff GraphRAG vs Naive RAG vs Hybrid answers side-by-side.
+- Three production retrieval modes wired up:
+  - `rag` (**Naive RAG baseline**): embed and retrieve from the original parsed document chunks / episodes only. It must **not** use zettelkasten atomic notes, extracted entities, relationships, graph-context documents, or graph traversal. This is the control arm.
+  - `graph` (**current GraphRAG baseline**): Sprint 6 retrieval path — Graphiti hybrid search over the graph-shaped index + zettelkasten-derived notes/entities/relationships + graph-context document.
+  - `hybrid` (**GraphRAG with deterministic traversal**): graph traversal handlers + supporting raw-chunk evidence where helpful.
 - TD-015 intent router + typed-entity handler + multi-hop traversal handler.
 
 ## Dependencies
@@ -46,9 +49,9 @@
 ### Phase 2 — Retrieval-mode plumbing
 
 - [ ] `chat_turn` reads `chat_messages.retrieval_mode` (or `session.model_settings.retrieval_mode`) and dispatches to one of three retrieval branches:
-  - `rag`: skip Graphiti; embed the query; do `pgvector`-style cosine search against `atomic_notes` embeddings; build documents from top-K notes only.
-  - `graph`: today's Sprint 6 path (hybrid Graphiti search + graph-context doc).
-  - `hybrid`: graph-traversal handlers (Phase 3) + supporting vector evidence from `rag`.
+  - `rag`: skip Graphiti and skip zettelkasten. Embed the query against the original parsed document chunks / `episodes` produced by PDF parsing, then build Cohere documents from the top-K raw chunks with page provenance. This mode is intentionally "dumber" so it remains a fair Naive RAG baseline.
+  - `graph`: today's Sprint 6 path (Graphiti hybrid search over zettelkasten-derived entities/relationships + graph-context doc).
+  - `hybrid`: graph-traversal handlers (Phase 3) + supporting raw-chunk evidence from `rag`.
 - [ ] Per-mode retrieval-strategy tag stored on `retrieval_records.retrieval_strategy` so the eval can group by it.
 - [ ] Web side: small admin/eval-only `retrieval_mode` picker in `ChatScopePicker` behind a feature flag (hidden in default UI per `model_settings.retrieval_mode`).
 

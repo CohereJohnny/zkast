@@ -296,6 +296,12 @@ Per-workspace settings choose distinct **small** and **large** models so users c
 
 **Graph-context grounding document (BUG-013, Sprint 6; precursor to TD-015)**: `chat_turn._retrieve` always prepends a synthesized `graph_context:workspace_shape` `ChatDocument` to the grounding bundle. The document is rendered by `chat_turn._render_graph_context_document` from `filter_options_repo.summarize_workspace_graph` and contains: (a) workspace `entity_total` and `edge_total`, (b) per-entity-type counts with up to 25 named exemplars ordered by degree, (c) per-edge-type counts, and (d) an instruction line telling the LLM to treat the structured numbers as authoritative for "how many" / "list all" / "count by" intents. This is a *partial mitigation*: pure vector retrieval over a graph-shaped index cannot answer typed-aggregation questions reliably (the user's "how many locations?" returned 3 instead of 6 because the hybrid ranker surfaced facts about regulators and standards rather than the 6 typed `Location` entities). The full GraphRAG answer — intent routing + typed-entity handler + multi-hop traversal handler — is tracked as **TD-015** and pinned by Sprint 6b's eval.
 
+**Retrieval modes for Sprint 6b evaluation**: the `chat_messages.retrieval_mode` column supports three modes, and their boundaries must stay strict so the eval is meaningful:
+
+- `rag` (**Naive RAG baseline**) embeds and retrieves from the original parsed document text chunks / `episodes` only. It must not use zettelkasten atomic notes, extracted entities, relationships, graph-context documents, Graphiti search, or graph traversal. It is the control arm: traditional "chunk the source document, embed chunks, retrieve top-K chunks, answer with citations."
+- `graph` (**Sprint 6 GraphRAG baseline**) uses the zettelkasten-derived graph surface: Graphiti hybrid search over entities/relationships/episodes plus the graph-context grounding document.
+- `hybrid` (**GraphRAG traversal**) uses deterministic structured handlers (typed-entity enumeration, count-by-type, depth-bounded paths) and may attach raw chunk evidence as support. This is where the graph should outperform Naive RAG on aggregation and multi-hop tasks.
+
 **Cost and rate-limit posture**:
 
 - Retrieval is cheap (single Cohere Embed call for the query, single Rerank call over candidates).
