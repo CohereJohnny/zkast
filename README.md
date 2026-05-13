@@ -11,7 +11,7 @@ The product is **self-hostable first** (Docker Compose, BYO Cohere key) with a p
 | 4 | `sprint-4` | Atomic notes, graph extraction, notes workspace UI |
 | 5b | `sprint-5b` | Graph viz, merge with persisted undo, snapshots + review, JobLogConsole drawer, heartbeat reconciler, Diagnostics page |
 | 5c | `sprint-5c` | Typed Graphiti extraction (Pydantic taxonomy), LangExtract source-grounded evidence, picklist filter UX |
-| 6 | _planned_ | Grounded chat with retrieval + citations (see [sprints/sprint_6/sprint_6_tasks.md](sprints/sprint_6/sprint_6_tasks.md)) |
+| 6 | `sprint-6` (branch) | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; `chat_messages.retrieval_mode` ships for Sprint 6b (see [sprints/sprint_6/sprint_6_tasks.md](sprints/sprint_6/sprint_6_tasks.md)) |
 
 ## Architecture
 
@@ -164,6 +164,38 @@ successful merge:
   `TypeMultiselect` (entity + edge type chip groups with counts),
   `TagPicker` (combobox over distinct atomic-note tags). Query-string
   contract is preserved.
+
+### Grounded chat (Sprint 6)
+
+- **`/chat`** is a workspace-scoped chat surface. Send a question, watch tokens
+  stream in, see inline citations chip back to the underlying note / entity /
+  relationship / source page.
+- **Backend** — `apps/pipeline/app/chat_turn.py` orchestrates one turn: hybrid
+  retrieval via `graphiti.search()`, document assembly with a per-turn token
+  budget (smallest-first), `RetrievalRecord` persisted **before** the LLM call
+  (FR-41), refusal short-circuit when retrieval is empty, Cohere v2 chat with
+  `documents=[…]` (native SDK `cohere>=5,<6`), citation mapping via prefixed
+  ids (`note:<uuid>`, `entity:<uuid>`, `relationship:<uuid>`, `episode:<uuid>`).
+- **SSE streaming** — seven event types `retrieval_started`,
+  `retrieval_complete`, `token`, `citation`, `message_complete`, `job_failed`,
+  `job_cancelled` fan out through the same Redis pub/sub + Stream the
+  JobLogConsole drawer already subscribes to. So the drawer also shows
+  chat-turn activity when expanded.
+- **Empty-stream fallback** — when Cohere's stream closes with zero content
+  deltas (Sprint 5b BUG-009 pattern), `cohere_chat.chat_stream_grounded`
+  retries once non-streaming and surfaces a `warning` log into the drawer.
+- **Cancel** — `POST /api/v1/workspaces/{ws}/chat/turns/{turnId}/cancel`
+  sets a Redis flag and relies on arq's cooperative `CancelledError`; the
+  handler classifies the cancel reason via `_classify_cancel_reason("chat_turn", …)`.
+- **Scope picker** — session create reuses every Sprint 5c filter component
+  (`DocumentPicker`, `EntityTypeahead`, `TypeMultiselect` ×2, `TagPicker`) plus
+  a snapshot combobox and a `valid_at` date input. Scope is locked in when the
+  first message is sent and is mirrored to `chat_messages.effective_scope_snapshot`.
+- **Eval-ready** — `chat_messages.retrieval_mode` defaults to `'graph'` so
+  Sprint 6b can flip on a `rag` code path without another migration.
+- **Migrations through `0009`** — `chat_sessions`, `chat_messages`,
+  `retrieval_records`, `chat_citations`. Rebuild pipeline + worker + web after
+  pulling: `docker compose run --rm migrate && docker compose up -d --build pipeline worker web`.
 
 ### Graph view & snapshots (Sprint 5)
 

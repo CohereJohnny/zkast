@@ -17,3 +17,4 @@ pytest-asyncio>=0.24,<1
 graphiti-core[falkordb]==0.29.0
 openai>=1.91,<2
 langextract>=1.0,<2
+cohere>=5,<6

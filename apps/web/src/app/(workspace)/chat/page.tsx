@@ -1,19 +1,13 @@
-import { EmptyState } from "@/components/empty-state";
+import { ChatPanel } from "@/components/chat-panel";
+import { getCurrentWorkspace } from "@/lib/auth";
 
-export default function ChatPage() {
+export const dynamic = "force-dynamic";
+
+export default async function ChatPage() {
+  const workspace = await getCurrentWorkspace();
   return (
-    <EmptyState
-      title="No chat sessions"
-      description="Grounded answers will cite your notes and graph — start once documents exist."
-      cta={
-        <button
-          type="button"
-          disabled
-          className="cursor-not-allowed rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-canvas opacity-45"
-        >
-          Start a conversation
-        </button>
-      }
-    />
+    <div className="flex h-[calc(100vh-8rem)] flex-col px-4 py-4">
+      <ChatPanel workspaceId={workspace.id} />
+    </div>
   );
 }

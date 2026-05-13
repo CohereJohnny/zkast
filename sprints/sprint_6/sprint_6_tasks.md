@@ -27,31 +27,31 @@
 
 ### Phase 0 — Paperwork
 
-- [ ] Create branch `sprints/sprint-6` from `main`
-- [ ] Confirm `specs/apis.md` Chat Sessions and `specs/datamodel.md` Chat sections are current (Sprint 5b/5c sync just landed)
-- [ ] Confirm `apps/pipeline/app/main.py` no longer registers the `POST /internal/v1/chat/turns` 501 stub once the real route is wired in this sprint
+- [x] Create branch `sprints/sprint-6` from `main`
+- [x] Confirm `specs/apis.md` Chat Sessions and `specs/datamodel.md` Chat sections are current (Sprint 5b/5c sync just landed)
+- [x] Confirm `apps/pipeline/app/main.py` no longer registers the `POST /internal/v1/chat/turns` 501 stub once the real route is wired in this sprint
 
 ### Phase 1 — Data + migrations
 
-- [ ] **Migration `0009_chat_tables`** ([`apps/migrations/alembic/versions/0009_chat_tables.py`](../../apps/migrations/alembic/versions/)):
+- [x] **Migration `0009_chat_tables`** ([`apps/migrations/alembic/versions/0009_chat_tables.py`](../../apps/migrations/alembic/versions/0009_chat_tables.py)):
   - `chat_sessions(id, workspace_id FK, title, created_by_user_id FK?, scope JSONB, share_visibility, model_settings JSONB, created_at, updated_at, last_activity_at)` + indexes per `datamodel.md`.
-  - `chat_messages(id, session_id FK, sequence, role, parent_message_id FK?, is_active_alternate, author_user_id FK?, content, status, failure_reason, effective_scope_snapshot JSONB, model_used, tokens_in, tokens_out, created_at, completed_at)` + unique (`session_id`, `sequence`) where `is_active_alternate = true`.
+  - `chat_messages(id, session_id FK, sequence, role, parent_message_id FK?, is_active_alternate, author_user_id FK?, content, status, failure_reason, effective_scope_snapshot JSONB, model_used, tokens_in, tokens_out, retrieval_mode, created_at, completed_at)` + partial unique (`session_id`, `sequence`) WHERE `is_active_alternate = true`. `retrieval_mode` ships now (DEFAULT `'graph'`) so Sprint 6b's GraphRAG-vs-RAG eval can read it without a follow-up migration.
   - `retrieval_records(id, workspace_id FK, message_id FK unique, retrieval_strategy, query_text, retrieved_items JSONB, total_candidates, truncated, created_at)`.
   - `chat_citations(id, message_id FK, text_start, text_end, sources JSONB, created_at)`.
   - CHECK constraints + `ON DELETE CASCADE` per `datamodel.md` Chat section.
-- [ ] Pipeline repo modules:
-  - [ ] `apps/pipeline/app/chat_repo.py` — session + message + citation reads/writes.
-  - [ ] `apps/pipeline/app/retrieval_repo.py` — append-only `RetrievalRecord` insert + read.
+- [x] Pipeline repo modules:
+  - [x] `apps/pipeline/app/chat_repo.py` — session + message + citation reads/writes.
+  - [x] `apps/pipeline/app/retrieval_repo.py` — append-only `RetrievalRecord` insert + read.
 
 ### Phase 2 — Pipeline service
 
-- [ ] New module `apps/pipeline/app/internal_chat.py` (FastAPI router):
-  - [ ] `POST /internal/v1/workspaces/{workspaceId}/chat-sessions` — create session; optional `title`, `scope`, `model_settings`, `seed_message`.
-  - [ ] `GET /internal/v1/workspaces/{workspaceId}/chat-sessions[/{id}]` — list / detail.
-  - [ ] `PATCH /internal/v1/workspaces/{workspaceId}/chat-sessions/{id}` — title / scope edits.
-  - [ ] `POST /internal/v1/workspaces/{workspaceId}/chat-sessions/{id}/messages` — submit a user message; returns `{message_id, turn_id, stream_url}` and starts the turn in arq.
-  - [ ] `POST /internal/v1/workspaces/{workspaceId}/chat/turns/{turnId}/cancel` — set `cancellation_requested_at`; the worker observes via cooperative `CancelledError`.
-- [ ] New module `apps/pipeline/app/chat_turn.py` — single-turn execution:
+- [x] New module `apps/pipeline/app/internal_chat.py` (FastAPI router):
+  - [x] `POST /internal/v1/workspaces/{workspaceId}/chat-sessions` — create session; optional `title`, `scope`, `model_settings`, `seed_message`.
+  - [x] `GET /internal/v1/workspaces/{workspaceId}/chat-sessions[/{id}]` — list / detail.
+  - [x] `PATCH /internal/v1/workspaces/{workspaceId}/chat-sessions/{id}` — title / scope edits.
+  - [x] `POST /internal/v1/workspaces/{workspaceId}/chat-sessions/{id}/messages` — submit a user message; returns `{user_message, assistant_message, turn_id}` and starts the turn in arq.
+  - [x] `POST /internal/v1/workspaces/{workspaceId}/chat/turns/{turnId}/cancel` — set a Redis cancel flag; the worker observes via cooperative `CancelledError`.
+- [x] New module `apps/pipeline/app/chat_turn.py` — single-turn execution:
   1. **Retrieve** — `graphiti.search()` hybrid (BM25 + vector + reranked) scoped by `session.scope` and `pinned_snapshot_id`. Reuse the Sprint 5b Cohere retry helper (`cohere_adapters._post_json_with_retry`) for the rerank call.
   2. **Document assembly** — render each hit (note / entity / relationship / episode) into a compact text "document" with stable id (`note:<uuid>`, `entity:<uuid>`, etc.). Apply per-turn token budget (configurable per workspace, default 6k tokens of grounding). Emit `retrieval_started` then `retrieval_complete` SSE events.
   3. **Persist `RetrievalRecord` before LLM call** — captures `query_text`, `retrieved_items[]` verbatim (with each item's `excerpt`), `total_candidates`, `truncated` (FR-41).
@@ -59,73 +59,74 @@
   5. **Finalize** — on stream close, mark `ChatMessage.status = complete` with `completed_at` and emit `message_complete`. Save `tokens_in` / `tokens_out`.
   6. **Refusal** — if `retrieved_items` is empty or below confidence threshold, skip the LLM call; persist a `refused` message and emit `message_complete` with `finish_reason: "refused"` (FR-45).
   7. **Empty-stream fallback** — same pattern as Sprint 5b's `notes_llm`: if the streamed buffer is empty when the stream closes, retry once with `stream=False` and surface a `warning` log event into the drawer.
-- [ ] SSE event types (mirror Sprint 5b drawer; document in [`specs/apis.md`](../../specs/apis.md) Chat section if not already):
+- [x] SSE event types (mirror Sprint 5b drawer; documented in [`specs/apis.md`](../../specs/apis.md)):
 
   | event `type` | payload | when |
   |---|---|---|
   | `retrieval_started` | `{ query_text }` | turn begins |
-  | `retrieval_complete` | `{ retrieval_record_id, total_candidates, kept }` | after persist |
+  | `retrieval_complete` | `{ retrieval_record_id, total_candidates, kept, truncated }` | after persist |
   | `token` | `{ delta }` | per Cohere chunk |
-  | `citation` | `{ id, text_start, text_end, sources[] }` | per finalized span |
-  | `message_complete` | `{ message_id, finish_reason, tokens_in, tokens_out }` | success |
+  | `citation` | `{ text_start, text_end, text, sources[] }` | per finalized span |
+  | `message_complete` | `{ message_id, finish_reason, tokens_in, tokens_out, citation_count }` | success |
   | `job_failed` | `{ reason }` | error |
   | `job_cancelled` | `{ reason }` | user stop or arq cancel |
-- [ ] Cooperative cancellation: `CancelledError` handler mirrors `apps/pipeline/app/tasks.py` Sprint 5b pattern — mark `ChatMessage.status = cancelled` + persist `failure_reason: 'cancelled_by_user'` (or `cancelled_by_worker_shutdown` per `_classify_cancel_reason`), then re-raise.
-- [ ] Conversation history: truncate prior messages to fit Cohere's input window with most-recent-first preference; insert summary placeholder for older turns. Retrieved documents always have priority over history per [`techstack.md`](../../specs/techstack.md).
+- [x] Cooperative cancellation: `CancelledError` handler mirrors `apps/pipeline/app/tasks.py` Sprint 5b pattern — mark `ChatMessage.status = cancelled` + persist `failure_reason: 'cancelled_by_user'` (or `cancelled_by_worker_shutdown` per `_classify_cancel_reason`), then re-raise.
+- [x] Conversation history: truncate prior messages to fit Cohere's input window with most-recent-first preference; insert summary placeholder for older turns. Retrieved documents always have priority over history per [`techstack.md`](../../specs/techstack.md).
 
 ### Phase 3 — Web tier
 
-- [ ] API routes under `apps/web/src/app/api/v1/workspaces/[workspaceId]/`:
-  - [ ] `chat-sessions/route.ts` — `GET` list, `POST` create.
-  - [ ] `chat-sessions/[sessionId]/route.ts` — `GET` detail, `PATCH` edit.
-  - [ ] `chat-sessions/[sessionId]/messages/route.ts` — `POST` submit user message, returns the `turn_id` + `stream_url`.
-  - [ ] `chat/turns/[turnId]/route.ts` — `GET` SSE proxy with `text/event-stream`. **Must** include `?workspaceId=` query param on the upstream pipeline call (BUG-007 lesson).
-  - [ ] `chat/turns/[turnId]/cancel/route.ts` — `POST` cancel.
-- [ ] Client SSE parser hook (`apps/web/src/lib/chat-stream.ts`): wraps `EventSource` with reconnect + `Last-Event-ID`, parses each `data:` JSON, dispatches typed events to the consumer.
-- [ ] Minimal `ChatPanel` (`apps/web/src/components/chat-panel.tsx`):
-  - [ ] Input + transcript layout (centered column, max-w-3xl).
-  - [ ] Streaming text appender with `aria-live="polite"` region throttled to avoid screen-reader spam (one announcement per ~150ms).
-  - [ ] Inline citation chips that pop a hover card showing the cited `excerpt` + source kind/page.
-  - [ ] **Stop** button visible while `status = streaming`; clicking POSTs cancel.
-  - [ ] **Refusal** state: distinct visual (`useToast` info-variant or inline banner) so the user sees "no grounding found" rather than a confusing empty message.
-- [ ] Reuse Sprint 5c `EntityTypeahead` in the (optional) "scope to entity" picker on session create — concrete dogfood of the new component.
-- [ ] Reuse `useToast` for transient errors (failed turn, network blip, cancel confirmation).
-- [ ] Route the chat surface at `/chat` (placeholder; full Chat Home is Sprint 7).
+- [x] API routes under `apps/web/src/app/api/v1/workspaces/[workspaceId]/`:
+  - [x] `chat-sessions/route.ts` — `GET` list, `POST` create.
+  - [x] `chat-sessions/[sessionId]/route.ts` — `GET` detail, `PATCH` edit.
+  - [x] `chat-sessions/[sessionId]/messages/route.ts` — `POST` submit user message, returns the `turn_id`.
+  - [x] `chat/turns/[turnId]/route.ts` — `GET` SSE proxy with `text/event-stream`. **Must** include `?workspaceId=` query param on the upstream pipeline call (BUG-007 lesson).
+  - [x] `chat/turns/[turnId]/cancel/route.ts` — `POST` cancel.
+- [x] Client SSE parser hook (`apps/web/src/lib/chat-stream.ts`): wraps `EventSource` with reconnect + auto-close on terminal events, parses each `data:` JSON, dispatches typed events to the consumer.
+- [x] Minimal `ChatPanel` (`apps/web/src/components/chat-panel.tsx`):
+  - [x] Input + transcript layout (centered column, max-w-3xl).
+  - [x] Streaming text appender with `aria-live="polite"` region throttled to avoid screen-reader spam (one announcement per ~150ms).
+  - [x] Inline citation chips that pop a hover card showing the cited `excerpt` + source kind/page.
+  - [x] **Stop** button visible while `status = streaming`; clicking POSTs cancel.
+  - [x] **Refusal** state: distinct visual inline banner so the user sees "no grounding found" rather than a confusing empty message.
+- [x] Reuse Sprint 5c `EntityTypeahead` (and the other three pickers) in the `ChatScopePicker` on session create — concrete dogfood of Sprint 5c.
+- [x] Reuse `useToast` for transient errors (failed turn, network blip, cancel confirmation).
+- [x] Route the chat surface at `/chat` (placeholder; full Chat Home is Sprint 7).
 
 ### Phase 4 — Infra + observability
 
-- [ ] **Reverse proxy SSE config**: document `proxy_buffering off` for nginx (and the equivalent for Caddy / Traefik) in the README's deploy section. Confirm `docker-compose.yml` doesn't introduce a buffering proxy in front of the Next.js server.
-- [ ] Wire chat-turn events into the same Redis Stream pattern Sprint 5b uses (`zkast:jobs:<turnId>:log`) so the existing `JobLogConsole` drawer **also** shows chat turn events when expanded. Free observability win.
+- [ ] **Reverse proxy SSE config**: document `proxy_buffering off` for nginx (and the equivalent for Caddy / Traefik) in the README's deploy section. Confirm `docker-compose.yml` doesn't introduce a buffering proxy in front of the Next.js server. *(Deferred — README update lands as part of closeout; docker-compose verified clean.)*
+- [x] Wire chat-turn events into the same Redis Stream pattern Sprint 5b uses (`zkast:jobs:<turnId>:log`) so the existing `JobLogConsole` drawer **also** shows chat turn events when expanded — `publish_job_event` / `record_log` paths reused verbatim; the chat-turn SSE proxy targets `/internal/v1/jobs/{turnId}/events`.
 
 ### Phase 5 — Tests
 
-- [ ] Pipeline tests (host runner, no DB required):
-  - [ ] `tests/test_chat_turn_refusal.py` — retrieval returns 0 items → persist `refused` message, no Cohere call.
-  - [ ] `tests/test_chat_turn_citation_mapping.py` — given a Cohere fixture response with two cited spans, assert two `chat_citations` rows with correct `text_start` / `text_end` / `sources[]`.
-  - [ ] `tests/test_chat_turn_cancellation.py` — `CancelledError` propagates through the handler; message ends at `status=cancelled`.
-  - [ ] `tests/test_chat_turn_empty_stream_fallback.py` — empty Cohere stream → non-streaming retry; second call returns content; success.
-  - [ ] `tests/test_retrieval_record_persistence.py` — record is written **before** the LLM call (FR-41 ordering invariant).
-- [ ] Web typecheck (`pnpm --filter web exec tsc --noEmit`) is clean.
-- [ ] Manual smoke: ask a question about a freshly-ingested PDF, see ≥ 1 citation, click it to highlight the cited excerpt.
+- [x] Pipeline tests (host runner, no DB required):
+  - [x] `tests/test_chat_turn_refusal.py` — retrieval returns 0 items → persist `refused` message, no Cohere call.
+  - [x] `tests/test_chat_turn_citation_mapping.py` — given a Cohere fixture response with two cited spans, assert two `chat_citations` rows with correct `text_start` / `text_end` / `sources[]`.
+  - [x] `tests/test_chat_turn_cancellation.py` — `CancelledError` propagates through the handler; message ends at `status=cancelled`.
+  - [x] `tests/test_chat_turn_empty_stream_fallback.py` — empty Cohere stream → non-streaming retry; second call returns content; success.
+  - [x] `tests/test_retrieval_record_persistence.py` — record is written **before** the LLM call (FR-41 ordering invariant) + persisted even when Cohere fails.
+  - [x] `tests/test_chat_scope_filtering.py` — scope flows through `_retrieve`; `_str_list` normalizes CSV + arrays; SQL carries `effective_scope_snapshot` + `retrieval_mode`.
+- [x] Web typecheck (`pnpm --filter web exec tsc --noEmit`) is clean.
+- [ ] Manual smoke: ask a question about a freshly-ingested PDF, see ≥ 1 citation, click it to highlight the cited excerpt. *(User-validated post-merge.)*
 
 ### Phase 6 — Docs + closeout
 
-- [ ] Verify [`specs/apis.md`](../../specs/apis.md) Chat Sessions section is complete (already partly drafted); add the new SSE event types if missing.
-- [ ] [`README.md`](../../README.md) gains a Sprint 6 "Grounded chat" subsection.
-- [ ] Sprint 6 report: `sprints/sprint_6/sprint_6_report.md`.
-- [ ] Bug-swatting log + tech-debt log updated with anything surfaced.
-- [ ] Commit + push `sprints/sprint-6`; user reviews on the branch (same workflow as 5b / 5c).
+- [x] Verify [`specs/apis.md`](../../specs/apis.md) Chat Sessions section is complete — covered by the Sprint 5b/5c spec sync that just landed.
+- [x] [`README.md`](../../README.md) gains a Sprint 6 "Grounded chat" subsection.
+- [x] Sprint 6 report: `sprints/sprint_6/sprint_6_report.md`.
+- [ ] Bug-swatting log + tech-debt log updated with anything surfaced. *(Nothing new surfaced during Sprint 6 — Cohere v2 SDK pinned at `cohere>=5,<6`; resilience patterns reused from Sprint 5b BUG-008/009.)*
+- [x] Commit + push `sprints/sprint-6`; user reviews on the branch (same workflow as 5b / 5c).
 
 ---
 
 ## Definition of Done
 
-- [ ] Ask a question on a workspace with ingested PDFs → grounded answer cites ≥ 1 note / entity / episode when corpus is relevant (**SM-6** directional).
-- [ ] Empty corpus → explicit refusal (**US-8.9**).
-- [ ] Stop button cancels within 1s (**US-8.8** AC-2). Test pattern mirrors Sprint 5b's `_classify_cancel_reason`.
-- [ ] Retrieval inspector data identical when reopened (**US-8.4** AC-3) — `RetrievalRecord` is the source of truth.
-- [ ] Pipeline + web typechecks clean; new chat tests pass on the host runner.
-- [ ] `JobLogConsole` drawer also shows chat-turn events when expanded (free win from event reuse).
+- [ ] Ask a question on a workspace with ingested PDFs → grounded answer cites ≥ 1 note / entity / episode when corpus is relevant (**SM-6** directional). *(Pending user smoke after merge.)*
+- [x] Empty corpus → explicit refusal (**US-8.9**) — pinned by `test_chat_turn_refusal`.
+- [x] Stop button cancels within 1s (**US-8.8** AC-2) — `cancel` POST sets Redis flag + arq surfaces `CancelledError`; pinned by `test_chat_turn_cancellation`.
+- [x] Retrieval inspector data identical when reopened (**US-8.4** AC-3) — `RetrievalRecord` is the source of truth, persisted before the LLM call; pinned by `test_retrieval_record_persistence`.
+- [x] Pipeline + web typechecks clean; new chat tests pass on the host runner — 10 new pipeline tests, full pipeline suite still green (65 passed, 14 skipped).
+- [x] `JobLogConsole` drawer also shows chat-turn events when expanded (free win from event reuse) — the SSE proxy points at `/internal/v1/jobs/{turnId}/events`.
 
 ## Out of scope (deferred)
 
@@ -143,10 +144,22 @@
 | Session orphans on workspace delete | FK CASCADE per `datamodel.md`; covered by migration 0009 |
 | TD-010 edge-timestamp 400 storm still firing during retrieval | Retrieval uses Graphiti `search()` not `add_episode`, so the timestamp extractor is not on the chat hot path — no fix required for Sprint 6 |
 
-## Sprint review (fill at end)
+## Sprint review
 
 ### Demo readiness
 
+- Working `/chat` route: minimal but functional `ChatPanel` with input + transcript + Stop + inline citation chips.
+- Session create flow includes a `ChatScopePicker` that dogfoods all four Sprint 5c filter components (`DocumentPicker`, `EntityTypeahead`, `TypeMultiselect` ×2, `TagPicker`) plus a snapshot combobox and a `valid_at` date input.
+- Backend: retrieval → `RetrievalRecord` persist (FR-41) → Cohere v2 `chat_stream` with documents → citations mapped via prefixed `note:` / `entity:` / `relationship:` / `episode:` ids → seven SSE events fan out through the same Redis Stream the `JobLogConsole` drawer already subscribes to.
+- Cohere v2 native SDK (`cohere>=5,<6`) wraps streaming + empty-stream fallback + transient-error retry (BUG-008 / 009 patterns reused).
+- 10 new pipeline tests covering refusal, citation mapping, cancellation, empty-stream fallback, FR-41 ordering (both happy + failure paths), and scope filtering.
+
 ### Gaps / issues
 
+- Manual smoke against a real ingested PDF is the only DoD item still pending — by design (the user reviews on the branch before merge, same workflow as Sprints 5b / 5c).
+- Reverse-proxy SSE config (nginx `proxy_buffering off`) deferred to a later README edit; `docker-compose.yml` does not currently introduce a buffering proxy in front of Next.js, so the dev stack is unaffected.
+
 ### Next sprint prep
+
+- **Sprint 6b — GraphRAG vs RAG eval.** `chat_messages.retrieval_mode` already ships (DEFAULT `'graph'`); 6b just needs the `rag` code path + a small canned question set + a side-by-side comparison view.
+- **Sprint 7 — Chat polish.** Chat Home (session list), drawer mode in the three-panel layout, regeneration with `is_active_alternate` (column already in `0009`), share visibility UI, persistence writer.

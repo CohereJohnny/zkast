@@ -22,6 +22,7 @@ from app.config import Settings, get_settings
 from app.deps_checks import readiness_report
 from app.graphiti_factory import resolve_stored_cohere_api_key
 from app.internal_admin import router as internal_admin_router
+from app.internal_chat import router as internal_chat_router
 from app.internal_graph import router as internal_graph_router
 from app.internal_ingestion import router as internal_ingestion_router
 from app.internal_jobs import router as internal_jobs_router
@@ -91,6 +92,7 @@ app.include_router(internal_jobs_router)
 app.include_router(internal_notes_router)
 app.include_router(internal_graph_router)
 app.include_router(internal_admin_router)
+app.include_router(internal_chat_router)
 
 
 @app.middleware("http")
@@ -211,12 +213,12 @@ async def stub_persistence_jobs() -> JSONResponse:
     )
 
 
-@app.post("/internal/v1/chat/turns")
-async def stub_chat_turns() -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content={"error": {"code": "not_implemented", "message": "Sprint 6+"}},
-    )
+# Sprint 6 — removed `POST /internal/v1/chat/turns` 501 stub.
+# Grounded chat is now served by the workspace-scoped routes in
+# ``app.internal_chat``:
+#   POST /internal/v1/workspaces/{ws}/chat-sessions/{id}/messages
+#   POST /internal/v1/workspaces/{ws}/chat/turns/{turn_id}/cancel
+# See [specs/apis.md](../../specs/apis.md) Internal Contract section.
 
 
 # Sprint 5b — removed `POST /internal/v1/graph/search` stub (HTTP 501).
