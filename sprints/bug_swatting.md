@@ -16,6 +16,118 @@ Log **critical bugs that block sprint progress** here. Resume sprint work after 
 
 ## Entries
 
+## Bug Entry: 2026-05-13
+- **ID**: BUG-013
+- **Description**: User asked "how many locations are mentioned in this paper?"
+  The graph clearly contained 6 `Location` entities (Asia-Pacific,
+  Australia, Canada, Japan, Middle East, North America), but chat
+  answered "3" and named "United States", "Columbia University SIPA", and
+  "UNENE" — none of which are actually `Location` entities. Root cause:
+  `chat_turn._retrieve` uses `graphiti.search(query, num_results=30)`,
+  which is a hybrid BM25 + vector + Cohere-rerank search ordered by
+  semantic similarity to the query. The top-30 facts for that question
+  returned reactor / standards / agent edges (none mentioning the six
+  graph Locations), and the LLM then text-extracted three location-like
+  noun phrases from those grounded facts. The graph's typed taxonomy was
+  never consulted.
+  This is the standard failure mode of "vanilla GraphRAG" — vector
+  retrieval over a graph-shaped index. Aggregation and typed-enumeration
+  questions cannot be answered reliably because vector ranking is the
+  wrong scoring function for that intent.
+- **Discovered**: 2026-05-13 chat smoke after BUG-012 fix unblocked the
+  Cohere streaming path.
+- **Context**: Sprint 6 (chat retrieval). Will be the central motivating
+  case study for Sprint 6b's GraphRAG-vs-RAG eval harness.
+- **Fix (Sprint 6, partial)**: `chat_turn._retrieve` now always prepends
+  a synthetic ``graph_context:workspace_shape`` document built from
+  `filter_options_repo.summarize_workspace_graph`. The document lists
+  entity-type counts and named exemplars (capped at 25 per type) so the
+  LLM has authoritative ground truth for "how many" / "list all" /
+  "count by type" questions. The LLM is instructed in the document body
+  to treat those numbers as authoritative and use vector-retrieved
+  facts only as supporting context. Refusal logic was relaxed: an
+  empty hybrid search no longer triggers refusal so long as the
+  graph-context document is non-empty (only truly empty workspaces
+  refuse). Pinned by `tests/test_chat_graph_context.py`.
+- **Long-term fix**: Tracked as **TD-015** — structured-query routing
+  + typed-entity / multi-hop traversal handlers so chat can answer
+  graph-native questions deterministically rather than relying on the
+  context document. Sprint 6b will pin the failure modes via eval; Sprint
+  7 will land the handlers.
+- **Status**: **Mitigated** — typed aggregates now correct; structured
+  routing pending TD-015.
+
+## Bug Entry: 2026-05-13
+- **ID**: BUG-012
+- **Description**: After BUG-011 unblocked retrieval, every chat turn that
+  reached the LLM step failed with
+  `TypeError: object async_generator can't be used in 'await' expression`.
+  Root cause: ``cohere.AsyncClientV2.chat_stream`` is declared
+  ``async def chat_stream(...) -> typing.AsyncIterator[V2ChatStreamResponse]``
+  in the Cohere v5 SDK, which the Cohere SDK compiles into an
+  **async-generator function**, not a plain coroutine — calling it returns
+  the async iterator *synchronously*. Our wrapper at
+  `apps/pipeline/app/cohere_chat.py` did `await client.chat_stream(...)`,
+  which raises immediately. `chat_stream_grounded` then propagated the
+  error and the chat-turn handler ran the "failed" path with the
+  ``TypeError`` as the user-visible failure reason.
+  The non-streaming fallback (`client.chat`) really *is* a coroutine
+  function so the second leg of the BUG-009 fallback was correct — the
+  bug only fires on the primary streaming path.
+- **Discovered**: Manual smoke after BUG-011 fix — graphiti search
+  returned 5 hits for "Deloitte", the turn passed refusal, then died on
+  the very first Cohere call.
+- **Context**: Sprint 6 (chat turn wrapper). Hidden behind BUG-011 until
+  the FalkorDB database-naming bug was fixed.
+- **Fix**: Call `client.chat_stream(...)` directly (no `await`). Keep
+  the transient-error retry by wrapping the synchronous call in a tiny
+  ad-hoc retry loop (one re-open on transient errors). Updated
+  `tests/test_chat_turn_empty_stream_fallback.py` to mock
+  `chat_stream` with `MagicMock(return_value=…)` (sync, mirrors the
+  real Cohere shape) instead of `AsyncMock`, and pinned the contract
+  with a comment so a future refactor can't quietly reintroduce
+  the wrong shape.
+- **Status**: Resolved
+
+## Bug Entry: 2026-05-13
+- **ID**: BUG-011
+- **Description**: Every chat turn refused with "No grounding context found"
+  even though the workspace graph clearly had relevant entities (e.g.
+  asking "what does Deloitte have to do with oil & gas?" against a
+  workspace with a `Deloitte` Entity node + three `Deloitte`-mentioning
+  `RELATES_TO` edges returned `total_candidates=0`).
+  Root cause: graphiti-core 0.29.0's `FalkorDriver` silently calls
+  `self.driver = self.driver.clone(database=group_id)` inside
+  `Graphiti.add_episode` ([graphiti.py L1034](https://github.com/getzep/graphiti))
+  whenever `group_id != driver._database`. Our
+  `falkor_database_for_workspace(ws)` returned `f"zkast_ws_{ws.replace('-', '')}"`
+  while `group_id = workspace_id` (with dashes), so:
+    - **Writes** during `add_episode` were silently re-routed to a
+      FalkorDB graph named after the bare workspace UUID
+      (`00000000-0000-4000-8000-000000000002`) — 373 entities, 563 edges
+      landed there.
+    - **Reads** via `graphiti.search(group_ids=[ws])` still went through
+      the originally-configured graph `zkast_ws_*`, which was empty.
+  The `/graph/search` and chat-retrieval endpoints both returned
+  `[]` for *every* query, in *every* workspace. The graph **viz** was
+  unaffected because it reads `entities` / `relationships` straight from
+  Postgres.
+- **Discovered**: Sprint 6 smoke test against the user's Oil & Gas
+  workspace — every chat turn returned `total_candidates: 0`, even for
+  queries that matched obvious entities visible in the legend.
+- **Context**: Sprint 6 (uncovered) / Sprints 4–5c (latent since the
+  prefixed naming has shipped since Sprint 2).
+- **Fix**: `falkor_database_for_workspace(ws)` now returns the workspace
+  UUID verbatim
+  ([`apps/pipeline/app/graphiti_factory.py`](../apps/pipeline/app/graphiti_factory.py)).
+  Database name == group_id, so the silent clone is a no-op, writes and
+  reads land on the same graph, and existing data is reached without
+  re-ingestion. Also surfaced retrieval hit-count as a `warning`-level
+  log event from `chat_turn` into the JobLogConsole drawer so a future
+  zero-hit regression is loud, not silent
+  ([`apps/pipeline/app/chat_turn.py`](../apps/pipeline/app/chat_turn.py)).
+- **Status**: Resolved
+
 ## Bug Entry: 2026-05-12
 - **ID**: BUG-010
 - **Description**: Sprint 5c Phase 1 introduced typed entity extraction via

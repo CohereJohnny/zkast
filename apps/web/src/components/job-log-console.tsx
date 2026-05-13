@@ -17,8 +17,14 @@ import {
 } from "@/lib/job-events";
 
 /**
- * Live, collapsible "build log" drawer.
+ * Live, collapsible "build log" panel attached to the Documents column.
  *
+ * - Rendered as a normal block inside the Documents `<section>` by
+ *   `WorkspaceMainGrid`. When the Documents column collapses to the
+ *   thin rail, the parent stops mounting this component, so the log
+ *   visually "collapses with" the Documents panel — matching the user's
+ *   mental model that pipeline logs are an artifact of document
+ *   ingestion.
  * - Subscribes (one `EventSource` per active job) to
  *   `/api/v1/jobs/{jobId}/events`. The server replays the last ~200 events
  *   from the Redis Stream before tailing live pub/sub messages, so opening
@@ -28,8 +34,8 @@ import {
  * - Cross-wires `metric` events whose name implies graph mutation
  *   (`entity_count`, `edge_count`, `note_count`) into `emitGraphInvalidated`
  *   so the canvas refetches without polling.
- * - Persists collapsed/expanded state via localStorage to mirror the
- *   documents-panel pattern.
+ * - Persists its own open/closed state via localStorage so the user
+ *   can hide the log body while keeping the Documents panel expanded.
  */
 
 const STORAGE_KEY = "zkast.workspace.logConsole.open";
@@ -315,9 +321,15 @@ export function JobLogConsole() {
   } lines`;
 
   return (
-    <div
+    <section
       aria-label="Ingestion log console"
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-[35] flex flex-col items-end px-4 pb-2 sm:px-6"
+      // ``flex-1`` only kicks in when expanded so the closed state stays
+      // as a thin header row at the bottom of the Documents column and
+      // the documents list keeps its full height. Open state shares the
+      // column 50/50 with the documents list via the parent ``flex-col``.
+      className={`flex min-h-0 flex-col rounded-lg border border-border-subtle bg-surface/60 ${
+        open ? "flex-1" : ""
+      }`}
     >
       {jobs.map((j) => (
         <JobSubscription
@@ -327,111 +339,113 @@ export function JobLogConsole() {
           onTerminal={handleTerminal}
         />
       ))}
-      <div
-        className={`pointer-events-auto mx-auto w-full max-w-5xl rounded-t-lg border border-b-0 border-border-strong bg-surface-overlay shadow-modal backdrop-blur transition-all duration-200 ${
-          open ? "" : "max-w-md"
-        }`}
+      <button
+        type="button"
+        onClick={() => persistOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-inset"
       >
-        <button
-          type="button"
-          onClick={() => persistOpen(!open)}
-          aria-expanded={open}
-          className="flex w-full items-center gap-2 rounded-t-lg px-3 py-2 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-inset"
+        <ConsoleIcon />
+        <span className="font-medium">Pipeline log</span>
+        <span
+          className={`${hasJobs ? "text-accent-primary" : "text-muted"}`}
+          aria-live="polite"
         >
-          <ConsoleIcon />
-          <span className="font-medium">Pipeline log</span>
-          <span className="text-muted">
-            {hasJobs ? `${jobs.length} active` : "idle"}
-          </span>
-          <span className="ml-auto text-muted">{lineCountLabel}</span>
-          <ChevronIcon open={open} />
-        </button>
-        {open ? (
-          <div className="flex flex-col gap-2 border-t border-border-subtle px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2 text-caption text-muted">
-              <label className="flex items-center gap-1">
-                <span>Level</span>
-                <select
-                  value={levelFilter}
-                  onChange={(e) =>
-                    setLevelFilter(e.target.value as "all" | Level)
-                  }
-                  className="rounded border border-border-strong bg-canvas px-1.5 py-0.5 text-secondary"
-                >
-                  <option value="all">All</option>
-                  <option value="info">Info</option>
-                  <option value="warning">Warning</option>
-                  <option value="error">Error</option>
-                </select>
-              </label>
-              <label className="flex items-center gap-1">
-                <span>Job</span>
-                <select
-                  value={jobFilter}
-                  onChange={(e) => setJobFilter(e.target.value)}
-                  className="max-w-[16ch] truncate rounded border border-border-strong bg-canvas px-1.5 py-0.5 text-secondary"
-                >
-                  <option value="all">All</option>
-                  {jobs.map((j) => (
-                    <option key={j.jobId} value={j.jobId}>
-                      {j.jobId.slice(0, 8)}
-                      {j.kind ? ` · ${j.kind.replace(/_/g, " ")}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={follow}
-                  onChange={(e) => setFollow(e.target.checked)}
-                />
-                Follow tail
-              </label>
-              <button
-                type="button"
-                onClick={() => void copyLog()}
-                className="ml-auto rounded border border-border-strong px-2 py-0.5 text-secondary transition-colors duration-150 hover:bg-surface-raised"
+          {hasJobs ? `${jobs.length} active` : "idle"}
+        </span>
+        <span className="ml-auto text-muted">{lineCountLabel}</span>
+        <ChevronIcon open={open} />
+      </button>
+      {open ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 border-t border-border-subtle px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 text-caption text-muted">
+            <label className="flex items-center gap-1">
+              <span>Level</span>
+              <select
+                value={levelFilter}
+                onChange={(e) =>
+                  setLevelFilter(e.target.value as "all" | Level)
+                }
+                className="cursor-pointer rounded border border-border-strong bg-canvas px-1.5 py-0.5 text-secondary"
               >
-                Copy
-              </button>
-              <button
-                type="button"
-                onClick={clearLog}
-                className="rounded border border-border-strong px-2 py-0.5 text-secondary transition-colors duration-150 hover:bg-surface-raised"
+                <option value="all">All</option>
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="error">Error</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1">
+              <span>Job</span>
+              <select
+                value={jobFilter}
+                onChange={(e) => setJobFilter(e.target.value)}
+                className="max-w-[14ch] cursor-pointer truncate rounded border border-border-strong bg-canvas px-1.5 py-0.5 text-secondary"
               >
-                Clear
-              </button>
-            </div>
-            <div
-              ref={bodyRef}
-              onScroll={onScroll}
-              className="h-48 overflow-y-auto rounded-md border border-border-subtle bg-canvas px-2 py-1 font-mono text-[12px] leading-relaxed"
-              role="log"
-              aria-live="polite"
+                <option value="all">All</option>
+                {jobs.map((j) => (
+                  <option key={j.jobId} value={j.jobId}>
+                    {j.jobId.slice(0, 8)}
+                    {j.kind ? ` · ${j.kind.replace(/_/g, " ")}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={follow}
+                onChange={(e) => setFollow(e.target.checked)}
+                className="cursor-pointer"
+              />
+              Follow
+            </label>
+            <button
+              type="button"
+              onClick={() => void copyLog()}
+              className="ml-auto cursor-pointer rounded border border-border-strong px-2 py-0.5 text-secondary transition-colors duration-150 hover:bg-surface-raised"
             >
-              {filteredLines.length === 0 ? (
-                <p className="text-muted">
-                  {hasJobs
-                    ? "Waiting for events…"
-                    : "No active jobs. Upload a PDF or retry from a stage to see live progress here."}
-                </p>
-              ) : (
-                filteredLines.map((l) => (
-                  <p key={l.id} className="whitespace-pre-wrap break-words">
-                    <span className="text-muted">
-                      {new Date(l.ts).toLocaleTimeString()}
-                    </span>{" "}
-                    <span className="text-muted">{l.jobId.slice(0, 8)}</span>{" "}
-                    <StageBadge stage={l.stage || "-"} />{" "}
-                    <span className={LEVEL_CLASS[l.level]}>{l.message}</span>
-                  </p>
-                ))
-              )}
-            </div>
+              Copy
+            </button>
+            <button
+              type="button"
+              onClick={clearLog}
+              className="cursor-pointer rounded border border-border-strong px-2 py-0.5 text-secondary transition-colors duration-150 hover:bg-surface-raised"
+            >
+              Clear
+            </button>
           </div>
-        ) : null}
-      </div>
-    </div>
+          <div
+            ref={bodyRef}
+            onScroll={onScroll}
+            // ``min-h-[12rem]`` keeps the log usable on a short Documents
+            // column; ``flex-1`` lets it grow into any extra vertical room
+            // the column has available, which is the whole point of moving
+            // this in from the floating drawer.
+            className="min-h-[12rem] flex-1 overflow-y-auto rounded-md border border-border-subtle bg-canvas px-2 py-1 font-mono text-[12px] leading-relaxed"
+            role="log"
+            aria-live="polite"
+          >
+            {filteredLines.length === 0 ? (
+              <p className="text-muted">
+                {hasJobs
+                  ? "Waiting for events…"
+                  : "No active jobs. Upload a PDF or retry from a stage to see live progress here."}
+              </p>
+            ) : (
+              filteredLines.map((l) => (
+                <p key={l.id} className="whitespace-pre-wrap break-words">
+                  <span className="text-muted">
+                    {new Date(l.ts).toLocaleTimeString()}
+                  </span>{" "}
+                  <span className="text-muted">{l.jobId.slice(0, 8)}</span>{" "}
+                  <StageBadge stage={l.stage || "-"} />{" "}
+                  <span className={LEVEL_CLASS[l.level]}>{l.message}</span>
+                </p>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }

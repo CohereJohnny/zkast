@@ -1,6 +1,6 @@
 # zkast — Tech Stack
 
-This document captures the technology choices for zkast and the rationale behind each, plus the rejected alternatives. Unlike the other specifications, this one names specific tools because the product's choices around `graphiti-core`, **Cohere** (the P0 LLM provider), Next.js, Neo4j, and Postgres+AGE are explicit product requirements. `LangExtract` is named as a deliberate P1+ addition that depends on adding a Gemini provider.
+This document captures the technology choices for zkast and the rationale behind each, plus the rejected alternatives. Unlike the other specifications, this one names specific tools because the product's choices around `graphiti-core`, **Cohere** (the P0 LLM provider), Next.js, Neo4j, and Postgres+AGE are explicit product requirements. **`LangExtract`** ships in P0 as a Cohere-backed co-extractor that records character-offset source spans for every entity; Gemini-backed LangExtract is the P1+ upgrade path that delivers higher-fidelity span alignment.
 
 ## Architectural Overview
 
@@ -18,7 +18,7 @@ flowchart LR
     Pipeline -->|OTLP| Telemetry
 ```
 
-zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python pipeline service (FastAPI). The Python service exists because the chosen graph framework — `graphiti-core` — is Python-only and because the planned P1+ extraction stage (`LangExtract`) is also Python-only. The split is a deliberate trade-off (see [Why a two-service architecture](#why-a-two-service-architecture) below).
+zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python pipeline service (FastAPI). The Python service exists because the chosen graph framework — `graphiti-core` — and the source-grounding co-extractor — `langextract` — are both Python-only. The split is a deliberate trade-off (see [Why a two-service architecture](#why-a-two-service-architecture) below).
 
 ## Frontend
 
@@ -49,18 +49,19 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 
 **Rejected**: Chakra UI, Mantine — opinionated theming systems fight an Obsidian-style look.
 
-### Graph Visualization: `react-force-graph` (WebGL) with Cytoscape.js Fallback
+### Graph Visualization: Sigma.js + Graphology
 
-**Choice**: `react-force-graph` (WebGL backend via `three.js`) for the primary graph view; Cytoscape.js as a fallback for small graphs and accessibility-mode rendering.
+**Choice**: **Sigma.js v3** (WebGL) as the renderer, **Graphology** as the in-memory graph model, **`graphology-layout-forceatlas2`** (Web Worker variant when motion is allowed) for layout, **`graphology-communities-louvain`** for topology-based community detection, and **`graphology-metrics`** for degree / centrality. React integration via **`@react-sigma/core`**. An accessible-list fallback (`Accessible list` toggle) renders the graph as a sortable table for screen readers — see [uiux.md](uiux.md) Graph section.
 
 **Why**:
 
-- `react-force-graph` handles 5k+ nodes at 60fps via WebGL (meets NFR-4).
-- Cytoscape.js gives us a DOM-rendered fallback that screen readers and accessibility tools can interrogate.
+- Sigma's reducer-based node/edge styling is exactly the right primitive for hover emphasis (dim non-incident nodes), hub-only labels, and density-aware edge alpha — all of which we ship.
+- Graphology's ecosystem covers our two graph-data needs in one package family: ForceAtlas2 for layout and **Louvain** for the colour-by-cluster fallback we use when entity types collapse to a single value.
+- Sigma handles 5k+ nodes at 60 fps via WebGL (meets NFR-4).
 
 **Rejected**:
 
-- **Sigma.js**: similar performance profile but less ergonomic React integration.
+- **`react-force-graph` + Cytoscape.js fallback** (prior P0 choice): Sigma's reducer model proved meaningfully simpler for the Sprint 5c hover-emphasis / hub-label / density-edge work than `react-force-graph`'s callback-only API, and a single accessible-list HTML fallback replaced the need for a parallel Cytoscape renderer.
 - **D3 from scratch**: too much custom code for layout and gestures.
 
 ### State and Data Fetching
@@ -69,13 +70,13 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 
 - **TanStack Query** for client-side cache of REST data.
 - **Zustand** for ephemeral UI state (current selection, panel layout).
-- **SSE (Server-Sent Events)** for streaming job status from the pipeline service through the web tier.
+- **SSE (Server-Sent Events)** for streaming job status from the pipeline service through the web tier. The pipeline writes every event to a **Redis Stream** in addition to a pub/sub channel; the SSE endpoint replays the stream (`XRANGE` of the last ~200 entries) on connect so late subscribers see recent history (Sprint 5b).
 
 **Why**:
 
 - TanStack Query handles optimistic updates and background refetch for note editing flows.
 - Zustand is small enough to stay out of the way for purely UI state.
-- SSE is simpler than WebSockets for our one-way progress stream and survives most proxies.
+- SSE is simpler than WebSockets for our one-way progress stream and survives most proxies; the Redis Stream replay closes the only gap (late subscribers missing history) that pure pub/sub would have.
 
 ### Forms and Validation
 
@@ -116,7 +117,7 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 
 **Why**:
 
-- `graphiti-core` is Python; the official Cohere Python SDK and the planned `LangExtract` (P1+) are also Python. Reimplementing any of them in Node is not feasible.
+- `graphiti-core` is Python; the official Cohere Python SDK and `langextract` are also Python. Reimplementing any of them in Node is not feasible.
 - FastAPI's async model fits our concurrent LLM call patterns and gives us OpenAPI for free, which the web tier consumes as a typed client.
 - Python ecosystem advantage for PDF parsing, NLP utilities, and OpenTelemetry instrumentation.
 
@@ -169,27 +170,72 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 
 ### Entity/Relationship Extraction
 
-**Choice (P0)**: Use **Graphiti's built-in extraction** driven by **Cohere Command** models via Cohere's OpenAI-compatible endpoint. Atomic-note generation and entity/relationship extraction both run through Graphiti's structured-output pipeline with Cohere as the underlying LLM.
+**Choice (P0)**: A two-pass extraction pipeline, both backed by Cohere.
 
-**Choice (P1+)**: Add **Google LangExtract** (Gemini-grounded) as an opt-in, higher-fidelity extraction stage for workspaces configured with a Gemini provider. LangExtract's span-grounded outputs map cleanly to Graphiti episode provenance.
+1. **Graphiti typed extraction** (primary): each episode (PDF chunk or atomic note) is fed to `graphiti.add_episode(..., entity_types=…, edge_types=…, edge_type_map=…, custom_extraction_instructions=…)`. The entity and edge taxonomies are 10 Pydantic models in `apps/pipeline/app/entity_schemas.py` (`Person`, `Organization`, `Location`, `Document`, `Standard`, `Equipment`, `Process`, `Material`, `Event`, `Concept`) and 8 edge models (`WORKS_FOR`, `LOCATED_IN`, `PUBLISHED`, `CITES`, `MANAGES`, `INSPECTS`, `MITIGATES`, `RELATES_TO`). Each model carries **at least one required field** so the JSON schema Pydantic emits satisfies Cohere's OpenAI-compat `response_format` validator (BUG-010). `EDGE_TYPE_MAP` constrains which edge types are even considered between a given `(subject_type, object_type)` pair to sharpen edge-type precision.
+2. **LangExtract co-extractor** (Sprint 5c): runs alongside Graphiti on the same episode body via LangExtract's `OpenAILanguageModel` provider, pointed at Cohere's `https://api.cohere.com/compatibility/v1` endpoint. Returns character-offset spans with verbatim quotes, which we fuzzy-match to Graphiti's typed entities by `(normalized_name, type)` and persist as `entity_evidence` rows. Powers the "View in document" evidence UX. `use_schema_constraints=False` to avoid the same `json_schema` quirk that motivated BUG-010.
+
+**Choice (P1+)**: Switch LangExtract to its native **Gemini** backend (better span alignment and lower cost on long PDFs) once a Gemini provider is configured per workspace. The two-pass shape stays the same.
 
 **Why**:
 
-- Cohere Command R/R+ supports JSON-mode structured outputs and tool calls via the OpenAI compatibility layer, which is the minimum Graphiti requires.
-- Keeping P0 on a single provider (Cohere) eliminates a class of integration risk and matches the user's existing production API key.
-- LangExtract remains attractive long-term because it grounds extractions to source text spans, but it is Gemini-specific and is therefore deferred to the phase that adds Gemini support.
+- Cohere Command supports JSON-mode structured outputs and tool calls via the OpenAI compatibility layer, which is the minimum Graphiti requires.
+- Keeping P0 on a single provider (Cohere) eliminates a class of integration risk and matches the user's existing production API key. LangExtract's OpenAI-compat path lets us ship the evidence feature now without taking on Gemini as a P0 dependency.
+- LangExtract span grounding is the highest-value provenance affordance in the product — "show me the PDF passage that produced this entity" — and is worth the second Cohere call per episode.
 
 **Rejected**:
 
 - **LLM-only extraction without a framework**: high prompt-engineering surface, brittle structured outputs.
 - **spaCy-based NER alone**: misses relationship-level extraction and the rich, typed ontology we need.
-- **Adopting LangExtract in P0**: would force Gemini as a second mandatory provider before P0 even ships.
+- **Deferring LangExtract to P1+** (prior plan): the char-offset evidence is too valuable for the product story and is decoupled enough from the LLM that running it on Cohere in P0 carries low integration risk.
 
 ### Async Job Runner
 
 **Choice**: **Arq** (Redis-backed) for async jobs (ingestion, persistence). The same Redis instance backs Arq and is required by FalkorDB, keeping operational surface small.
 
 **Why**: Arq is small, async-native, and integrates with FastAPI's lifespan. Celery is heavier and synchronous-first.
+
+**Per-stage job timeouts**: arq's 300s default is too tight for `extract_graph` once Graphiti starts retrying edge-timestamp extraction. The worker pins per-function timeouts via `arq.worker.func(..., timeout=...)`:
+
+| Stage | Timeout | Rationale |
+|---|---|---|
+| `parse_document` | 600s | PyMuPDF + chunking; rarely > 30s in practice |
+| `generate_atomic_notes` | 1200s | Cohere streaming + fallback non-streaming retry |
+| `extract_graph` | 2400s | Per-episode Graphiti loop + edge-timestamp retries |
+
+`_classify_cancel_reason(stage, elapsed_s)` distinguishes `cancelled_by_job_timeout` from `cancelled_by_worker_shutdown` so the operator-facing `failure_reason` is accurate (BUG-006).
+
+**Stage-suffixed dedup keys**: chained `enqueue_job` calls use `_job_id=f"{job_id}:parse"` / `:notes` / `:graph` to avoid arq's silent dedup-skip when the same job_id is reused across stages (BUG-001). The wrapper raises `RuntimeError` if `enqueue_job` returns `None` so any future regression is loud, not silent.
+
+### Pipeline Observability (Sprint 5b)
+
+The streaming pipeline-log drawer is backed by three fan-out channels for every event the worker emits:
+
+1. **Redis pub/sub** (`zkast:jobs:<jobId>`) — drives the live SSE tail.
+2. **Redis Stream** (`zkast:jobs:<jobId>:log`, capped at `MAXLEN ~ 1000`) — enables `XRANGE` replay so late SSE subscribers see history.
+3. **Postgres `ingestion_run_logs`** — durable post-mortem store; backs `GET .../ingestion-runs/{id}/logs` and the Diagnostics page. Metric events (numeric counters) are intentionally **not** persisted here to keep the table cheap.
+
+`record_log(level, stage, message, data?)` and `record_metric(name, value, stage, data?)` are the two helpers in `apps/pipeline/app/job_redis.py` that every task uses. Job hashes (`zkast:job:<id>`) carry a **7-day NX EXPIRE** so the queue Redis doesn't accumulate forever (TD-006). `POST /admin/cleanup-stale-job-hashes` provides a manual sweep that only touches terminal-status hashes (never live jobs — BUG-005).
+
+**Heartbeat-based reconciler**: each task wraps its work in a `_Heartbeat` async context that writes `ingestion_runs.last_heartbeat_at = now()` every 10s. A worker-side cron (`reconcile_stuck_documents`, fires once per minute via `cron(second=0)`) flips any document whose run is `running` but whose heartbeat is older than 90s to `failed` with reason `worker_crashed_during_<stage>`. Together with explicit `asyncio.CancelledError` handlers in every task (BUG-003), this eliminates the "stuck on Generating Notes" zombie state for good.
+
+### Notes Synthesis Robustness (Sprint 5b/5c)
+
+`apps/pipeline/app/notes_llm.py` calls Cohere's chat completions API with `response_format={"type":"json_object"}`. Two failure modes shipped in P0:
+
+- **Streaming with empty buffer** — Cohere's stream occasionally completes with zero content chunks (BUG-009). On detection, the wrapper transparently retries the same prompt with `stream=False` and emits a `warning`-level log event (`Notes LLM stream returned no content; retrying with stream=False`) into the drawer so the user sees "the system is recovering" rather than "the system is stuck." `pipeline_settings.notes_llm_streaming = false` disables streaming workspace-wide if Cohere's stream becomes chronically unreliable on a given model.
+- **Unparseable JSON** — same fallback path; emits an `unparseable_stream` warning.
+
+If both paths produce an empty body the wrapper raises `RuntimeError("Cohere returned an empty notes response; check API key, quota, or model name.")` so the user-facing `failure_reason` is actionable (BUG-008's `_describe_exception` helper guarantees the message is never blank).
+
+### Cohere Transient Retry Helper (Sprint 5b/5c)
+
+`apps/pipeline/app/cohere_adapters._post_json_with_retry` wraps every `CohereEmbedder` and `CohereCrossEncoder` HTTP POST with 3-attempt exponential backoff (1s → 2s → 4s, ±25% jitter). Retries:
+
+- `httpx.ConnectError / ConnectTimeout / ReadTimeout / WriteTimeout / PoolTimeout / RemoteProtocolError`
+- HTTP 5xx and 429
+
+4xx other than 429 bubbles immediately (no point retrying a permanent client error). `extract_graph`'s per-episode `asyncio.gather(..., return_exceptions=True)` adds the second resilience layer so one failed episode no longer aborts the whole batch (BUG-008).
 
 ### LLM Provider Support
 
@@ -222,7 +268,7 @@ Per-workspace settings choose distinct **small** and **large** models so users c
 
 **Choice**: Use **Cohere Chat** with Cohere's native **document-grounding** mechanism. Each user turn flows through:
 
-1. **Retrieval** — Graphiti's `search()` hybrid retrieval (semantic embedding + BM25 keyword + graph traversal) over the workspace's working graph, optionally restricted to a session scope or pinned `GraphSnapshot`. **Cohere Rerank v3** re-orders the candidate set; the top-K survivors become grounding documents.
+1. **Retrieval** — Graphiti's `search()` hybrid retrieval (semantic embedding + BM25 keyword + graph traversal) over the workspace's working graph, optionally restricted to a session scope or pinned `GraphSnapshot`. **Cohere Rerank v4** (`rerank-v4.0-fast` by default) re-orders the candidate set; the top-K survivors become grounding documents.
 2. **Document assembly** — Each retrieved item (atomic note, entity summary, relationship fact, episode chunk) is rendered into a compact text "document" with stable identifiers. A `RetrievalRecord` is persisted with these documents verbatim before the LLM call.
 3. **Generation** — A streaming Cohere Chat call is made with the assembled documents passed via the chat API's documents parameter and grounded mode enabled. The user's question becomes the chat message; prior session messages provide conversation history.
 4. **Citation mapping** — Cohere's response contains text spans and per-span citations identifying which documents grounded which spans. The pipeline service translates Cohere's document identifiers back into zkast source ids (note / entity / relationship / episode + optional page range) and persists them as `ChatCitation` rows.

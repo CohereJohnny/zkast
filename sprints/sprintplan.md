@@ -37,7 +37,8 @@ flowchart LR
     S5 --> S5b[Sprint 5b Observability]
     S5b --> S5c[Sprint 5c Typed KG + Filter UX]
     S5c --> S6[Sprint 6 Chat Core]
-    S6 --> S7[Sprint 7 Chat UX Persist]
+    S6 --> S6b[Sprint 6b GraphRAG vs RAG eval]
+    S6b --> S7[Sprint 7 Chat UX Persist]
     S7 --> S8[Sprint 8 Polish Release]
 ```
 
@@ -51,8 +52,9 @@ flowchart LR
 | 4 | [sprint_4/](sprint_4/sprint_4_tasks.md) | Atomic notes, entities/relationships, Notes UI, re-ingest/delete (**closed 2026-05-12** — [report](sprint_4/sprint_4_report.md)) | FR-5–FR-15, US-1.4–US-1.5, US-2.x |
 | 5 | [sprint_5/](sprint_5/sprint_5_tasks.md) | Graph viz (`react-force-graph`), filters, provenance, merge/split, snapshots | FR-16–FR-22, US-2.3–US-2.4, US-3.x |
 | 5b | [sprint_5b/](sprint_5b/sprint_5b_tasks.md) | Ingestion observability, heartbeat reconciler, streaming log drawer, merge undo, hidden-attribute filter, snapshot review, diagnostics page | TD-001–TD-009, BUG-001–BUG-009 |
-| 5c | [sprint_5c/](sprint_5c/sprint_5c_tasks.md) | Typed Graphiti extraction, LangExtract evidence (char-offset quotes), graph filter UX (no UUIDs) | FR-16, FR-18 (typed types), US-2.4 evidence panel, TD-010 follow-up |
-| 6 | [sprint_6/](sprint_6/sprint_6_tasks.md) | Chat data model, retrieval, Cohere grounded chat, SSE stream, refusal | FR-35–FR-39, FR-41, FR-45, US-8.1–US-8.2, US-8.4, US-8.8–US-8.9 |
+| 5c | [sprint_5c/](sprint_5c/sprint_5c_tasks.md) | Typed Graphiti extraction, LangExtract evidence (char-offset quotes), graph filter UX (no UUIDs) | FR-16, FR-18 (typed types), US-2.7 evidence, US-3.2 pickers, US-3.7 taxonomy, TD-010 follow-up |
+| 6 | [sprint_6/](sprint_6/sprint_6_tasks.md) | Chat data model, retrieval, Cohere v2 grounded chat with documents + citations, SSE streaming with 7 event types, refusal, cooperative stop (**implemented on branch `sprints/sprint-6`** — [report](sprint_6/sprint_6_report.md)) | FR-35–FR-39, FR-41, FR-45, US-8.1–US-8.2, US-8.4, US-8.8–US-8.9 |
+| 6b | _planned_ | GraphRAG vs regular RAG evaluation harness: hidden `retrieval_mode` toggle per session, canned question set, retrieval recall/precision + answer-citation overlap metrics | Eval methodology; follows Sprint 6 chat foundation |
 | 7 | [sprint_7/](sprint_7/sprint_7_tasks.md) | Chat Home/Drawer/View, citations UX, targets, persistence writer | FR-23–FR-28, US-4.x, US-8.3, US-8.5–US-8.7 |
 | 8 | [sprint_8/](sprint_8/sprint_8_tasks.md) | Cancel jobs, command palette, a11y pass, perf budgets, Docker hardening, v0.1.0 | NFR-4–NFR-11, US-7.x, [uiux.md](../specs/uiux.md) checklist |
 

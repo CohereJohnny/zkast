@@ -22,19 +22,24 @@ erDiagram
     Workspace ||--o{ CustomType : defines
     Workspace ||--o{ AuditLogEntry : produces
     Workspace ||--o{ ChatSession : hosts
+    Workspace ||--o{ MergeAuditLog : records
 
     Document ||--o{ IngestionRun : has
     IngestionRun ||--o{ Episode : produces
+    IngestionRun ||--o{ IngestionRunLog : emits
     Episode ||--o{ AtomicNote : grounds
     AtomicNote ||--o{ NoteLink : sources
     AtomicNote ||--o{ NoteLink : targets
     AtomicNote }o--o{ Entity : mentions
     Entity ||--o{ Relationship : sourceOf
     Entity ||--o{ Relationship : targetOf
+    Entity ||--o{ EntityEvidence : groundedBy
+    Document ||--o{ EntityEvidence : referencedIn
     Episode ||--o{ Entity : produces
     Episode ||--o{ Relationship : produces
 
     GraphSnapshot ||--o{ PersistenceJob : drives
+    GraphSnapshot ||--o{ SnapshotReview : reviewedBy
     ExternalGraphTarget ||--o{ PersistenceJob : receives
     GraphSnapshot ||--o{ ChatSession : pinsOptionally
 
@@ -163,8 +168,33 @@ erDiagram
 - `status` (enum: `running`, `succeeded`, `failed`, `cancelled`).
 - `pipeline_version` (string): Code version that produced this run.
 - `llm_provider`, `llm_model_small`, `llm_model_large` (strings): Captured at start; immutable after.
-- `stats` (structured: chunk count, note count, entity count, edge count).
+- `stats` (structured: chunk count, note count, entity count, edge count, evidence_spans_linked).
 - `trace_id` (string, nullable): OpenTelemetry trace identifier for diagnostics.
+- `last_heartbeat_at` (timestamp, nullable): Updated every ~10s by the worker while the run is alive. Drives the worker-crash reconciler: an `IngestionRun` in `running` status whose heartbeat is older than ~90s is flipped to `failed` by a cron sweep.
+
+### IngestionRunLog
+
+**Purpose**: An append-only, durable timeline of structured events emitted by the pipeline for a given `IngestionRun`. Powers post-mortem diagnostics, the Settings → Diagnostics page, and is the persistent backing store behind the live pipeline-log drawer's `record_log` event channel. Metric events (entity count, token count, etc.) are streamed only and are intentionally **not** persisted here to keep the table cheap.
+
+**Fields**:
+
+- `id` (UUID, PK).
+- `ingestion_run_id` (FK -> IngestionRun, cascade delete).
+- `ts` (timestamp): When the log line was produced.
+- `level` (enum: `info`, `warning`, `error`).
+- `stage` (enum: `parsing`, `generating_notes`, `extracting_graph`, `building_graph`): Pipeline stage that produced the line.
+- `message` (string, ≤ 2,000 chars): Human-readable line.
+- `data` (structured map, nullable): Optional structured payload (e.g., `{"episode_index": 7, "delta_entities": 3}`).
+
+**Constraints**:
+
+- Append-only; no UPDATE or DELETE except via cascade.
+- Retention: cleared when the parent `IngestionRun` is deleted (cascade); kept indefinitely otherwise.
+
+**Indexes**:
+
+- `(ingestion_run_id, ts desc)` for the per-run timeline.
+- `(level, ts desc)` for error-only filters in Diagnostics.
 
 ### Episode
 
@@ -296,6 +326,35 @@ erDiagram
 - `(workspace_id, source_entity_id, type)`.
 - `(workspace_id, target_entity_id, type)`.
 - `(workspace_id, valid_from, valid_to)` for temporal queries.
+
+### EntityEvidence
+
+**Purpose**: A character-offset span linking an `Entity` back to a specific passage in the source PDF that produced it. Co-extracted by LangExtract alongside Graphiti's typed extraction; surfaced in the entity detail panel as quoted snippets with a "View in document" jump. Provides the audit trail behind every entity in the graph — distinct from the looser `source_episode_ids` / `source_note_ids` lists, which only identify the originating chunks.
+
+**Fields**:
+
+- `id` (UUID, PK).
+- `workspace_id` (FK -> Workspace, cascade delete).
+- `entity_id` (FK -> Entity, cascade delete).
+- `document_id` (FK -> Document, cascade delete).
+- `episode_id` (FK -> Episode, nullable, cascade delete).
+- `page` (integer): 1-based page number where the span starts.
+- `char_start`, `char_end` (integers): Character offsets within the episode body where the verbatim span lies.
+- `quote` (string, ≤ 600 chars): The verbatim snippet shown in the UI as a blockquote.
+- `method` (string, default `langextract`): Reserved for future extractors (e.g., `gliner`, `rebel`).
+- `attributes` (structured map): Optional typed attributes the extractor surfaced for this span (e.g., `{"identifier": "MRP-227"}` for a Standard).
+- `created_at` (timestamp).
+
+**Constraints**:
+
+- `char_end >= char_start`.
+- Cascade-delete with `entity_id`, `document_id`, and `episode_id` — when any of those go, the evidence row is meaningless and removed.
+
+**Indexes**:
+
+- `(entity_id, created_at desc)` for the per-entity evidence list in the detail panel.
+- `(document_id, page)` for "evidence on page N of document X".
+- `(workspace_id)` for cascade scoping.
 
 ### CustomType
 
@@ -528,19 +587,55 @@ erDiagram
 
 ## Review, Audit, and Operations
 
-### Review
+### SnapshotReview
 
-**Purpose**: A user action that marks a GraphSnapshot as reviewed/approved for persistence. Optional but recorded when used.
+**Purpose**: A user action that records a review decision for a `GraphSnapshot`. Persistence to an external graph DB is gated on an `approved` decision (configurable per workspace). Decisions are persisted (one per `(snapshot_id, reviewer_user_id)` pair, latest wins via `updated_at`); regenerating a snapshot does not erase its review history.
 
 **Fields**:
 
 - `id` (UUID, PK).
-- `workspace_id` (FK -> Workspace).
-- `snapshot_id` (FK -> GraphSnapshot).
+- `workspace_id` (FK -> Workspace, cascade delete).
+- `snapshot_id` (FK -> GraphSnapshot, cascade delete).
 - `reviewer_user_id` (FK -> User, nullable).
-- `decision` (enum: `approved`, `rejected`).
-- `notes` (string, ≤ 2,000 chars, nullable).
-- `created_at`.
+- `status` (enum: `approved`, `rejected`, `needs_changes`): The current decision. `needs_changes` denotes a soft block — the reviewer wants edits before approval, but the snapshot is not flat-out rejected.
+- `rationale` (string, ≤ 2,000 chars, nullable): Free-text justification shown next to the badge.
+- `created_at`, `updated_at`.
+
+**Constraints**:
+
+- `(snapshot_id, reviewer_user_id)` is unique; re-reviewing updates the existing row.
+- Status transitions are unrestricted — a reviewer may flip from `rejected` to `approved` and back as the snapshot evolves between iterations.
+
+**Indexes**:
+
+- `(snapshot_id, updated_at desc)` for the latest-decision lookup.
+
+### MergeAuditLog
+
+**Purpose**: Captures pre-merge state for `Entity` and `AtomicNote` merges so the operation can be reversed long after the user-session that performed it. Powers the "Full undo" affordance in the merge dialogs and the `POST .../unmerge` API.
+
+**Fields**:
+
+- `id` (UUID, PK).
+- `workspace_id` (FK -> Workspace, cascade delete).
+- `kind` (enum: `entity`, `note`): Which canonical merge produced this audit row.
+- `survivor_id` (UUID): `Entity.id` or `AtomicNote.id` of the survivor.
+- `victim_payload` (structured map): Full pre-merge serialized victim row (canonical_name, summary, properties, aliases, tags, …) sufficient to reconstruct it.
+- `survivor_pre_merge` (structured map): Survivor's mutable fields *before* the merge applied any survivor-overwrite choices, so a "revert survivor fields" undo is possible without a full unmerge.
+- `incident_relationships` (structured map, nullable): For entity merges, the list of relationships whose endpoints were rewritten from victim to survivor — recorded so unmerge can restore them to the victim.
+- `victim_provenance` (structured map, nullable): The `source_episode_ids` / `source_note_ids` / `entity_episodes` / `entity_notes` rows that pointed at the victim — restored on unmerge.
+- `created_at` (timestamp).
+- `undone_at` (timestamp, nullable): When an unmerge consumed this audit row. Audit rows are never deleted, only marked undone.
+
+**Constraints**:
+
+- Append-only; `undone_at` is the only field ever updated post-insert.
+- A survivor with an `undone_at IS NULL` audit row is eligible for "Full undo" in the UI.
+
+**Indexes**:
+
+- `(workspace_id, kind, survivor_id, created_at desc)` for the per-survivor undo lookup.
+- `(undone_at)` partial index for audit / reporting.
 
 ### AuditLogEntry
 
@@ -663,9 +758,9 @@ If the connected user lacks permission to create these, persistence reports the 
 
 - **Soft-delete vs hard-delete**: Documents, Notes, Entities, and Relationships are hard-deleted from the working store on user request. Their provenance traces in audit logs remain.
 - **Cascade rules**:
-  - Deleting a Workspace deletes all Documents, Notes, Episodes, Entities, Relationships, Snapshots, Targets, ApiKeys, and AuditLogEntries within it. (Operator-level destructive operation; requires confirmation.)
-  - Deleting a Document optionally cascades to Episodes and notes/entities/edges whose only provenance was that document (user choice per US-1.5).
-  - Deleting an Entity does not delete relationships; relationships pointing to it are marked broken and surfaced in the UI.
+  - Deleting a Workspace deletes all Documents, Notes, Episodes, Entities, Relationships, Snapshots, Targets, ApiKeys, IngestionRunLogs, EntityEvidence, MergeAuditLog rows, SnapshotReviews, and AuditLogEntries within it. (Operator-level destructive operation; requires confirmation.)
+  - Deleting a Document deletes its Episodes (cascade). Notes, Entities, and Relationships whose **only** provenance was the deleted document are then swept by a follow-up orphan-cleanup job that runs at the end of the delete flow. The sweep deliberately preserves any row with `is_user_edited = true` and any Relationship with `origin = manual`, so user-curated graph state survives source removal.
+  - Deleting an Entity does not delete relationships; relationships pointing to it are marked broken and surfaced in the UI. EntityEvidence rows cascade with the Entity.
 - **Retention of snapshots**: Snapshots are retained indefinitely until the user deletes them. Persisted external data is never touched by snapshot deletion.
 
 ## Validation Rules

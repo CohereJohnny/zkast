@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 
 import { ChatDrawerSlot } from "@/components/chat-drawer-slot";
-import { JobLogConsole } from "@/components/job-log-console";
 import { LeftRail } from "@/components/left-rail";
 import { WorkspaceMainGrid } from "@/components/workspace-main-grid";
 import { JobEventsProvider } from "@/lib/job-events";
@@ -23,7 +22,6 @@ export async function WorkspaceShell({
           <WorkspaceMainGrid workspaceId={workspaceId}>{children}</WorkspaceMainGrid>
         </div>
         <ChatDrawerSlot />
-        <JobLogConsole />
       </div>
     </JobEventsProvider>
   );

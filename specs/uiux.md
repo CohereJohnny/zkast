@@ -28,6 +28,7 @@ flowchart TD
     Settings --> Members[Members & Roles]
     Settings --> Keys[API Keys]
     Settings --> Audit[Audit Log]
+    Settings --> Diagnostics[Diagnostics]
     Snapshots --> Persistence[Persistence Job Detail]
     Documents --> DocumentDetail[Document Detail]
     Notes --> NoteDetail[Note Detail]
@@ -160,25 +161,62 @@ The graph view is the centerpiece. It exists as both the **Graph Panel** (in the
 
 ### Display Elements
 
-- **Canvas**: WebGL-rendered force-directed graph filling the available space. Pan (drag), zoom (wheel/pinch), select (click), multi-select (shift-click or marquee).
-- **Mini-map** in the corner showing the entire graph with the current viewport rectangle.
-- **Legend** (collapsible): entity types and edge types with color/shape, with a toggle next to each to show/hide.
-- **Filter bar** (top): chips for active filters (entity types, edge types, tags, document, time range). Filters can be saved as named "lenses" per user.
+- **Canvas**: WebGL-rendered force-directed graph (Sigma.js v3 + Graphology + ForceAtlas2 Web Worker) filling the available space. Pan (drag), zoom (wheel/pinch), select (click), multi-select (shift-click or marquee). A subtle radial gradient background (`#0b1224 → #020617`) gives the canvas depth.
+- **Cluster legend** (bottom-left, sticky): one row per visible entity type or community with a colored swatch, label, and count. The legend auto-switches between two modes (Sprint 5c):
+  - **Type mode** (default when the graph contains ≥ 2 distinct entity types): each row is an entity type from the Pydantic taxonomy (`Person`, `Organization`, `Standard`, `Equipment`, …).
+  - **Cluster mode** (fallback when typed extraction collapses to a single value): Louvain community detection partitions the graph by topology and assigns each community a distinct hue. Each row is labelled with the highest-degree node in that community as a human-readable hint (e.g., "Reactor Coolant System Materials Degradation"), not "Cluster 3".
+- **Zoom controls** (top-right, sticky): three buttons — zoom in, zoom out, reset view — animated 200–250 ms via Sigma's `animatedZoom` / `animatedUnzoom` / `animatedReset`.
+- **Filter bar** (top): four searchable pickers replace the prior free-form chip inputs (Sprint 5c) — see [Graph Filter Bar](#graph-filter-bar) below.
 - **Time slider** (optional): a horizontal slider showing relationships' validity windows. Dragging it moves "now" backward or forward and re-renders only edges valid at that instant.
 - **Search bar**: hybrid semantic+keyword search that animates the viewport to the top result and highlights it.
-- **Selection panel** (right edge, slides in): properties of the selected node or edge, full provenance (source notes and documents), and inline actions (rename, merge, edit edge, mark reviewed).
+- **Selection panel** (right edge, slides in): properties of the selected node or edge, full provenance (source notes and documents), the **Evidence** section (Sprint 5c — see [Entity Selection Panel](#entity-selection-panel)), incident relationships, and inline actions (rename, merge with full undo, edit edge, mark reviewed).
 - **Status footer**: node count, edge count, current filter summary, frame rate (in dev/debug mode).
+
+### Visual Encoding (Sprint 5c)
+
+- **Node color**: from the legend mode (type palette or Louvain community palette). 12 perceptually-distinct hues from the Tailwind 400 stop.
+- **Node size**: scales by degree — `clamp(2.5, 2.5 + √degree × scale, 20)` — so hubs are visually prominent and leaves shrink out of the way. Outlines are 0.5 px `#020617` so colored fills retain their edge against the canvas background.
+- **Hub-only labels at base zoom**: only the top ~12% of nodes by degree show their label at default zoom (capped between 12 and 40 labels). Full labels for the rest are stored in a `fullLabel` shadow attribute and revealed on hover or as the user zooms in. Eliminates the "text salad" problem on dense 200+ node graphs.
+- **Density-aware edge alpha**: an edge's transparency scales with the minimum degree of its endpoints. Periphery-periphery edges paint at ~55% alpha (clearly visible); hub-hub edges fade to ~12% so cluster cores don't paint a solid mat. Edge color is a slate stroke (`rgba(148, 163, 184, α)`); edge labels are off at base zoom and surface on hover.
+- **Hover emphasis**: on `enterNode`, all non-incident nodes/edges dim to ~15% alpha; the hovered node + its 1-hop neighborhood stays at full saturation; incident edges flash accent teal (`rgba(20, 184, 166, 0.85)`); the hovered subgraph's labels are forced on regardless of zoom. Implemented via Sigma's node/edge reducers with a pre-computed neighbor `Set` for O(1) per-frame cost.
+- **Initial layout**: nodes are seeded onto per-community concentric rings around a central wheel before ForceAtlas2 runs. Settings: `linLogMode`, `adjustSizes`, `gravity 0.08`, `scalingRatio 20`, `barnesHutOptimize`. Runs up to 8 seconds for graphs up to 3000 nodes; reduced-motion users get a synchronous, non-animated pass.
+
+### Graph Filter Bar
+
+> Sprint 5c — implemented. The four free-form UUID/CSV inputs from earlier sprints are replaced by ARIA-compliant pickers that load from real data. Underlying query-string contract is preserved (`document_id`, `tag`, `entity_types`, `edge_types`, `seed_entity_ids` — comma-separated CSV).
+
+- **View** — single-select dropdown: `Overview` | `Subgraph`.
+- **Seed entities (subgraph)** — `EntityTypeahead` multi-select. Type → debounced search via `GET /workspaces/{ws}/graph/entities/search-typeahead?q=`. Selected items render as chips showing name + type; the underlying value is a comma-separated UUID list. Backspace on an empty input removes the last chip. A metadata cache lets deep-linked chips render with name + type even on a fresh page load.
+- **Document** — `DocumentPicker` combobox over the workspace's ready documents (filename + page count). One selection; clearable.
+- **Tag** — `TagPicker` combobox over distinct `atomic_notes.tags`. Free-text fallback so the user can type a tag not yet in the vocabulary (useful when filtering before ingestion completes).
+- **Entity types** — `TypeMultiselect` chip group; options come from `GET /workspaces/{ws}/graph/types` with their counts shown beside each chip.
+- **Edge types** — same component, `kind="edge_types"`.
+
+All four components follow the ARIA combobox pattern (text input + listbox + selected-options region) with keyboard nav (↑/↓/Enter/Esc). Chips have visible focus rings. A "Clean orphan rows" affordance lives to the right of the bar; it confirms via the `useConfirm` provider and reports results via `useToast`.
 
 ### Interactions
 
 - **Single-click** a node: select and open the selection panel.
 - **Double-click** a node: focus the graph on its neighborhood (zoom + soft-fade the rest).
 - **Right-click** a node: context menu (rename, merge with…, delete, view source notes, expand neighbors, **Ask about this**).
-- **Hover** a node: tooltip with name, type, summary first sentence.
+- **Hover** a node: hover-emphasis effect described above plus a tooltip with name, type, summary first sentence.
 - **Drag** a node: temporarily pin it; click empty space to release.
 - **Drag** between two nodes (modifier key held): start a "Connect" interaction; pick an edge type from a flyout.
 - **Marquee selection**: select multiple nodes; bulk actions appear (merge cluster, set type, tag, delete).
 - **Keyboard**: arrow keys to walk between connected nodes; `/` focuses search; `?` shows shortcuts.
+
+### Entity Selection Panel
+
+The selection panel that slides in from the right contains, in order:
+
+- **Header**: entity name + type badge, edited indicator, close button.
+- **Summary**: LLM-maintained one-paragraph description.
+- **Aliases**: if any.
+- **Evidence** (Sprint 5c): up to 10 `entity_evidence` rows. Each row shows the document filename + page number, a blockquote of the verbatim PDF passage that produced the entity, and a "View in document" link that navigates to `/documents/<id>?page=N&highlight=<offset>`. A "N more evidence rows" affordance pages the rest in. Empty state guides the user to re-ingest with LangExtract enabled if the entity predates Sprint 5c.
+- **Source notes** and **Source documents / pages**: the looser provenance lists (note titles and document/page refs).
+- **Neighbors**: 1-hop neighborhood summary with type chips.
+- **Relationships popover** (`GraphEdgePopover`): list incident edges, create new manual edges, edit edge `type` / `fact` / `valid_from`, or end a relationship by setting `valid_to`.
+- **Footer actions**: "Merge with another entity…" opens the merge dialog (see [Merge Flow with Persisted Undo](#merge-flow-with-persisted-undo)).
 
 ### Accessibility Mode for the Graph
 
@@ -277,7 +315,7 @@ The chat surface lets the user ask natural-language questions of the workspace's
 
 **Display elements**:
 
-- List of snapshots with name, date, creator, stats (entities, edges, notes), review state badge (none, approved, rejected), and any active persistence jobs.
+- List of snapshots with name, date, creator, stats (entities, edges, notes), review state badge (`none` | `approved` | `rejected` | `needs_changes`), and any active persistence jobs. The `needs_changes` badge is a soft block — distinct from `rejected` — and signals that the reviewer wants edits before approval. See [datamodel.md](datamodel.md) `SnapshotReview`.
 - Action: "Create snapshot from current graph" prominently at the top, opens a modal asking for name and optional description.
 - Action per snapshot: View, Review, Persist, Delete.
 
@@ -288,7 +326,7 @@ The chat surface lets the user ask natural-language questions of the workspace's
 **Display elements**:
 
 - Header with name, description, stats, creator, created_at.
-- "Review" panel: approve/reject with optional notes; shows existing reviews.
+- "Review" panel: three-state decision (`Approve` / `Reject` / `Needs changes`) with optional rationale (≤ 2000 chars); shows existing reviews and history. Re-submitting overwrites the per-reviewer row (single-row-per-reviewer-per-snapshot). Persistence is gated on an `approved` decision per workspace settings; `needs_changes` is treated the same as no decision for gating purposes.
 - "Persist" panel: target selector, write mode (`upsert` default, `replace` requires confirmation), include-provenance toggle, "Dry run" button.
 - **Dry-run result**: counts of nodes/edges that will be added, updated, deleted; a sampled preview of each category; `replace` mode is locked until a dry run has been viewed.
 - Persistence job history for this snapshot.
@@ -339,6 +377,20 @@ The chat surface lets the user ask natural-language questions of the workspace's
 - Table view with timestamp, actor, action, subject, brief metadata.
 - Each row expandable to show structured metadata (with secrets redacted).
 - Export to CSV.
+
+### Diagnostics (Sprint 5b)
+
+> Owner-only. Route: `/settings/diagnostics`. Powered by `GET /admin/diagnostics`.
+
+A live operations dashboard surfacing the health of the ingestion pipeline so a self-hosted operator can answer "is anything stuck?" without `docker compose exec`.
+
+**Display elements**:
+
+- **Queue panel**: current arq queue depth, in-progress job IDs, and per-stage job counts.
+- **Stalled documents panel**: documents in an active status whose `ingestion_runs.last_heartbeat_at` is older than `HEARTBEAT_STALE_THRESHOLD_S` (~90 s). Each row links to the document detail and shows the run id + last seen at.
+- **Per-stage latency**: p50 / p95 for `parsing` / `generating_notes` / `extracting_graph` over the last 100 runs, computed from `ingestion_run_logs`.
+- **Hash hygiene**: total `zkast:job:*` Redis hashes, count in terminal status (`succeeded` / `failed` / `cancelled`), and a `Cleanup stale hashes` action that confirms via `useConfirm` and reports results via `useToast`. Never touches live jobs.
+- **Polling**: 5-second client-side refresh while the page is open.
 
 ## Onboarding and First-Run Flows
 
@@ -734,6 +786,44 @@ Aligned with [prd.md](prd.md) NFRs:
 - **Banners**: persistent, in-view notifications attached to a context (panel header). Used for processing, stale data, target test failures.
 - **Modal dialogs**: reserved for destructive actions (delete, replace persistence) and multi-step flows (merge entities).
 - **In-app inbox** (P1+): durable record of completed jobs, recent failures, and admin events.
+
+### FeedbackProvider (Sprint 5b)
+
+A single React context (`FeedbackProvider`, mounted globally in `app/layout.tsx`) exposes three hooks that are the canonical replacement for native browser dialogs anywhere in the app:
+
+- `useToast()` — `toast({ variant: "success" | "error" | "warning" | "info", message, description?, duration? })`. Renders a `ToastStack` in the corner with auto-dismiss, accessibility roles (`role="status"` / `role="alert"`), and the same color tokens as the rest of the system.
+- `useConfirm()` — async; returns `Promise<boolean>`. Renders a focus-trapped modal with customizable `title`, `description`, `confirmLabel`, `cancelLabel`, and `variant: "default" | "danger"`. Replaces `window.confirm`.
+- `usePrompt()` — async; returns `Promise<string | null>`. Renders an input modal with validation. Replaces `window.prompt`.
+
+**Rule**: no component may call `window.confirm` / `window.alert` / `window.prompt` directly. The Sprint 5b rollout swept every existing call site; new code must use these hooks instead. Native dialogs break the design system, fail screen-reader expectations, and block the event loop.
+
+## Pipeline Log Drawer (Sprint 5b)
+
+A persistent bottom-edge drawer (`JobLogConsole`) is mounted globally for every workspace route. It is the canonical "is the pipeline stuck?" affordance.
+
+**Display elements**:
+
+- **Collapsed header strip**: shows `Pipeline log`, count of active jobs (or `idle`), total line count, and a chevron to expand. Click anywhere on the strip to toggle. State persists per browser via `localStorage`.
+- **Expanded body** (~12 rem tall): a scrolling monospace log surface (`role="log"`, `aria-live="polite"`).
+- **Filters above the body**: `Level` select (`All` | `Info` | `Warning` | `Error`), `Job` select (per-job filter), `Follow tail` checkbox, `Copy`, `Clear` buttons.
+
+**Behavior**:
+
+- Subscribes to `/api/v1/jobs/{jobId}/events?workspaceId=...` (SSE) for each *active job* registered in the `JobEventsContext`. Active jobs are auto-registered when a PDF is uploaded and auto-unregistered on `job_completed` / `job_failed` after a short grace period.
+- Each event renders as one line: `HH:MM:SS jobId-prefix stage-badge message`. `log` events use the level color (info → secondary, warning → amber, error → red). `metric` events render as `name=value`. `stage_started` / `stage_completed` / `job_*` events render with their stage badge.
+- `follow tail` keeps the body scrolled to the latest line; user scrolling up automatically pauses follow-tail. `Copy` ships the filtered log to the clipboard as TSV; `Clear` zeroes the in-memory buffer but does not affect the server-side `ingestion_run_logs` table.
+- Events that mutate the working graph (`metric` events named `entity_count`, `edge_count`, `note_count`) cross-fire `emitGraphInvalidated()` so the graph canvas refetches without polling.
+
+**Layout**: fixed, full-width up to `max-w-5xl`, `z-index 35`, `pointer-events-auto` only on the drawer itself so clicks pass through to the canvas behind.
+
+## Merge Flow with Persisted Undo (Sprint 5b)
+
+The merge dialog (entities or notes) shipped with two undo affordances side-by-side:
+
+- **Revert survivor fields** — rolls back only the survivor's mutable fields to their pre-merge values, using the `survivor_pre_merge` payload from `merge_audit_log`. Useful when the merge correctly deleted the victim but the survivor's "winning" field selection was wrong.
+- **Full undo** — calls `POST .../entities/{id}/unmerge` or `POST .../notes/{id}/unmerge`. Restores the victim row, re-attaches its provenance (episodes, notes, evidence), rolls back the survivor's fields, and rewires audited incident relationships back to the victim. The audit row is marked `undone_at` but never deleted.
+
+Both buttons are reachable indefinitely as long as `merge_audit_log` retains the row — there is no "current session only" window. The dialog surfaces the available undo path with a `useToast` success confirmation on completion.
 
 ## Empty / Sample-Data Mode
 

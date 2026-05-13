@@ -43,6 +43,7 @@ from app.evidence_extractor import (
     page_for_offset,
 )
 from app.evidence_repo import insert_evidence_rows
+from app.chat_turn import run_chat_turn  # noqa: F401 — registered in WorkerSettings.functions
 from app.documents_repo import (
     delete_episodes_for_document,
     fail_running_ingestion_runs_for_document,
@@ -1409,15 +1410,23 @@ async def reconcile_stuck_documents(ctx: dict[str, Any]) -> None:
             logger.exception("reconcile_update_failed", document_id=document_id, error=str(exc))
 
 
+# Sprint 6 — chat turn task timeout. Generous because of Cohere stream
+# variability + non-streaming fallback round-trip; safe because the user
+# can always click "Stop" to cancel cooperatively.
+TIMEOUT_CHAT_TURN_S = 1_800
+
+
 class WorkerSettings:
     redis_settings = _redis_settings_for_worker()
     # Per-function timeouts override arq's 300s default. ``extract_graph``
     # gets the most generous budget because Graphiti's edge-timestamp
     # extractor currently retries 2× per failed edge against Cohere (TD-010).
+    # Sprint 6 added ``run_chat_turn`` for grounded chat.
     functions = [
         arq_func(parse_document, timeout=TIMEOUT_PARSE_S, max_tries=1),
         arq_func(generate_atomic_notes, timeout=TIMEOUT_NOTES_S, max_tries=1),
         arq_func(extract_graph, timeout=TIMEOUT_GRAPH_S, max_tries=1),
+        arq_func(run_chat_turn, timeout=TIMEOUT_CHAT_TURN_S, max_tries=1),
     ]
     # Global ceiling for any task that doesn't override (e.g. cron jobs).
     job_timeout = TIMEOUT_WORKER_DEFAULT_S

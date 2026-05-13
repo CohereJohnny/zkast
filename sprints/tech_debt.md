@@ -204,3 +204,73 @@ Use this file for **non-blocking** refactors, dependency upgrades, and cleanup d
   we just resolved.
 - **Suggested sprint**: Sprint 6.
 - **Status**: Open
+
+### TD-015 — Deterministic graph traversal in chat retrieval
+- **Date**: 2026-05-13
+- **Area**: pipeline (chat) + specs
+- **Description**: Today's `chat_turn._retrieve` runs `graphiti.search(query)`
+  which returns the top-K most semantically similar relationship facts. It
+  is fundamentally vector retrieval over a graph-shaped index — not
+  GraphRAG. That means aggregation questions ("how many Locations are
+  mentioned?", "list all Standards", "which Organizations cite EPRI?")
+  cannot be answered reliably because the vector ranker keys on text
+  similarity to the query, not on graph structure.
+  Sprint 6 mitigated this with an always-on synthetic graph-context
+  document (`filter_options_repo.summarize_workspace_graph` →
+  `chat_turn._render_graph_context_document`) that gives the LLM
+  ground-truth type counts and named exemplars per turn — adequate for
+  "how many" + small typed lists. The remaining work for TD-015:
+    1. **Intent detection** for structured queries ("how many", "list
+       all", "count by", "neighbors of", "path from X to Y") so the
+       retrieval pipeline can route to a typed handler instead of always
+       falling back to hybrid vector search.
+    2. **Typed-entity handler** that resolves "list all `Location`" by
+       SELECTing `entities WHERE type='Location'` directly from
+       Postgres, then surfacing the result as a structured `ChatDocument`
+       (one row per entity with name + degree + top facts).
+    3. **Multi-hop traversal handler** that resolves "what connects
+       A to B" by running an actual Cypher/SQL traversal against the
+       relationship store (depth-bounded), then assembling a path
+       document for Cohere.
+    4. **Hybrid composition** so retrieval can return both the deterministic
+       structured answer and the relevant fact-level evidence in the same
+       turn (the agentic-RAG pattern).
+- **Reason**: "What's the point of even spending the extra computational
+  effort to build a graph if we don't traverse it? We might as well just
+  rely on naive RAG." (Direct user quote, 2026-05-13.) Sprint 6 ships the
+  scaffolding — graph store, typed extraction, retrieval records, citation
+  mapping — but until the traversal layer lands, GraphRAG can't outperform
+  naive RAG on the question classes where it should win.
+- **Suggested sprint**: Sprint 6b (eval harness pins the failure modes) +
+  Sprint 7 (handler implementations). TD-015 is the precondition for SM-6
+  (grounded answer quality) to surpass a naive-RAG baseline.
+- **Status**: Open — partial mitigation shipped in Sprint 6 via graph-context
+  grounding document. Open work: structured-query routing + traversal
+  handlers.
+
+### TD-014 — Snapshot review: extend `needs_changes` end-to-end
+- **Date**: 2026-05-12
+- **Area**: pipeline + web + migrations
+- **Description**: [specs/datamodel.md](../specs/datamodel.md) and
+  [specs/userstories.md](../specs/userstories.md) US-3.8 specify three
+  snapshot review states (`approved`, `rejected`, `needs_changes`). The
+  Sprint 5b implementation accepts only `approved | rejected` end-to-end
+  because the original `snapshot_reviews.status` CHECK constraint was
+  written against the two-state form. Three concrete changes are needed:
+  1. A new Alembic migration relaxes the CHECK on `snapshot_reviews.status`
+     to allow `needs_changes` (and re-asserts the FK + unique constraint).
+  2. `apps/pipeline/app/internal_graph.py` snapshot-review route accepts
+     the third value (validator + body schema).
+  3. The web snapshot detail UI renders a third action button and badge
+     variant; the snapshot list filter chips add the `needs_changes`
+     option.
+- **Reason**: Soft-block ("needs changes") is a distinct review intent
+  from outright `rejected` and is the workflow operators actually use in
+  practice. Persistence gating already treats only `approved` as
+  permissive, so adding `needs_changes` doesn't widen the security
+  surface — it just makes the audit trail honest.
+- **Suggested sprint**: Sprint 6 (small) or alongside Sprint 7 persistence
+  polish. Two-state UI continues to work until this lands; the API and
+  data model both already accept the legacy `decision` field as an alias
+  for `status`.
+- **Status**: Open

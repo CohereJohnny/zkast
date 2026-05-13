@@ -1,12 +1,21 @@
 # zkast
 
-**zkast** (“zettelkasten + cast”) is a planned application that ingests **PDFs**, generates **atomic Zettelkasten-style notes**, builds an **Obsidian-style knowledge graph** backed by [Graphiti](https://github.com/getzep/graphiti), and supports **grounded chat** over your corpus using **Cohere** (with citations). After review, you can **persist** snapshots to a graph database you control—**Neo4j** or **Postgres with Apache AGE**.
+**zkast** (“zettelkasten + cast”) ingests **PDFs**, generates **atomic Zettelkasten-style notes**, builds an **Obsidian-style knowledge graph** backed by [Graphiti](https://github.com/getzep/graphiti) and [LangExtract](https://github.com/google/langextract) (source-grounded evidence spans), and supports **grounded chat** over your corpus using **Cohere** (with citations). After review, you can **persist** snapshots to a graph database you control—**Neo4j** or **Postgres with Apache AGE**.
 
-The product is specified as **self-hostable first** (Docker Compose, BYO Cohere key) with a path toward multi-user and SaaS later.
+The product is **self-hostable first** (Docker Compose, BYO Cohere key) with a path toward multi-user and SaaS later.
 
-## Architecture (Sprint 2+)
+## P0 status
 
-zkast is a two-process system: **Next.js 14** (UI + public HTTP) and **FastAPI** (Graphiti, ingestion, chat orchestration). Both read the working store in **Postgres**; the pipeline talks to **FalkorDB** for the working graph and **Cohere** (Command via OpenAI-compat, Embed v3, Rerank v3) for all LLM operations in P0.
+| Sprint | Tag | Highlights |
+| --- | --- | --- |
+| 4 | `sprint-4` | Atomic notes, graph extraction, notes workspace UI |
+| 5b | `sprint-5b` | Graph viz, merge with persisted undo, snapshots + review, JobLogConsole drawer, heartbeat reconciler, Diagnostics page |
+| 5c | `sprint-5c` | Typed Graphiti extraction (Pydantic taxonomy), LangExtract source-grounded evidence, picklist filter UX |
+| 6 | `sprint-6` (branch) | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; `chat_messages.retrieval_mode` ships for Sprint 6b (see [sprints/sprint_6/sprint_6_tasks.md](sprints/sprint_6/sprint_6_tasks.md)) |
+
+## Architecture
+
+zkast is a two-process system: **Next.js 14** (UI + public HTTP) and **FastAPI** (Graphiti, LangExtract, ingestion, chat orchestration). Both read the working store in **Postgres**; the pipeline talks to **FalkorDB** for the working graph and **Cohere** (Command via OpenAI-compat, `embed-v4.0`, `rerank-v4.0-fast`) for all LLM operations in P0.
 
 ```mermaid
 flowchart LR
@@ -56,8 +65,10 @@ Graphiti bounds concurrent LLM, embedding, and rerank calls (`max_coroutines`). 
 
 ### Sprints
 
-- [sprints/sprintplan.md](sprints/sprintplan.md) — Master plan  
-- [sprints/sprint_1/sprint_1_tasks.md](sprints/sprint_1/sprint_1_tasks.md) — Sprint 1 checklist  
+- [sprints/sprintplan.md](sprints/sprintplan.md) — Master plan (P0/P1 sprint dependency graph)
+- [sprints/bug_swatting.md](sprints/bug_swatting.md) — Bug log (BUG-001 onward)
+- [sprints/tech_debt.md](sprints/tech_debt.md) — Technical debt log (TD-001 onward)
+- [sprints/sprint_6/sprint_6_tasks.md](sprints/sprint_6/sprint_6_tasks.md) — **Next up**: Grounded chat
 
 ## Prerequisites
 
@@ -131,12 +142,67 @@ successful merge:
 - **Revert survivor fields** — keeps the merge but PATCHes the survivor's
   field values back to their pre-merge state. Faster, narrower.
 
+### Typed extraction, source evidence, filter pickers (Sprint 5c)
+
+- **Typed Graphiti extraction**: `apps/pipeline/app/entity_schemas.py` ships
+  10 Pydantic entity models (`Person`, `Organization`, `Location`,
+  `Document`, `Standard`, `Equipment`, `Process`, `Material`, `Event`,
+  `Concept`) and 8 typed edge models. `graphiti.add_episode(...)` receives
+  these via `entity_types=` / `edge_types=` / `edge_type_map=` so the graph
+  legend no longer collapses to 100% `Concept`. Every model carries at
+  least one required field so Pydantic-emitted JSON schemas satisfy
+  Cohere's `response_format` validator (BUG-010).
+- **LangExtract source evidence**: a co-extractor runs alongside Graphiti
+  per episode, returning character-offset spans. Matches are persisted to
+  `entity_evidence` (Alembic `0008_entity_evidence`) and surfaced as a
+  **Evidence** section in the entity detail panel: per-entity blockquotes
+  with a "View in document" link to the source PDF page.
+- **Graph filter pickers**: every UUID/CSV input in the graph filter bar
+  is replaced by a searchable picklist backed by real data —
+  `DocumentPicker` (combobox over ready documents),
+  `EntityTypeahead` (debounced typeahead + chip-based multi-select),
+  `TypeMultiselect` (entity + edge type chip groups with counts),
+  `TagPicker` (combobox over distinct atomic-note tags). Query-string
+  contract is preserved.
+
+### Grounded chat (Sprint 6)
+
+- **`/chat`** is a workspace-scoped chat surface. Send a question, watch tokens
+  stream in, see inline citations chip back to the underlying note / entity /
+  relationship / source page.
+- **Backend** — `apps/pipeline/app/chat_turn.py` orchestrates one turn: hybrid
+  retrieval via `graphiti.search()`, document assembly with a per-turn token
+  budget (smallest-first), `RetrievalRecord` persisted **before** the LLM call
+  (FR-41), refusal short-circuit when retrieval is empty, Cohere v2 chat with
+  `documents=[…]` (native SDK `cohere>=5,<6`), citation mapping via prefixed
+  ids (`note:<uuid>`, `entity:<uuid>`, `relationship:<uuid>`, `episode:<uuid>`).
+- **SSE streaming** — seven event types `retrieval_started`,
+  `retrieval_complete`, `token`, `citation`, `message_complete`, `job_failed`,
+  `job_cancelled` fan out through the same Redis pub/sub + Stream the
+  JobLogConsole drawer already subscribes to. So the drawer also shows
+  chat-turn activity when expanded.
+- **Empty-stream fallback** — when Cohere's stream closes with zero content
+  deltas (Sprint 5b BUG-009 pattern), `cohere_chat.chat_stream_grounded`
+  retries once non-streaming and surfaces a `warning` log into the drawer.
+- **Cancel** — `POST /api/v1/workspaces/{ws}/chat/turns/{turnId}/cancel`
+  sets a Redis flag and relies on arq's cooperative `CancelledError`; the
+  handler classifies the cancel reason via `_classify_cancel_reason("chat_turn", …)`.
+- **Scope picker** — session create reuses every Sprint 5c filter component
+  (`DocumentPicker`, `EntityTypeahead`, `TypeMultiselect` ×2, `TagPicker`) plus
+  a snapshot combobox and a `valid_at` date input. Scope is locked in when the
+  first message is sent and is mirrored to `chat_messages.effective_scope_snapshot`.
+- **Eval-ready** — `chat_messages.retrieval_mode` defaults to `'graph'` so
+  Sprint 6b can flip on a `rag` code path without another migration.
+- **Migrations through `0009`** — `chat_sessions`, `chat_messages`,
+  `retrieval_records`, `chat_citations`. Rebuild pipeline + worker + web after
+  pulling: `docker compose run --rm migrate && docker compose up -d --build pipeline worker web`.
+
 ### Graph view & snapshots (Sprint 5)
 
 - **Graph** (`/graph` and workspace right rail): loads the working graph from **`GET /api/v1/workspaces/{id}/graph`** with URL-synced filters (`view`, `document_id`, `tag`, `entity_type`, `edge_type`, `valid_at`, `node_limit`, `depth`, `seed_entity_ids`). Large workspaces may return **`truncated: true`** — narrow filters or raise `node_limit` (max **25000**).
 - **Canvas**: Sigma + graphology; **ForceAtlas2** runs in a **Web Worker** for a few seconds, then the layout is imported into Sigma. Use **Accessible list** (or automatic fallback on canvas error / reduced motion) for a keyboard-friendly entity list.
 - **Editing**: selection panel supports **merge** (with optional **revert survivor fields** after merge), **manual edges** (create / PATCH / end via `DELETE` on the relationship route), and provenance links to notes.
-- **Snapshots** (`/snapshots`): **`POST …/snapshots`** freezes entities, relationships, and notes under **`graph_snapshots`** (Alembic `0006_graph_snapshots`). Empty workspaces return **`business_rule_violation`**.
+- **Snapshots** (`/snapshots`): **`POST …/snapshots`** freezes entities, relationships, and notes under **`graph_snapshots`** (Alembic `0006_graph_snapshots`). Empty workspaces return **`business_rule_violation`**. Sprint 5b added a three-state **review workflow** (`approved` / `rejected` / `needs_changes`) via **`POST …/snapshots/{id}/review`** stored in `snapshot_reviews` (Alembic `0007_ingestion_observability`).
 
 When Next runs via **`pnpm dev`** on the host, keep **`PIPELINE_INTERNAL_URL=http://127.0.0.1:8000`** and ensure the **pipeline** container publishes **8000** (see `docker-compose.yml`). After adding or changing `ports:` for pipeline, recreate it so the bind appears: **`docker compose up -d pipeline --force-recreate`**.
 
@@ -195,7 +261,7 @@ export FALKORDB_PORT=6380
 cd apps/pipeline && python -m pytest tests/test_graphiti_smoke.py -q
 ```
 
-Optional ingestion parse smoke (Compose **up**, migration **0004** applied, same defaults as Graphiti smoke for DB/Redis/token):
+Optional ingestion parse smoke (Compose **up**; the smoke itself requires migration **0004** at minimum, but the Compose stack expects the full chain through **0008_entity_evidence**; same defaults as Graphiti smoke for DB/Redis/token):
 
 ```bash
 export ZKAST_INGESTION_SMOKE=1

@@ -106,9 +106,9 @@ Satisfies: FR-9.
 - AC-1: The user selects two notes and chooses "Merge."
 - AC-2: The user picks which fields come from which source; provenance is unioned automatically.
 - AC-3: All inbound links to either source note are rewritten to the merged note.
-- AC-4: The merge can be undone within the current session.
+- AC-4: A merge can be reversed at any time via persisted **Full undo** (restores the victim note and its provenance from `merge_audit_log`) or **Revert survivor fields** (rolls back only the survivor's mutable fields). Undo remains available indefinitely until the survivor row is deleted; there is no "current session only" restriction.
 
-Satisfies: FR-9.
+Satisfies: FR-9. Sprint 5b shipped the persisted-undo affordance via `POST .../notes/{id}/unmerge`.
 
 ### US-2.4 — Split a note (P0)
 
@@ -145,6 +145,20 @@ Satisfies: FR-10.
 
 Satisfies: FR-11.
 
+### US-2.7 — View the source PDF passage that produced an entity (P0)
+
+**As** Maya (P-1), **I want** to click any entity in the graph and see the exact passage from the source PDF that the extractor used to create it, **so that** I can verify the model's claims without leaving the app and trust the graph as audit-able.
+
+**Acceptance criteria**:
+
+- AC-1: The entity selection panel shows an `Evidence` section listing per-entity character-offset spans linked to documents and pages.
+- AC-2: Each evidence row renders the source document filename, page number, and a blockquote of the verbatim quote (≤ 600 chars).
+- AC-3: A "View in document" link on each row navigates to `/documents/<id>?page=N&highlight=<char_start>`. The document detail view honors the page param to scroll the PDF preview to that page; precise span highlighting is a Sprint 7 polish.
+- AC-4: When no evidence rows exist (entity predates the LangExtract co-extractor), the section shows a friendly empty state pointing to "Retry from extracting_graph" rather than appearing broken.
+- AC-5: Re-ingestion or "Retry from extracting_graph" repopulates evidence rows for that document; deleting the document cascade-deletes the related evidence.
+
+Satisfies: FR-14 (provenance) and a new product affordance for source grounding. Sprint 5c shipped the `entity_evidence` table, the `GET .../graph/entities/{id}/evidence` endpoint, and the EvidenceSection UI.
+
 ## Epic 3 — Knowledge Graph Review
 
 ### US-3.1 — Visualize the working graph (P0)
@@ -161,15 +175,16 @@ Satisfies: FR-17, NFR-4.
 
 ### US-3.2 — Filter the graph (P0)
 
-**As** Dev (P-2), **I want** to filter the graph by document, tag, entity type, edge type, or time range, **so that** I can focus on one sub-area of my corpus.
+**As** Dev (P-2), **I want** to filter the graph by document, tag, entity type, edge type, seed entities, or time range, **so that** I can focus on one sub-area of my corpus.
 
 **Acceptance criteria**:
 
 - AC-1: Each filter dimension is independently toggleable.
 - AC-2: Filters compose (AND across dimensions).
 - AC-3: The current filter state is reflected in the URL so the view can be bookmarked and shared (within the same workspace).
+- AC-4: No filter input requires the user to know or type a UUID. Documents are picked from a combobox by filename; entities are picked from a debounced typeahead by name; entity / edge types and tags are picked from chip groups whose options are loaded from the workspace's actual graph (with per-option counts).
 
-Satisfies: FR-18.
+Satisfies: FR-18. Sprint 5c shipped the picklist refactor (`DocumentPicker`, `EntityTypeahead`, `TypeMultiselect`, `TagPicker`).
 
 ### US-3.3 — Inspect a node's provenance (P0)
 
@@ -191,9 +206,9 @@ Satisfies: FR-14, FR-19.
 
 - AC-1: Selecting two entities and choosing "Merge" combines them; all incident edges are rewritten.
 - AC-2: Renaming an entity updates its display label everywhere; provenance is unchanged.
-- AC-3: A merge can be undone within the current session.
+- AC-3: A merge can be reversed at any time via persisted **Full undo** (restores the victim entity, its provenance junctions, the survivor's pre-merge fields, and the audited incident relationships from `merge_audit_log`) or **Revert survivor fields**. Undo remains available indefinitely until the survivor row is deleted.
 
-Satisfies: FR-15, FR-20.
+Satisfies: FR-15, FR-20. Sprint 5b shipped the persisted-undo affordance via `POST .../graph/entities/{id}/unmerge`.
 
 ### US-3.5 — Add or remove an edge from the graph view (P0)
 
@@ -226,10 +241,24 @@ Satisfies: FR-22.
 **Acceptance criteria**:
 
 - AC-1: Custom types are scoped per workspace.
-- AC-2: New ingestion runs use the custom types in extraction prompts.
+- AC-2: New ingestion runs use the custom types in extraction prompts. The P0 canonical Pydantic taxonomy (`Person`, `Organization`, `Location`, `Document`, `Standard`, `Equipment`, `Process`, `Material`, `Event`, `Concept`, plus the 8 canonical edge types) remains available as the default; per-workspace custom types extend it rather than replacing it.
 - AC-3: Existing entities and edges of standard types can be relabeled to custom types in bulk via a guided flow.
 
-Satisfies: FR-16.
+Satisfies: FR-16. The P0 canonical taxonomy shipped in Sprint 5c.
+
+### US-3.8 — Review and approve a graph snapshot (P0)
+
+**As** Maya (P-1), **I want** to record a review decision on a snapshot (approve, reject, or request changes), **so that** persistence to an external graph DB is gated on an explicit reviewed-and-approved state and the team has an audit trail of who signed off on what.
+
+**Acceptance criteria**:
+
+- AC-1: The Snapshot Detail page exposes three actions: `Approve`, `Reject`, and `Needs changes`. Each writes a `SnapshotReview` row keyed by `(snapshot_id, reviewer_user_id)` and overwrites any prior decision from the same reviewer.
+- AC-2: Each decision accepts optional `rationale` text (≤ 2000 chars) shown alongside the decision badge.
+- AC-3: The Snapshots list shows the current decision badge per snapshot (`none` / `approved` / `rejected` / `needs_changes`).
+- AC-4: Persistence is gated on `approved`; `needs_changes` and `rejected` block persistence with a clear inline message and a link back to the review action.
+- AC-5: Re-reviewing flips the badge atomically; the original review row is updated, not duplicated.
+
+Satisfies: FR-22 (snapshot durability) and the review gate behind Epic 4 persistence. Sprint 5b shipped `POST .../snapshots/{id}/review` and the two-state UI; the three-state version follows TD-014.
 
 ## Epic 4 — External Persistence
 
@@ -419,6 +448,34 @@ Satisfies: NFR-6, C-4.
 - AC-3: When disabled, no network calls of any kind go to telemetry endpoints.
 
 Satisfies: NFR-2.
+
+### US-7.4 — Watch a live ingestion in progress (P0)
+
+**As** Dev (P-2), **I want** to open a collapsible bottom-edge log drawer that streams per-stage events while a PDF is ingesting, **so that** I can tell whether the pipeline is making progress, paused, or stuck without `docker compose exec`.
+
+**Acceptance criteria**:
+
+- AC-1: A persistent bottom-edge drawer (`Pipeline log`) is mounted on every workspace route. Collapsed by default; the strip shows the count of active jobs (or `idle`) and total line count. The collapsed/expanded state persists per browser via `localStorage`.
+- AC-2: When a PDF is uploaded or a stage is retried, the drawer registers an active job and immediately renders `stage_started` / `stage_progress` / `log` / `metric` / `stage_completed` events from the SSE stream (`GET /jobs/{id}/events?workspaceId=...`).
+- AC-3: The SSE endpoint replays the last ~200 events from the per-job Redis Stream on connect so opening the drawer mid-run shows recent history, not a blank "Waiting for events…" forever.
+- AC-4: Filters are available for log level (`info` / `warning` / `error`) and per-job. A `Follow tail` checkbox sticks the view to the latest line; manual scroll pauses follow-tail. `Copy` ships the filtered log to the clipboard.
+- AC-5: `metric` events whose name implies a graph mutation (`entity_count`, `edge_count`, `note_count`) cross-fire a graph invalidation event so the canvas refetches without polling.
+
+Satisfies: FR-3 (visible pipeline progress) and a new product affordance for operator confidence. Sprint 5b shipped the `record_log` / `record_metric` plumbing, the Redis Stream replay, and the JobLogConsole drawer.
+
+### US-7.5 — Diagnose pipeline state (P0)
+
+**As** Otto (P-3), **I want** a Settings → Diagnostics page that summarizes queue depth, in-flight jobs, stalled documents, per-stage latency, and Redis hash hygiene, **so that** I can audit pipeline health and take corrective action without inspecting Redis or Postgres directly.
+
+**Acceptance criteria**:
+
+- AC-1: A `/settings/diagnostics` route is reachable by Owners and shows arq queue depth, in-progress job IDs, and per-stage job counts.
+- AC-2: A "Stalled documents" panel lists any document in an active status whose `ingestion_runs.last_heartbeat_at` is older than `HEARTBEAT_STALE_THRESHOLD_S`, with deep links to the document detail. A worker-side cron flips these to `failed` within ~60 s; the panel exists so the user understands what just happened.
+- AC-3: A "Per-stage latency" panel shows p50 and p95 for `parsing` / `generating_notes` / `extracting_graph` over the last 100 runs.
+- AC-4: A "Hash hygiene" panel shows total `zkast:job:*` Redis hashes and a count of those in terminal status, with a `Cleanup stale hashes` action that confirms via the in-app `useConfirm` dialog and reports results via toast. The action never deletes hashes for live (`running` / `queued`) jobs.
+- AC-5: The page polls every 5 seconds while open; no other component refreshes more aggressively.
+
+Satisfies: NFR-3 (operator visibility) and a new product affordance. Sprint 5b shipped `GET /admin/diagnostics`, `POST /admin/cleanup-stale-job-hashes`, and the Diagnostics page.
 
 ## Epic 8 — Grounded Chat with the Knowledge Graph
 

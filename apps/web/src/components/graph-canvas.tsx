@@ -417,6 +417,141 @@ function ZoomControl({ icon, label, onClick }: { icon: string; label: string; on
   );
 }
 
+/**
+ * Sprint 6 / layout-fix: explicit camera fit + container resize handling.
+ *
+ * Two failure modes this component repairs:
+ * 1. **Initial load**: ``GraphLoader`` runs ForceAtlas2 in a worker for
+ *    several seconds, then calls ``loadGraph()``. By the time the
+ *    positioned graph lands, the SigmaContainer may have rendered while
+ *    the parent flex column was still mid-layout — Sigma's camera defaults
+ *    to a position that doesn't cover the new node bounding box, so all
+ *    the nodes appear clustered at the top edge of the canvas.
+ * 2. **Container resize**: when the user expands the embedded log, opens
+ *    the selection panel, or toggles the Documents column, the canvas
+ *    resizes. Sigma's built-in ResizeObserver refreshes the WebGL
+ *    viewport but **does not reset the camera**, so the previously-fit
+ *    bounding box becomes a tiny corner of the larger canvas.
+ *
+ * ``cam.animatedReset()`` recomputes the camera to fit all visible nodes
+ * inside the current container.
+ */
+function CameraFitAndResize({ epoch }: { epoch: string }) {
+  const sigma = useSigma();
+
+  // Fit-on-data: every time GraphLoader replaces the underlying graph,
+  // bump the camera to fit. We watch ``epoch`` rather than the graph
+  // contents so the reset fires exactly once per load instead of on every
+  // hover-driven reducer mutation.
+  useEffect(() => {
+    if (!sigma) return;
+    // Defer two frames so React has committed the measured pixel size and
+    // Sigma has applied the new graph before fitting. One frame was not
+    // enough when Chrome devtools was closed: Sigma's internal canvases
+    // could still have their stale tiny height, making the graph render
+    // as a horizontal line.
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => {
+        sigma.resize(true);
+        sigma.refresh();
+        const cam = sigma.getCamera();
+        cam.animatedReset({ duration: 0 });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      if (inner) window.cancelAnimationFrame(inner);
+    };
+  }, [sigma, epoch]);
+
+  // Fit-on-resize: observe the canvas container and reset whenever the
+  // pixel size changes by more than a trivial amount. The 24px gate
+  // avoids over-firing on sub-pixel layout passes.
+  useEffect(() => {
+    if (!sigma) return;
+    const container = sigma.getContainer();
+    if (!container) return;
+    let lastW = container.clientWidth;
+    let lastH = container.clientHeight;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (Math.abs(w - lastW) < 24 && Math.abs(h - lastH) < 24) return;
+      lastW = w;
+      lastH = h;
+      if (raf) window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => {
+        sigma.resize(true);
+        sigma.refresh();
+        sigma.getCamera().animatedReset({ duration: 0 });
+      });
+    });
+    ro.observe(container);
+    return () => {
+      ro.disconnect();
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, [sigma]);
+
+  return null;
+}
+
+type CanvasSize = { width: number; height: number };
+
+function useMeasuredCanvasFrame() {
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const [size, setSize] = useState<CanvasSize | null>(null);
+
+  useEffect(() => {
+    if (!node) return;
+
+    let raf = 0;
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
+      // Do not mount Sigma while the flex grid is still effectively
+      // collapsed. Mounting against a 1px-tall canvas is the root cause of
+      // the "all graph objects render as a single line" regression.
+      //
+      // Important: this hook uses a callback ref and depends on `node`
+      // because the first render often returns "Loading graph…" and does
+      // not mount the canvas frame at all. The previous ref.current + []
+      // effect ran once against null and never observed the real node,
+      // leaving the UI stuck on "Preparing graph canvas…".
+      if (width < 120 || height < 240) return;
+      setSize((prev) => {
+        if (prev && prev.width === width && prev.height === height) return prev;
+        return { width, height };
+      });
+    };
+
+    const schedule = () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(measure);
+    };
+
+    // Measure immediately and then once more after layout/paint. The second
+    // pass catches the common route-transition case where flex children get
+    // their final height one frame after mount.
+    measure();
+    raf = window.requestAnimationFrame(measure);
+
+    const ro = new ResizeObserver(schedule);
+    ro.observe(node);
+    window.addEventListener("resize", schedule);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", schedule);
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, [node]);
+
+  return { ref: setNode, size };
+}
+
 function ZoomControls() {
   const sigma = useSigma();
   return (
@@ -449,14 +584,65 @@ function ZoomControls() {
   );
 }
 
+function normalizeGraphCoordinates(g: Graph): void {
+  if (g.order === 0) return;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  g.forEachNode((_id, attrs) => {
+    const x = typeof attrs.x === "number" ? attrs.x : 0;
+    const y = typeof attrs.y === "number" ? attrs.y : 0;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  });
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+
+  // Sigma's default camera is calibrated for graph coordinates around
+  // [0, 1] (see the official examples that use random x/y in unit space).
+  // ForceAtlas2 emits arbitrary-world coordinates (hundreds of units for
+  // our current graph). If we then call camera.reset(), the camera resets
+  // to unit-space while the graph remains in world-space, which visually
+  // clips the graph into a thin line at the canvas edge. Normalize the
+  // final layout into a padded unit box before handing it to Sigma.
+  const span = Math.max(width, height, 1e-6);
+  const padding = 0.08;
+  const scale = (1 - padding * 2) / span;
+  const offsetX = (1 - width * scale) / 2;
+  const offsetY = (1 - height * scale) / 2;
+
+  g.forEachNode((id, attrs) => {
+    const x = typeof attrs.x === "number" ? attrs.x : 0;
+    const y = typeof attrs.y === "number" ? attrs.y : 0;
+    g.setNodeAttribute(id, "x", offsetX + (x - minX) * scale);
+    g.setNodeAttribute(id, "y", offsetY + (y - minY) * scale);
+  });
+}
+
 function GraphLoader({
   data,
   reducedMotion,
   onSelectNode,
+  onLoaded,
 }: {
   data: GraphPayload;
   reducedMotion: boolean;
   onSelectNode: (id: string | null) => void;
+  /**
+   * Fires once the FA2-positioned graph has been handed to Sigma. The
+   * outer component uses this to trigger an explicit camera fit — Sigma
+   * itself doesn't re-center on graph-replace, which is what caused
+   * "nodes clustered at the top of the canvas" after the layout fix
+   * gave the canvas its full vertical room.
+   */
+  onLoaded?: () => void;
 }) {
   const loadGraph = useLoadGraph();
 
@@ -622,21 +808,21 @@ function GraphLoader({
     }
 
     // ---- ForceAtlas2 settings ----
-    // linLogMode + low gravity + high scalingRatio is the canonical
-    // recipe for spreading dense knowledge graphs out without losing
-    // their community structure. strongGravityMode stays off so isolated
-    // subgraphs can drift to the periphery instead of being smashed
-    // into the hub.
+    // Use the library's ``inferSettings(graph)`` rather than hand-rolled
+    // numbers. Empirically the previous combo (``barnesHutOptimize: true``
+    // + ``linLogMode: true``) was collapsing the graph onto a thin
+    // horizontal band — graphology-layout-forceatlas2's docs explicitly
+    // warn that BarnesHut approximation interacts badly with linLog mode,
+    // and ``inferSettings`` correctly disables BarnesHut for graphs
+    // under 2 000 nodes while turning on ``strongGravityMode`` so
+    // disconnected components stay bounded on the canvas.
+    //
+    // ``adjustSizes`` is the one aesthetic add-on we keep: it makes FA2
+    // respect each node's rendered radius for collision avoidance so the
+    // big hub nodes don't overlap their neighbours.
     const fa2Settings = {
-      barnesHutOptimize: true,
-      barnesHutTheta: 0.6,
-      linLogMode: true,
-      adjustSizes: true, // respect node size for collision avoidance
-      gravity: 0.08,
-      scalingRatio: 20,
-      slowDown: 6,
-      edgeWeightInfluence: 0,
-      strongGravityMode: false,
+      ...forceAtlas2.inferSettings(g),
+      adjustSizes: true,
     };
 
     if (reducedMotion) {
@@ -644,7 +830,9 @@ function GraphLoader({
         iterations: Math.min(180, 60 + g.order * 2),
         settings: fa2Settings,
       });
+      normalizeGraphCoordinates(g);
       loadGraph(g);
+      onLoaded?.();
       return;
     }
 
@@ -678,7 +866,11 @@ function GraphLoader({
           settings: fa2Settings,
         });
       }
-      if (!cancelled) loadGraph(g);
+      if (!cancelled) {
+        normalizeGraphCoordinates(g);
+        loadGraph(g);
+        onLoaded?.();
+      }
     })();
 
     return () => {
@@ -686,7 +878,7 @@ function GraphLoader({
       layout?.stop();
       layout?.kill();
     };
-  }, [data, loadGraph, reducedMotion]);
+  }, [data, loadGraph, reducedMotion, onLoaded]);
 
   const registerEvents = useRegisterEvents();
   useEffect(() => {
@@ -718,6 +910,13 @@ export function GraphCanvas({
   const [data, setData] = useState<GraphPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+  // Monotonic counter that bumps once the positioned graph has actually
+  // been handed to Sigma. Camera fitting before that point races FA2 and
+  // can reset against an empty/old graph.
+  const [loadEpoch, setLoadEpoch] = useState(0);
+  const handleGraphLoaded = useCallback(() => {
+    setLoadEpoch((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -776,6 +975,10 @@ export function GraphCanvas({
         edges: body.edges ?? [],
         truncated: Boolean(body.truncated),
       });
+      // ``loadEpoch`` is bumped from the GraphLoader's ``onLoaded``
+      // callback once FA2 finishes and Sigma has the positioned graph —
+      // bumping here would fire the camera-reset too early (before FA2
+      // even started) and cluster the graph at the top edge again.
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load graph");
       setData(null);
@@ -785,6 +988,13 @@ export function GraphCanvas({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const { ref: canvasFrameRef, size: canvasSize } = useMeasuredCanvasFrame();
+  // Only graph-load completion should trigger the "fit after data" path.
+  // Container size changes are handled by CameraFitAndResize's internal
+  // ResizeObserver. Including canvasSize here caused every measured-size
+  // update to re-run the camera effect, which amplified the resize loop.
+  const cameraEpoch = String(loadEpoch);
 
   if (error) {
     return <p className="text-caption text-red-300">{error}</p>;
@@ -803,37 +1013,58 @@ export function GraphCanvas({
           Graph truncated — add filters or lower scope (see node limit in URL).
         </p>
       ) : null}
-      <div className="relative min-h-[280px] flex-1 overflow-hidden rounded-md border border-border-subtle bg-canvas">
-        <SigmaContainer
-          style={{
-            height: "min(60vh, 540px)",
-            width: "100%",
-            // Subtle radial gradient gives the canvas depth so the graph
-            // floats over the surface rather than sitting flat on it.
-            background:
-              "radial-gradient(ellipse at center, #0b1224 0%, #020617 70%)",
-          }}
-          settings={{
-            renderLabels: true,
-            // Only show a node's label when its rendered size is at least
-            // this many pixels. Cuts label clutter dramatically on 200+
-            // node graphs without losing top-degree hubs.
-            labelRenderedSizeThreshold: 6,
-            labelDensity: 0.7,
-            labelColor: { color: "#e2e8f0" },
-            labelFont: "Plus Jakarta Sans, sans-serif",
-            labelSize: 12,
-            labelWeight: "500",
-            defaultEdgeColor: "rgba(148, 163, 184, 0.35)",
-            zIndex: true,
-            allowInvalidContainer: true,
-          }}
-        >
-          <GraphLoader data={data} reducedMotion={reducedMotion} onSelectNode={onSelectNode} />
-          <ChipFilterApplier data={data} chipFilters={chipFilters} />
-          <HoverEmphasis />
-          <ZoomControls />
-        </SigmaContainer>
+      <div
+        ref={canvasFrameRef}
+        className="relative min-h-[420px] flex-1 overflow-hidden rounded-md border border-border-subtle bg-canvas"
+      >
+        {canvasSize ? (
+          <SigmaContainer
+            style={{
+              // Explicit pixel dimensions, measured from the flex frame,
+              // but absolutely positioned so the child cannot affect the
+              // parent frame's next measurement. The previous in-flow
+              // measured-size version created a feedback loop:
+              // measure frame -> set child height -> frame grows -> measure
+              // larger -> repeat.
+              position: "absolute",
+              inset: 0,
+              height: `${canvasSize.height}px`,
+              width: `${canvasSize.width}px`,
+              background:
+                "radial-gradient(ellipse at center, #0b1224 0%, #020617 70%)",
+            }}
+            settings={{
+              renderLabels: true,
+              // Only show a node's label when its rendered size is at least
+              // this many pixels. Cuts label clutter dramatically on 200+
+              // node graphs without losing top-degree hubs.
+              labelRenderedSizeThreshold: 6,
+              labelDensity: 0.7,
+              labelColor: { color: "#e2e8f0" },
+              labelFont: "Plus Jakarta Sans, sans-serif",
+              labelSize: 12,
+              labelWeight: "500",
+              defaultEdgeColor: "rgba(148, 163, 184, 0.35)",
+              zIndex: true,
+              allowInvalidContainer: true,
+            }}
+          >
+            <GraphLoader
+              data={data}
+              reducedMotion={reducedMotion}
+              onSelectNode={onSelectNode}
+              onLoaded={handleGraphLoaded}
+            />
+            <ChipFilterApplier data={data} chipFilters={chipFilters} />
+            <HoverEmphasis />
+            <CameraFitAndResize epoch={cameraEpoch} />
+            <ZoomControls />
+          </SigmaContainer>
+        ) : (
+          <div className="flex h-full min-h-[420px] items-center justify-center text-caption text-muted">
+            Preparing graph canvas…
+          </div>
+        )}
         <GraphLegend data={data} />
       </div>
     </div>
