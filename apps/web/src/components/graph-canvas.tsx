@@ -512,6 +512,48 @@ function ZoomControls() {
   );
 }
 
+function normalizeGraphCoordinates(g: Graph): void {
+  if (g.order === 0) return;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  g.forEachNode((_id, attrs) => {
+    const x = typeof attrs.x === "number" ? attrs.x : 0;
+    const y = typeof attrs.y === "number" ? attrs.y : 0;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  });
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+
+  // Sigma's default camera is calibrated for graph coordinates around
+  // [0, 1] (see the official examples that use random x/y in unit space).
+  // ForceAtlas2 emits arbitrary-world coordinates (hundreds of units for
+  // our current graph). If we then call camera.reset(), the camera resets
+  // to unit-space while the graph remains in world-space, which visually
+  // clips the graph into a thin line at the canvas edge. Normalize the
+  // final layout into a padded unit box before handing it to Sigma.
+  const span = Math.max(width, height, 1e-6);
+  const padding = 0.08;
+  const scale = (1 - padding * 2) / span;
+  const offsetX = (1 - width * scale) / 2;
+  const offsetY = (1 - height * scale) / 2;
+
+  g.forEachNode((id, attrs) => {
+    const x = typeof attrs.x === "number" ? attrs.x : 0;
+    const y = typeof attrs.y === "number" ? attrs.y : 0;
+    g.setNodeAttribute(id, "x", offsetX + (x - minX) * scale);
+    g.setNodeAttribute(id, "y", offsetY + (y - minY) * scale);
+  });
+}
+
 function GraphLoader({
   data,
   reducedMotion,
@@ -716,6 +758,7 @@ function GraphLoader({
         iterations: Math.min(180, 60 + g.order * 2),
         settings: fa2Settings,
       });
+      normalizeGraphCoordinates(g);
       loadGraph(g);
       onLoaded?.();
       return;
@@ -752,6 +795,7 @@ function GraphLoader({
         });
       }
       if (!cancelled) {
+        normalizeGraphCoordinates(g);
         loadGraph(g);
         onLoaded?.();
       }
@@ -794,11 +838,13 @@ export function GraphCanvas({
   const [data, setData] = useState<GraphPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
-  // Monotonic counter that bumps once per successful ``setData`` so
-  // ``CameraFitAndResize`` can re-fit the camera every time the graph
-  // payload changes (filter change, ingest invalidation, etc.) without
-  // having to deep-compare ``data``.
+  // Monotonic counter that bumps once the positioned graph has actually
+  // been handed to Sigma. Camera fitting before that point races FA2 and
+  // can reset against an empty/old graph.
   const [loadEpoch, setLoadEpoch] = useState(0);
+  const handleGraphLoaded = useCallback(() => {
+    setLoadEpoch((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -922,7 +968,7 @@ export function GraphCanvas({
             data={data}
             reducedMotion={reducedMotion}
             onSelectNode={onSelectNode}
-            onLoaded={() => setLoadEpoch((n) => n + 1)}
+            onLoaded={handleGraphLoaded}
           />
           <ChipFilterApplier data={data} chipFilters={chipFilters} />
           <HoverEmphasis />
