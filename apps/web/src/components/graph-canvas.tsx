@@ -990,7 +990,11 @@ export function GraphCanvas({
   }, [load]);
 
   const { ref: canvasFrameRef, size: canvasSize } = useMeasuredCanvasFrame();
-  const cameraEpoch = `${loadEpoch}:${canvasSize?.width ?? 0}x${canvasSize?.height ?? 0}`;
+  // Only graph-load completion should trigger the "fit after data" path.
+  // Container size changes are handled by CameraFitAndResize's internal
+  // ResizeObserver. Including canvasSize here caused every measured-size
+  // update to re-run the camera effect, which amplified the resize loop.
+  const cameraEpoch = String(loadEpoch);
 
   if (error) {
     return <p className="text-caption text-red-300">{error}</p>;
@@ -1016,11 +1020,14 @@ export function GraphCanvas({
         {canvasSize ? (
           <SigmaContainer
             style={{
-              // Explicit pixel dimensions, measured from the flex frame.
-              // This avoids Sigma mounting against ``height: 100%`` while
-              // the parent is still settling, which is exactly why the
-              // graph rendered correctly only when devtools happened to
-              // trigger another resize.
+              // Explicit pixel dimensions, measured from the flex frame,
+              // but absolutely positioned so the child cannot affect the
+              // parent frame's next measurement. The previous in-flow
+              // measured-size version created a feedback loop:
+              // measure frame -> set child height -> frame grows -> measure
+              // larger -> repeat.
+              position: "absolute",
+              inset: 0,
               height: `${canvasSize.height}px`,
               width: `${canvasSize.width}px`,
               background:
