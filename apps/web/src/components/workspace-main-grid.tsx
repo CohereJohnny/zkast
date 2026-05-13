@@ -101,8 +101,15 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
       : "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1fr)]";
   }
 
+  // ``h-[calc(100vh-2rem)]`` instead of ``min-h`` — children need a
+  // **definite** parent height for ``flex-1`` and ``height:100%`` to
+  // compute. Without it the grid row collapses to ``min-h-[480px]`` and
+  // the graph canvas + embedded log can't size themselves correctly.
+  // ``overflow-hidden`` keeps any child overflow inside the panel
+  // (which scrolls via its own ``overflow-auto``) instead of pushing
+  // the whole page taller — the regression we saw with the log open.
   return (
-    <div className="flex min-h-[calc(100vh-2rem)] flex-col gap-4">
+    <div className="flex h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden">
       <div className={gridClass}>
         {isDocumentsRoute ? (
           collapsed ? (
@@ -116,14 +123,15 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 id="main-content"
                 tabIndex={-1}
                 aria-label="Documents"
-                className="flex min-h-0 min-h-[320px] flex-col gap-3 rounded-lg border border-border-strong bg-surface p-4 outline-none"
+                className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-border-strong bg-surface p-4 outline-none"
               >
                 <div className="flex items-center gap-2">
                   <CollapseHeaderButton onCollapse={toggle} />
                 </div>
-                {/* Documents takes natural height; the log fills the rest
-                    of the column. ``min-h-0`` on both is required for
-                    nested flex children to scroll instead of overflow. */}
+                {/* Documents takes the bulk of the column and scrolls
+                    inside; the log is bounded below — when open it
+                    shares the column ~50/50, when closed it shrinks to
+                    a thin header. */}
                 <div className="min-h-0 flex-1 overflow-auto">{children}</div>
                 <JobLogConsole />
               </section>
@@ -137,15 +145,12 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
             ) : (
               <section
                 aria-label="Documents"
-                className="flex min-h-0 min-h-[480px] flex-col gap-3 rounded-lg border border-border-subtle bg-surface/80 p-4"
+                className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-border-subtle bg-surface/80 p-4"
               >
                 <div className="flex items-center gap-2">
                   <p className="text-caption font-medium text-secondary">Documents</p>
                   <CollapseHeaderButton onCollapse={toggle} />
                 </div>
-                {/* The DocumentsPanel scrolls internally; the log sits
-                    below it and the log's expanded body flex-grows into
-                    any remaining vertical room. */}
                 <div className="min-h-0 flex-1 overflow-hidden">
                   <DocumentsPanel workspaceId={workspaceId} variant="compact" />
                 </div>
@@ -156,7 +161,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
               id="main-content"
               tabIndex={-1}
               aria-label="Main workspace panel"
-              className="flex min-h-[320px] flex-col rounded-lg border border-border-strong bg-surface outline-none"
+              className="flex min-h-0 flex-col overflow-auto rounded-lg border border-border-strong bg-surface outline-none"
             >
               {children}
             </section>
