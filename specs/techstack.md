@@ -162,6 +162,8 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 - **Optional**: **Neo4j** for users who already run it.
 - **Future**: **Kuzu** as an embedded option for the absolute simplest self-host story.
 
+**FalkorDB database-naming contract (BUG-011, Sprint 6)**: `apps/pipeline/app/graphiti_factory.falkor_database_for_workspace(ws)` returns the workspace UUID verbatim. The database name **must equal the Graphiti `group_id`** because `graphiti-core` 0.29's `Graphiti.add_episode` silently calls `self.driver = self.driver.clone(database=group_id)` whenever the two diverge — so a prefixed database name (e.g. `zkast_ws_<hex>`) caused writes to land in a UUID-named graph while `search()` continued to read from the prefixed one, returning zero hits for every query. Pinning `database == group_id` makes the silent clone a no-op and is non-breaking for existing FalkorDB data (which is already in the UUID-named graph).
+
 **Rejected**:
 
 - **Custom Neo4j integration without Graphiti**: we would re-implement temporal facts, dedup, and hybrid retrieval.
@@ -289,6 +291,10 @@ Per-workspace settings choose distinct **small** and **large** models so users c
 
 - The pipeline service truncates conversation history to fit Cohere's input window, preferring most-recent turns. A summary placeholder is inserted for older turns when truncation occurs. Retrieved documents always have priority over history.
 - `RetrievalRecord` is the source of truth for what grounded a given message; replaying a question never relies on cached conversation state alone.
+
+**Cohere SDK shape (BUG-012, Sprint 6)**: `apps/pipeline/app/cohere_chat.chat_stream_grounded` calls `cohere.AsyncClientV2.chat_stream(...)` directly, **without `await`**. Despite its `async def` signature, `chat_stream` is an async-generator function — invoking it returns an `AsyncIterator` synchronously. The non-streaming fallback (`AsyncClientV2.chat`) really is a coroutine and is correctly awaited. The wrapper's empty-stream fallback retries the non-streaming path once and surfaces a `warning`-level log event into the drawer (BUG-009 pattern). All transient HTTPX errors and `cohere.errors.{ServiceUnavailable,GatewayTimeout,TooManyRequests,InternalServerError}` go through a small in-place exponential-backoff retry.
+
+**Graph-context grounding document (BUG-013, Sprint 6; precursor to TD-015)**: `chat_turn._retrieve` always prepends a synthesized `graph_context:workspace_shape` `ChatDocument` to the grounding bundle. The document is rendered by `chat_turn._render_graph_context_document` from `filter_options_repo.summarize_workspace_graph` and contains: (a) workspace `entity_total` and `edge_total`, (b) per-entity-type counts with up to 25 named exemplars ordered by degree, (c) per-edge-type counts, and (d) an instruction line telling the LLM to treat the structured numbers as authoritative for "how many" / "list all" / "count by" intents. This is a *partial mitigation*: pure vector retrieval over a graph-shaped index cannot answer typed-aggregation questions reliably (the user's "how many locations?" returned 3 instead of 6 because the hybrid ranker surfaced facts about regulators and standards rather than the 6 typed `Location` entities). The full GraphRAG answer — intent routing + typed-entity handler + multi-hop traversal handler — is tracked as **TD-015** and pinned by Sprint 6b's eval.
 
 **Cost and rate-limit posture**:
 

@@ -11,7 +11,8 @@ The product is **self-hostable first** (Docker Compose, BYO Cohere key) with a p
 | 4 | `sprint-4` | Atomic notes, graph extraction, notes workspace UI |
 | 5b | `sprint-5b` | Graph viz, merge with persisted undo, snapshots + review, JobLogConsole drawer, heartbeat reconciler, Diagnostics page |
 | 5c | `sprint-5c` | Typed Graphiti extraction (Pydantic taxonomy), LangExtract source-grounded evidence, picklist filter UX |
-| 6 | `sprint-6` (branch) | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; `chat_messages.retrieval_mode` ships for Sprint 6b (see [sprints/sprint_6/sprint_6_tasks.md](sprints/sprint_6/sprint_6_tasks.md)) |
+| 6 | `sprint-6` | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; **graph-context grounding document** (BUG-013 mitigation) gives the LLM typed counts and exemplars for aggregation queries; pipeline log attached to Documents column; workspace layout overhaul |
+| 6b | `sprints/sprint-6b` (branch) | GraphRAG vs naive-RAG evaluation harness + deterministic traversal handlers (TD-015): typed-question taxonomy, retrieval-mode toggle on `chat_messages.retrieval_mode`, side-by-side comparison view, intent routing + typed-entity / multi-hop handlers |
 
 ## Architecture
 

@@ -114,7 +114,7 @@ See [personas.md](personas.md) for detail. In short:
 - **FR-42**: Chat sessions and messages are **persistent per workspace**; a user can list, rename, delete, and resume sessions. Editors can edit a session's title; messages are append-only except for regeneration of the last assistant turn.
 - **FR-43**: A user can **regenerate** the last assistant message (re-runs retrieval and generation) without restarting the session.
 - **FR-44**: Other surfaces (graph view, note view, entity detail) expose an **"Ask about this"** action that starts (or continues) a chat session pre-scoped to the selected note/entity/subgraph.
-- **FR-45**: When retrieval produces no useful context, the assistant must say so explicitly rather than answer from parametric knowledge. Cohere Chat's grounded mode is configured to refuse ungrounded answers; the UI labels the response accordingly.
+- **FR-45**: When retrieval produces no useful context, the assistant must say so explicitly rather than answer from parametric knowledge. Cohere Chat's grounded mode is configured to refuse ungrounded answers; the UI labels the response accordingly. "No useful context" means no grounding documents *at all* — the synthesized graph-context document (per-type counts + named exemplars from the workspace's typed taxonomy) is sufficient context for typed-aggregation questions ("how many", "list all", "count by") even when hybrid vector retrieval surfaces zero fact-level hits. See [techstack.md](techstack.md) "Grounded Chat" → "Graph-context grounding document" and **TD-015**.
 
 ### Configuration and Settings
 

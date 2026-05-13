@@ -797,14 +797,14 @@ A single React context (`FeedbackProvider`, mounted globally in `app/layout.tsx`
 
 **Rule**: no component may call `window.confirm` / `window.alert` / `window.prompt` directly. The Sprint 5b rollout swept every existing call site; new code must use these hooks instead. Native dialogs break the design system, fail screen-reader expectations, and block the event loop.
 
-## Pipeline Log Drawer (Sprint 5b)
+## Pipeline Log Drawer (Sprint 5b, attached to Documents in Sprint 6)
 
-A persistent bottom-edge drawer (`JobLogConsole`) is mounted globally for every workspace route. It is the canonical "is the pipeline stuck?" affordance.
+The `JobLogConsole` is mounted **inside the Documents column** in every workspace route (see `WorkspaceMainGrid`). It is the canonical "is the pipeline stuck?" affordance and lives with the documents it describes — when the Documents column collapses to its rail, the log unmounts with it.
 
 **Display elements**:
 
-- **Collapsed header strip**: shows `Pipeline log`, count of active jobs (or `idle`), total line count, and a chevron to expand. Click anywhere on the strip to toggle. State persists per browser via `localStorage`.
-- **Expanded body** (~12 rem tall): a scrolling monospace log surface (`role="log"`, `aria-live="polite"`).
+- **Collapsed header strip**: shows `Pipeline log`, count of active jobs (or `idle`), total line count, and a chevron to expand. Click anywhere on the strip to toggle. State persists per browser via `localStorage` (independent of the Documents column collapse state).
+- **Expanded body** (≥ 12 rem tall, `flex-1` inside the column): a scrolling monospace log surface (`role="log"`, `aria-live="polite"`). When expanded the log shares the column ~50/50 with the documents list; when closed it sits as a thin header row at the bottom of the column.
 - **Filters above the body**: `Level` select (`All` | `Info` | `Warning` | `Error`), `Job` select (per-job filter), `Follow tail` checkbox, `Copy`, `Clear` buttons.
 
 **Behavior**:
@@ -813,8 +813,23 @@ A persistent bottom-edge drawer (`JobLogConsole`) is mounted globally for every 
 - Each event renders as one line: `HH:MM:SS jobId-prefix stage-badge message`. `log` events use the level color (info → secondary, warning → amber, error → red). `metric` events render as `name=value`. `stage_started` / `stage_completed` / `job_*` events render with their stage badge.
 - `follow tail` keeps the body scrolled to the latest line; user scrolling up automatically pauses follow-tail. `Copy` ships the filtered log to the clipboard as TSV; `Clear` zeroes the in-memory buffer but does not affect the server-side `ingestion_run_logs` table.
 - Events that mutate the working graph (`metric` events named `entity_count`, `edge_count`, `note_count`) cross-fire `emitGraphInvalidated()` so the graph canvas refetches without polling.
+- **Chat-turn events surface here too**. Sprint 6's `run_chat_turn` publishes its seven SSE event types onto the same Redis Stream the drawer subscribes to, so chat retrieval / streaming / refusal activity is visible without opening a second debugging surface.
 
-**Layout**: fixed, full-width up to `max-w-5xl`, `z-index 35`, `pointer-events-auto` only on the drawer itself so clicks pass through to the canvas behind.
+**Layout**: in-flow inside the Documents `<section>`, not floating. The previous bottom-edge fixed drawer was removed in Sprint 6 because (a) the log is tied to document ingestion, (b) it overlapped the graph canvas, and (c) keeping it in flow lets the graph canvas reclaim the full row height.
+
+## Workspace Grid Layout (Sprint 6)
+
+The workspace shell uses a definite-height grid (`h-[calc(100vh-2rem)] overflow-hidden`) so every child can compute its own height via `flex-1` and explicit pixel measurement. This is the contract that lets the graph canvas mount with correct dimensions on first paint.
+
+**Three-column layout** (default for `/notes`, `/chat`, `/snapshots`):
+
+- **Documents column** (left): the `DocumentsPanel` (`compact` variant) at the top + the embedded `JobLogConsole` at the bottom. Collapsible to a thin rail.
+- **Main content column** (center): the route's primary content (notes list, chat panel, snapshot list).
+- **Graph column** (right): the `GraphWorkspacePanel` with filters and the Sigma canvas.
+
+**Two-column layout** (`/documents` route): documents column expands; main column hosts the full documents view. **One-column variant** (`/graph` route): graph column takes the entire main+graph slot.
+
+**Graph canvas height contract** (BUG-fix-cluster, Sprint 6): the `SigmaContainer` does **not** mount until the parent flex frame has been measured with `width >= 120px && height >= 240px`. It receives explicit pixel `width` / `height` (not `height: 100%`) and is positioned `absolute inset-0` inside the measured frame so its own dimensions cannot feed back into the parent measurement. Camera fit happens on `loadEpoch` change (graph load) and on `ResizeObserver` size deltas ≥ 24 px. ForceAtlas2 settings come from `forceAtlas2.inferSettings(graph)` so they scale with graph size; final coordinates are normalized into a padded `[0, 1]` box before `loadGraph()` so Sigma's default/reset camera and the graph coordinate space agree.
 
 ## Merge Flow with Persisted Undo (Sprint 5b)
 

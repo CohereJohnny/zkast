@@ -852,6 +852,8 @@ If called after the message is already complete, the server replays a synthetic 
 
 **Outputs**: Retrieval record with `retrieval_strategy`, `query_text`, `retrieved_items[]` (each with kind, id, score, excerpt), `total_candidates`, `truncated`.
 
+The first entry in `retrieved_items[]` is always a synthesized `kind="graph_context"` row (id `workspace_shape`) when the workspace is non-empty. Its `excerpt` is the rendered text of the graph-context grounding document — workspace-wide entity/edge totals plus per-type counts and named exemplars from `filter_options_repo.summarize_workspace_graph`. The pipeline service constructs the matching `ChatDocument` with id `graph_context:workspace_shape` and prepends it to the documents passed to Cohere so the LLM has authoritative ground truth for typed-aggregation questions ("how many", "list all", "count by"). Empty workspaces skip the row entirely so the refusal short-circuit still fires. See [`techstack.md`](techstack.md) Grounded Chat section and **TD-015** for the long-term replacement with deterministic traversal handlers.
+
 **Auth**: Member (subject to share visibility).
 
 **Errors**: `not_found` (message was `refused` and has no retrieval record).
