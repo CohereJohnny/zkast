@@ -172,6 +172,24 @@ async def run_chat_turn(
             doc_token_budget=doc_token_budget,
         )
 
+        await record_log(
+            redis,
+            job_id=turn_id,
+            level="info" if documents else "warning",
+            stage="chat_turn",
+            message=(
+                f"retrieval: graphiti returned {total_candidates} hit(s); "
+                f"{len(documents)} document(s) kept after scope filters"
+            ),
+            data={
+                "total_candidates": total_candidates,
+                "kept": len(documents),
+                "truncated": truncated,
+            },
+            database_url=None,
+            ingestion_run_id=None,
+        )
+
         # ---- Persist RetrievalRecord BEFORE the LLM call (FR-41) ----
         retrieval_strategy = "graphiti_hybrid_v1"
         retrieval_record_id = await asyncio.to_thread(

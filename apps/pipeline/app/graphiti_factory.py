@@ -23,8 +23,22 @@ COHERE_COMPAT_BASE = "https://api.cohere.com/compatibility/v1"
 
 
 def falkor_database_for_workspace(workspace_id: str) -> str:
-    """One FalkorDB logical graph per workspace (stable name)."""
-    return f"zkast_ws_{workspace_id.replace('-', '')}"
+    """One FalkorDB logical graph per workspace.
+
+    The database name **must equal the Graphiti ``group_id``** (workspace
+    UUID). Otherwise BUG-011 fires: graphiti-core 0.29.0's FalkorDB driver
+    silently calls ``driver.clone(database=group_id)`` inside
+    ``add_episode`` (see
+    [graphiti.py L1034](https://github.com/getzep/graphiti)) and writes
+    every node/edge to a graph named after the group_id, but ``search()``
+    reads from the originally-configured database — so ingestion succeeds
+    yet every retrieval returns zero hits.
+
+    Returning the workspace UUID keeps both writes and reads on the same
+    FalkorDB graph and is non-breaking for any data already ingested
+    against the same convention.
+    """
+    return workspace_id
 
 
 def resolve_stored_cohere_api_key(settings: Settings, workspace_id: str) -> str | None:

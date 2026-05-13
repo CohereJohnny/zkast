@@ -16,6 +16,45 @@ Log **critical bugs that block sprint progress** here. Resume sprint work after 
 
 ## Entries
 
+## Bug Entry: 2026-05-13
+- **ID**: BUG-011
+- **Description**: Every chat turn refused with "No grounding context found"
+  even though the workspace graph clearly had relevant entities (e.g.
+  asking "what does Deloitte have to do with oil & gas?" against a
+  workspace with a `Deloitte` Entity node + three `Deloitte`-mentioning
+  `RELATES_TO` edges returned `total_candidates=0`).
+  Root cause: graphiti-core 0.29.0's `FalkorDriver` silently calls
+  `self.driver = self.driver.clone(database=group_id)` inside
+  `Graphiti.add_episode` ([graphiti.py L1034](https://github.com/getzep/graphiti))
+  whenever `group_id != driver._database`. Our
+  `falkor_database_for_workspace(ws)` returned `f"zkast_ws_{ws.replace('-', '')}"`
+  while `group_id = workspace_id` (with dashes), so:
+    - **Writes** during `add_episode` were silently re-routed to a
+      FalkorDB graph named after the bare workspace UUID
+      (`00000000-0000-4000-8000-000000000002`) — 373 entities, 563 edges
+      landed there.
+    - **Reads** via `graphiti.search(group_ids=[ws])` still went through
+      the originally-configured graph `zkast_ws_*`, which was empty.
+  The `/graph/search` and chat-retrieval endpoints both returned
+  `[]` for *every* query, in *every* workspace. The graph **viz** was
+  unaffected because it reads `entities` / `relationships` straight from
+  Postgres.
+- **Discovered**: Sprint 6 smoke test against the user's Oil & Gas
+  workspace — every chat turn returned `total_candidates: 0`, even for
+  queries that matched obvious entities visible in the legend.
+- **Context**: Sprint 6 (uncovered) / Sprints 4–5c (latent since the
+  prefixed naming has shipped since Sprint 2).
+- **Fix**: `falkor_database_for_workspace(ws)` now returns the workspace
+  UUID verbatim
+  ([`apps/pipeline/app/graphiti_factory.py`](../apps/pipeline/app/graphiti_factory.py)).
+  Database name == group_id, so the silent clone is a no-op, writes and
+  reads land on the same graph, and existing data is reached without
+  re-ingestion. Also surfaced retrieval hit-count as a `warning`-level
+  log event from `chat_turn` into the JobLogConsole drawer so a future
+  zero-hit regression is loud, not silent
+  ([`apps/pipeline/app/chat_turn.py`](../apps/pipeline/app/chat_turn.py)).
+- **Status**: Resolved
+
 ## Bug Entry: 2026-05-12
 - **ID**: BUG-010
 - **Description**: Sprint 5c Phase 1 introduced typed entity extraction via
