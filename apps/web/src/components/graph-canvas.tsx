@@ -2,7 +2,7 @@
 
 import "@react-sigma/core/lib/style.css";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   SigmaContainer,
   useLoadGraph,
@@ -501,11 +501,10 @@ function CameraFitAndResize({ epoch }: { epoch: string }) {
 type CanvasSize = { width: number; height: number };
 
 function useMeasuredCanvasFrame() {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
   const [size, setSize] = useState<CanvasSize | null>(null);
 
   useEffect(() => {
-    const node = ref.current;
     if (!node) return;
 
     let raf = 0;
@@ -516,6 +515,12 @@ function useMeasuredCanvasFrame() {
       // Do not mount Sigma while the flex grid is still effectively
       // collapsed. Mounting against a 1px-tall canvas is the root cause of
       // the "all graph objects render as a single line" regression.
+      //
+      // Important: this hook uses a callback ref and depends on `node`
+      // because the first render often returns "Loading graph…" and does
+      // not mount the canvas frame at all. The previous ref.current + []
+      // effect ran once against null and never observed the real node,
+      // leaving the UI stuck on "Preparing graph canvas…".
       if (width < 120 || height < 240) return;
       setSize((prev) => {
         if (prev && prev.width === width && prev.height === height) return prev;
@@ -542,9 +547,9 @@ function useMeasuredCanvasFrame() {
       window.removeEventListener("resize", schedule);
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [node]);
 
-  return { ref, size };
+  return { ref: setNode, size };
 }
 
 function ZoomControls() {
