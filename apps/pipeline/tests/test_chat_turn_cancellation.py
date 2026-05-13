@@ -88,7 +88,13 @@ def test_cancelled_error_marks_message_cancelled_and_reraises(
 
     async def fake_retrieve(*_a, **_k):
         docs = [ChatDocument(id="note:foo", text="hello")]
-        return [{"kind": "note", "id": "foo", "excerpt": "hello"}], docs, 1, False
+        return (
+            [{"kind": "note", "id": "foo", "excerpt": "hello"}],
+            docs,
+            1,
+            False,
+            "graph_graphiti_context_v1",
+        )
 
     monkeypatch.setattr(chat_turn, "_retrieve", fake_retrieve)
 

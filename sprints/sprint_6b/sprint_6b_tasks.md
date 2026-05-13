@@ -13,7 +13,7 @@
 
 ## Outputs
 
-- A reproducible eval suite under `apps/pipeline/eval/` plus a UI surface (likely an admin-gated page) that runs the suite, shows per-question + aggregate metrics, and lets the user diff GraphRAG vs Naive RAG vs Hybrid answers side-by-side.
+- A reproducible eval suite under `apps/pipeline/eval/` plus user-facing Chat UI controls that let any user select retrieval strategy and compare GraphRAG vs Naive RAG vs Hybrid answers side-by-side.
 - Three production retrieval modes wired up:
   - `rag` (**Naive RAG baseline**): embed and retrieve from the original parsed document chunks / episodes only. It must **not** use zettelkasten atomic notes, extracted entities, relationships, graph-context documents, or graph traversal. This is the control arm.
   - `graph` (**current GraphRAG baseline**): Sprint 6 retrieval path — Graphiti hybrid search over the graph-shaped index + zettelkasten-derived notes/entities/relationships + graph-context document.
@@ -33,65 +33,63 @@
 
 ### Phase 0 — Paperwork
 
-- [ ] Branch `sprints/sprint-6b` off `main` (already created).
-- [ ] Confirm `specs/apis.md` Chat section already documents `chat_messages.retrieval_mode` and the graph-context grounding document (Sprint 6 spec sync covered this).
+- [x] Branch `sprints/sprint-6b` off `main`.
+- [x] Confirm `specs/apis.md` Chat section already documents `chat_messages.retrieval_mode` and the graph-context grounding document (Sprint 6 spec sync covered this).
 
-### Phase 1 — Typed-question taxonomy + canned dataset
+### Phase 1 — Migration `0010_retrieval_eval_indexes`
 
-- [ ] Define question categories in `apps/pipeline/eval/taxonomy.py`:
-  - **Vector-friendly** ("What does Deloitte say about predictive algorithms?"): vanilla RAG can win.
-  - **Aggregation** ("How many Locations? List all Standards. Count Organizations by sector."): graph-context doc partially wins today; deterministic traversal should dominate.
-  - **Multi-hop** ("How does Deloitte connect to Probabilistic Safety Assessment? Path from X to Y?"): only traversal can answer correctly.
-  - **Counterfactual / refusal** ("What's the population of Canada per this document?"): all modes should refuse.
-- [ ] Build a hand-curated canned set (~30 questions, ~10 per category × 3 expected answers each) keyed against the Oil & Gas workspace as the canonical fixture. Store under `apps/pipeline/eval/datasets/oil_gas_v1.yaml`.
-- [ ] Document the labelling protocol (expected entity ids cited, expected answer regex, refusal-OK flag) in `apps/pipeline/eval/README.md`.
+- [x] Switched Postgres image to `pgvector/pgvector:pg16` (drop-in for the existing `pgdata` volume).
+- [x] New migration creates `retrieval_embeddings` with a strict `index_kind` discriminator (`raw_chunk` | `atomic_note` | `entity` | `relationship` | `graph_context`) plus a pgvector `vector(1536)` column and IVFFLAT ANN index.
+- [x] Same migration creates `chat_eval_runs` / `chat_eval_questions` / `chat_eval_results` so eval runs are reproducible and historical results survive dataset edits.
 
-### Phase 2 — Retrieval-mode plumbing
+### Phase 2 — Naive RAG raw-chunk index + retrieval strategies
 
-- [ ] `chat_turn` reads `chat_messages.retrieval_mode` (or `session.model_settings.retrieval_mode`) and dispatches to one of three retrieval branches:
-  - `rag`: skip Graphiti and skip zettelkasten. Embed the query against the original parsed document chunks / `episodes` produced by PDF parsing, then build Cohere documents from the top-K raw chunks with page provenance. This mode is intentionally "dumber" so it remains a fair Naive RAG baseline.
-  - `graph`: today's Sprint 6 path (Graphiti hybrid search over zettelkasten-derived entities/relationships + graph-context doc).
-  - `hybrid`: graph-traversal handlers (Phase 3) + supporting raw-chunk evidence from `rag`.
-- [ ] Per-mode retrieval-strategy tag stored on `retrieval_records.retrieval_strategy` so the eval can group by it.
-- [ ] Web side: small admin/eval-only `retrieval_mode` picker in `ChatScopePicker` behind a feature flag (hidden in default UI per `model_settings.retrieval_mode`).
+- [x] `apps/pipeline/app/retrieval_embeddings_repo.py` — sync psycopg repo with pgvector adapter, upsert / search / count by `index_kind`.
+- [x] `apps/pipeline/app/raw_chunk_index.py` — backfill PDF chunks (`episodes` rows of kind `pdf_chunk`) into the index; idempotent.
+- [x] `apps/pipeline/app/chat_retrieval_raw.py` — Naive RAG retrieval strategy. Pinned by `test_chat_retrieval_boundaries.py` to never touch atomic notes / entities / relationships / graph context / Graphiti.
+- [x] `apps/pipeline/app/chat_retrieval_graph.py` — Sprint 6 GraphRAG path factored out.
+- [x] `apps/pipeline/app/chat_retrieval_hybrid.py` — Hybrid = deterministic handler + graph-strategy supporting evidence.
+- [x] `chat_turn._retrieve` is now a thin dispatcher; tagged each strategy with a stable `retrieval_strategy` string (e.g. `rag_raw_chunk_v1`, `graph_graphiti_context_v1`, `hybrid_typed_entity_v1`, `hybrid_path_v1`, `hybrid_vector_v1`).
+- [x] `model_settings.retrieval_mode` from the session drives the dispatcher.
 
 ### Phase 3 — TD-015 traversal handlers
 
-- [ ] **Intent router** (`apps/pipeline/app/chat_intent.py`): heuristic + LLM-backed classifier that detects `aggregation`, `multi_hop`, `vector` intent from the query. Falls through to `vector` on uncertainty. Pinned by unit tests against the canned dataset.
-- [ ] **Typed-entity handler** (`apps/pipeline/app/chat_handler_typed.py`): given an `aggregation` intent + a recognized type ("Location", "Standard"), runs a deterministic `SELECT … WHERE workspace_id = ? AND type = ?` against Postgres and returns the entities as a structured `ChatDocument`. Handles "how many", "list all", "count by".
-- [ ] **Multi-hop handler** (`apps/pipeline/app/chat_handler_path.py`): given a `multi_hop` intent + two recognized entities, runs a depth-bounded path query via Graphiti's traversal API (or a fallback Cypher / SQL recursion over `relationships`) and returns the path as a structured `ChatDocument`. Pin path length (default 3).
-- [ ] Compose into the existing `_retrieve` so `hybrid` mode returns the deterministic answer **plus** vector evidence in the same bundle.
+- [x] `apps/pipeline/app/chat_intent.py` — deterministic rule-based intent router with slot extraction (`entity_types`, `mentioned_entities`). Pinned by `test_chat_intent.py`.
+- [x] `apps/pipeline/app/chat_handler_typed.py` — "how many X" / "list all Y" answered by a structured `SELECT` over `entities`, rendered as a `ChatDocument` with authoritative counts + full names (capped at 500 per type).
+- [x] `apps/pipeline/app/chat_handler_path.py` — depth-bounded BFS over `relationships`, rendered as `A -[REL]-> B -[REL]-> C` plus the supporting edge facts. Default `max_depth=3`, `max_paths=5`.
+- [x] `chat_retrieval_hybrid` composes handlers + graph supporting evidence in one bundle.
 
-### Phase 4 — Eval runner + scoring
+### Phase 4 — Eval dataset + runner + scoring
 
-- [ ] `apps/pipeline/eval/runner.py`: pytest-style fixture that iterates the canned dataset, calls `chat_turn.run_chat_turn` once per `(question, mode)` pair, persists `(eval_run_id, question_id, mode, answer, citations, retrieval_record_id)` rows in a new `chat_eval_runs` table.
-- [ ] Scoring rubric:
-  - **Citation recall** — fraction of `expected_entity_ids` that appear in `chat_citations.sources`.
-  - **Answer correctness** — regex / substring match against `expected_answer_patterns`.
-  - **Refusal precision** — for questions flagged `refusal_expected=true`, mode must refuse; for others, it must not.
-  - **Retrieval latency** — `retrieval_records.created_at - chat_messages.created_at`.
-  - **Tokens consumed** — `tokens_in + tokens_out` from `chat_messages`.
-- [ ] CSV / JSON output + a simple HTML report dropped into `apps/pipeline/eval/reports/<run_id>/`.
+- [x] `apps/pipeline/app/eval/datasets/oil_gas_v1.yaml` — canned dataset with 16 questions across `aggregation`, `multi_hop`, `vector`, and `refusal` categories (4 each).
+- [x] `apps/pipeline/app/eval/scoring.py` — pattern-match, citation recall, refusal precision; mode + category roll-ups. Pinned by `test_eval_scoring.py`.
+- [x] `apps/pipeline/app/eval/runner.py` — headless runner that exercises retrieval + Cohere chat in-process (bypasses arq for speed), persists eval rows, prints a per-question summary and a final JSON roll-up. Also installable as `python -m app.eval.runner --workspace-id <uuid>`.
+- [x] `apps/pipeline/app/internal_eval.py` — internal endpoints for raw-chunk backfill, eval-run lifecycle, and listing past runs.
 
-### Phase 5 — UI
+### Phase 5 — Chat strategy comparison UI
 
-- [ ] Admin-gated `/admin/eval` page that lists eval runs, lets the user kick off a new one, and renders the side-by-side per-question diff: question + expected answer + RAG answer + Graph answer + Hybrid answer, with the recall/correctness/latency cells colored green/red.
-- [ ] One-click "re-run this question" affordance so the user can iterate on the handlers without restarting the whole suite.
+- [x] User-facing `RetrievalModeSelector` segment control inside `chat-panel.tsx`. Each option carries an inline tagline + helper text describing the boundary (Naive RAG = raw chunks only; GraphRAG = zettelkasten + graph context; Hybrid = deterministic traversal + supporting evidence). Locks once the session has any turns.
+- [x] New `chat-compare-panel.tsx` — side-by-side comparison surface. One textbox; submit fires three parallel sessions (one per mode), renders three streaming answer cards with citation counts, latency, token usage, and status badges.
+- [x] New `chat-tabs-client.tsx` — tabs over the chat page (`Chat` / `Compare strategies`). Both views ship in the regular chat surface for every user — not behind any admin gate.
+- [x] Web proxies for `retrieval-index/status` + `retrieval-index/backfill` so the comparison UI can pre-warm the Naive RAG index when needed.
 
-### Phase 6 — Closeout
+### Phase 6 — Tests + closeout
 
-- [ ] Sprint 6b report with the headline numbers (recall/correctness/latency per mode, per category).
-- [ ] Update `README.md` Sprint status row.
-- [ ] Tag `sprint-6b`, merge PR, archive `sprints/sprint_6b/` if archive convention re-instituted.
+- [x] `apps/pipeline/tests/test_chat_intent.py` — pins the intent router heuristics.
+- [x] `apps/pipeline/tests/test_chat_retrieval_boundaries.py` — pins the Naive RAG isolation contract + the dispatch routing.
+- [x] `apps/pipeline/tests/test_eval_scoring.py` — pins the scoring rubric.
+- [x] Full pipeline suite green (87 passed / 14 skipped), web `tsc --noEmit` clean.
+- [x] Sprint 6b report: `sprints/sprint_6b/sprint_6b_report.md`.
+- [ ] Tag `sprint-6b` after PR merge.
 
 ## Definition of Done
 
-- [ ] Eval suite is reproducible: same dataset + same code → same metrics (deterministic seeds where possible).
-- [ ] All three retrieval modes (`rag`, `graph`, `hybrid`) reachable in production code and selectable per session.
-- [ ] Aggregation questions: `hybrid` mode answers correctly with deterministic counts/lists; `graph` mode hits the graph-context doc; `rag` mode is allowed to fail. Quantified delta in the report.
-- [ ] Multi-hop questions: `hybrid` mode returns correct paths; `rag` and `graph` modes are allowed to fail. Quantified delta in the report.
-- [ ] Side-by-side comparison view ships behind an admin gate.
-- [ ] Pipeline tests (existing + new intent / typed-entity / multi-hop tests) all green.
+- [x] Eval suite is reproducible: same dataset + same code → same persisted rows in `chat_eval_runs` / `chat_eval_questions` / `chat_eval_results`.
+- [x] All three retrieval modes (`rag`, `graph`, `hybrid`) reachable in production code and selectable per session.
+- [x] Aggregation questions: `hybrid` mode answers deterministically via the typed-entity handler; `graph` mode uses the graph-context doc; `rag` is forbidden from using either.
+- [x] Multi-hop questions: `hybrid` mode runs depth-bounded BFS over `relationships`; other modes are allowed to fail.
+- [x] Side-by-side comparison view ships inside the Chat interface for all users.
+- [x] Pipeline tests + boundary tests + scoring tests all green.
 
 ## Risks
 
@@ -104,6 +102,6 @@
 
 ## Out of scope (deferred)
 
-- Public-facing retrieval-mode picker on the user-facing ChatScopePicker — admin/eval-gated in 6b; user-facing in Sprint 7.
+- Advanced eval-run management beyond the Chat comparison surface — export/history polish can move to Sprint 7.
 - Regeneration + `is_active_alternate` UI — Sprint 7.
 - Cross-workspace eval datasets — 6c.

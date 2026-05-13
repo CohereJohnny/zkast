@@ -85,7 +85,13 @@ def test_retrieval_record_persisted_before_first_cohere_call(
 
     async def fake_retrieve(*_a, **_k):
         docs = [ChatDocument(id="note:1", text="x")]
-        return [{"kind": "note", "id": "1", "excerpt": "x"}], docs, 1, False
+        return (
+            [{"kind": "note", "id": "1", "excerpt": "x"}],
+            docs,
+            1,
+            False,
+            "graph_graphiti_context_v1",
+        )
 
     monkeypatch.setattr(chat_turn, "_retrieve", fake_retrieve)
 
@@ -170,7 +176,13 @@ def test_retrieval_record_persisted_even_when_chat_fails(
     monkeypatch.setattr(chat_turn, "insert_retrieval_record", fake_insert_retrieval)
 
     async def fake_retrieve(*_a, **_k):
-        return [{"kind": "note", "id": "1", "excerpt": "x"}], [ChatDocument(id="note:1", text="x")], 1, False
+        return (
+            [{"kind": "note", "id": "1", "excerpt": "x"}],
+            [ChatDocument(id="note:1", text="x")],
+            1,
+            False,
+            "graph_graphiti_context_v1",
+        )
 
     monkeypatch.setattr(chat_turn, "_retrieve", fake_retrieve)
 

@@ -129,7 +129,10 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, retrieve_returns: tuple) -
 def test_refusal_skips_cohere_and_marks_message_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured = _patch_common(monkeypatch, retrieve_returns=([], [], 0, False))
+    captured = _patch_common(
+        monkeypatch,
+        retrieve_returns=([], [], 0, False, "graph_graphiti_context_v1"),
+    )
 
     asyncio.run(
         chat_turn.run_chat_turn(

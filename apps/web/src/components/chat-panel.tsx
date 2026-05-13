@@ -54,8 +54,39 @@ type SessionShape = {
   scope: Record<string, unknown>;
 };
 
+export type RetrievalMode = "rag" | "graph" | "hybrid";
+
 const MAX_INPUT_LEN = 20_000;
 const ARIA_LIVE_THROTTLE_MS = 150;
+
+/**
+ * Sprint 6b — labels for the retrieval-strategy selector. The copy is
+ * verbatim from the user's principle that Naive RAG must use raw
+ * document chunks only.
+ */
+export const RETRIEVAL_MODE_LABELS: Record<
+  RetrievalMode,
+  { label: string; tagline: string; helper: string }
+> = {
+  rag: {
+    label: "Naive RAG",
+    tagline: "Raw document chunks only",
+    helper:
+      "Embed the question and retrieve top-K original parsed PDF chunks. No zettelkasten notes, entities, or graph traversal.",
+  },
+  graph: {
+    label: "GraphRAG",
+    tagline: "Zettelkasten + graph context",
+    helper:
+      "Graphiti hybrid search across atomic notes, entities, and relationships plus a graph-shape summary.",
+  },
+  hybrid: {
+    label: "Hybrid",
+    tagline: "Traversal + supporting evidence",
+    helper:
+      "Deterministic typed-entity and multi-hop handlers for 'how many' / 'list all' / 'how is A related to B'; falls through to GraphRAG for vector questions.",
+  },
+};
 
 export function ChatPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
@@ -67,6 +98,11 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [scope, setScope] = useState<ChatScopeValue>({});
+  // Sprint 6b — retrieval strategy selector. Defaults to ``graph`` so
+  // behaviour matches Sprint 6. The selected mode is locked in when
+  // the first message of a session is sent (it persists onto
+  // ``chat_messages.retrieval_mode`` and ``chat_sessions.model_settings``).
+  const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>("graph");
 
   // Track the currently-streaming assistant message id so token deltas
   // append to it.
@@ -205,7 +241,12 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
       const res = await fetch(`/api/v1/workspaces/${workspaceId}/chat-sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope }),
+        body: JSON.stringify({
+          scope,
+          // Sprint 6b — persist the strategy on the session so every
+          // turn the user submits in this session uses the same mode.
+          model_settings: { retrieval_mode: retrievalMode },
+        }),
       });
       const body = (await res.json()) as {
         session?: SessionShape;
@@ -229,7 +270,7 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
       });
       return null;
     }
-  }, [session, workspaceId, scope, toast]);
+  }, [session, workspaceId, scope, retrievalMode, toast]);
 
   const submit = useCallback(
     async (e?: FormEvent) => {
@@ -352,23 +393,30 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
       aria-label="Grounded chat"
       className="mx-auto flex h-full w-full max-w-3xl flex-col"
     >
-      <header className="flex items-center justify-between border-b border-border-subtle pb-2">
-        <div>
-          <h1 className="text-body font-medium text-primary">
-            {session?.title || "New chat"}
-          </h1>
-          <p className="text-caption text-muted">
-            Grounded answers cite notes, entities, and source pages from this workspace.
-          </p>
+      <header className="flex flex-col gap-2 border-b border-border-subtle pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h1 className="text-body font-medium text-primary">
+              {session?.title || "New chat"}
+            </h1>
+            <p className="text-caption text-muted">
+              Grounded answers cite notes, entities, and source pages from this workspace.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setScopeOpen((o) => !o)}
+            aria-expanded={scopeOpen}
+            className="cursor-pointer rounded border border-border-strong px-2 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          >
+            {scopeOpen ? "Hide scope" : "Scope"}
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setScopeOpen((o) => !o)}
-          aria-expanded={scopeOpen}
-          className="cursor-pointer rounded border border-border-strong px-2 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
-        >
-          {scopeOpen ? "Hide scope" : "Scope"}
-        </button>
+        <RetrievalModeSelector
+          value={retrievalMode}
+          onChange={setRetrievalMode}
+          disabled={session !== null}
+        />
       </header>
 
       {scopeOpen && !session ? (
@@ -579,5 +627,66 @@ function AssistantContent({
         ),
       )}
     </span>
+  );
+}
+
+function RetrievalModeSelector({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: RetrievalMode;
+  onChange: (mode: RetrievalMode) => void;
+  disabled: boolean;
+}) {
+  const modes: RetrievalMode[] = ["rag", "graph", "hybrid"];
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Retrieval strategy"
+      className="flex flex-col gap-1.5"
+    >
+      <div className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface/40 p-0.5">
+        {modes.map((m) => {
+          const meta = RETRIEVAL_MODE_LABELS[m];
+          const active = m === value;
+          return (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={disabled && !active}
+              onClick={() => !disabled && onChange(m)}
+              title={meta.helper}
+              className={
+                active
+                  ? "flex flex-1 cursor-pointer flex-col items-start rounded px-2 py-1 text-left text-caption font-medium text-canvas bg-accent-primary transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+                  : disabled
+                    ? "flex flex-1 cursor-not-allowed flex-col items-start rounded px-2 py-1 text-left text-caption text-muted opacity-50"
+                    : "flex flex-1 cursor-pointer flex-col items-start rounded px-2 py-1 text-left text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+              }
+            >
+              <span>{meta.label}</span>
+              <span
+                className={
+                  active
+                    ? "text-[10px] uppercase tracking-wider text-canvas/80"
+                    : "text-[10px] uppercase tracking-wider text-muted"
+                }
+              >
+                {meta.tagline}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-caption text-muted">
+        {RETRIEVAL_MODE_LABELS[value].helper}
+        {disabled
+          ? " — locked for this session; start a new chat to switch."
+          : ""}
+      </p>
+    </div>
   );
 }

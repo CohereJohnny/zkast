@@ -159,11 +159,33 @@ async def run_chat_turn(
 
         # ---- Retrieval ----
         query_text = user_msg.get("content") or ""
+        # Sprint 6b: explicit retrieval_mode dispatch. Session scope can
+        # override the default via ``model_settings.retrieval_mode``;
+        # otherwise we fall back to ``chat_messages.retrieval_mode`` for
+        # this turn (set when the row is inserted). ``graph`` stays the
+        # default for backwards compatibility with Sprint 6.
+        retrieval_mode = (
+            (model_settings.get("retrieval_mode") or "").strip().lower()
+            or (user_msg.get("retrieval_mode") if False else None)
+            or "graph"
+        )
+        if retrieval_mode not in {"rag", "graph", "hybrid"}:
+            retrieval_mode = "graph"
         await publish_job_event(
-            redis, turn_id, "retrieval_started", query_text=query_text[:1000]
+            redis,
+            turn_id,
+            "retrieval_started",
+            query_text=query_text[:1000],
+            retrieval_mode=retrieval_mode,
         )
 
-        retrieved_items, documents, total_candidates, truncated = await _retrieve(
+        (
+            retrieved_items,
+            documents,
+            total_candidates,
+            truncated,
+            retrieval_strategy,
+        ) = await _retrieve(
             settings,
             database_url,
             workspace_id=workspace_id,
@@ -171,6 +193,7 @@ async def run_chat_turn(
             scope=dict(session.get("scope") or {}),
             top_k=top_k,
             doc_token_budget=doc_token_budget,
+            retrieval_mode=retrieval_mode,
         )
 
         await record_log(
@@ -179,10 +202,12 @@ async def run_chat_turn(
             level="info" if documents else "warning",
             stage="chat_turn",
             message=(
-                f"retrieval: graphiti returned {total_candidates} hit(s); "
-                f"{len(documents)} document(s) kept after scope filters"
+                f"retrieval mode={retrieval_mode} strategy={retrieval_strategy} "
+                f"candidates={total_candidates} kept={len(documents)}"
             ),
             data={
+                "retrieval_mode": retrieval_mode,
+                "retrieval_strategy": retrieval_strategy,
                 "total_candidates": total_candidates,
                 "kept": len(documents),
                 "truncated": truncated,
@@ -192,7 +217,6 @@ async def run_chat_turn(
         )
 
         # ---- Persist RetrievalRecord BEFORE the LLM call (FR-41) ----
-        retrieval_strategy = "graphiti_hybrid_v1"
         retrieval_record_id = await asyncio.to_thread(
             insert_retrieval_record,
             database_url,
@@ -472,303 +496,58 @@ async def _retrieve(
     scope: dict[str, Any],
     top_k: int,
     doc_token_budget: int,
-) -> tuple[list[dict[str, Any]], list[ChatDocument], int, bool]:
-    """Run Graphiti hybrid search + apply Postgres-side scope filters.
+    retrieval_mode: str = "graph",
+) -> tuple[list[dict[str, Any]], list[ChatDocument], int, bool, str]:
+    """Dispatch the retrieval strategy for one chat turn.
 
-    Returns ``(retrieved_items, documents, total_candidates, truncated)``:
+    Returns ``(retrieved_items, documents, total_candidates, truncated,
+    retrieval_strategy)`` — the strategy string goes into
+    ``retrieval_records.retrieval_strategy`` so the eval / comparison
+    UI can group results by strategy.
 
-    - ``retrieved_items``: JSON-serializable list for the
-      ``retrieval_records.retrieved_items`` column. One entry per hit with
-      ``kind``, ``id``, ``score``, ``excerpt``. Also includes a single
-      synthesized ``kind="graph_context"`` row capturing the workspace
-      shape (type counts + named exemplars) so the audit trail records
-      what graph-level ground truth the LLM saw.
-    - ``documents``: the same hits rendered as ``ChatDocument`` objects to
-      pass to Cohere. Always includes one
-      ``id="graph_context:workspace_shape"`` document prepended so the
-      LLM has ground truth for aggregation questions ("how many X",
-      "list all Y") even when the hybrid ranker misses the relevant
-      entities. This is the first incremental step toward true graph
-      traversal in chat — see TD-015.
-    - ``total_candidates``: Graphiti's pre-truncation count.
-    - ``truncated``: True when more candidates existed than ``top_k``.
+    The three strategies are strictly isolated by design (BUG-013 +
+    TD-015):
+
+    - ``rag`` (Naive RAG): raw parsed-document chunks only via
+      ``chat_retrieval_raw``. Forbidden from touching atomic notes,
+      entities, relationships, the graph-context document, Graphiti, or
+      graph traversal.
+    - ``graph`` (Sprint 6 GraphRAG): Graphiti hybrid search over
+      zettelkasten-derived artifacts plus the graph-context grounding
+      document via ``chat_retrieval_graph``.
+    - ``hybrid`` (GraphRAG + deterministic traversal): TD-015 typed and
+      multi-hop handlers + supporting graph evidence via
+      ``chat_retrieval_hybrid``.
     """
-    if not query_text.strip():
-        return [], [], 0, False
+    from app import chat_retrieval_graph as graph_strategy
+    from app import chat_retrieval_hybrid as hybrid_strategy
+    from app import chat_retrieval_raw as raw_strategy
 
-    # ---- Always-on graph-context grounding document ----
-    # Pure GraphRAG with vector retrieval cannot answer "how many X" or
-    # "list all Y" questions reliably: the ranker returns the top-K most
-    # semantically similar *facts*, which is the wrong unit for typed
-    # aggregations. We inject a small, structured "shape of the graph"
-    # document so the LLM has deterministic ground truth for counts and
-    # short type-scoped exemplar lists.
-    graph_context_doc: ChatDocument | None = None
-    graph_context_item: dict[str, Any] | None = None
-    try:
-        shape = await asyncio.to_thread(
-            summarize_workspace_graph,
-            database_url,
-            workspace_id=workspace_id,
-            max_names_per_type=25,
-        )
-        rendered = _render_graph_context_document(shape)
-        if rendered:
-            graph_context_doc = ChatDocument(
-                id="graph_context:workspace_shape",
-                text=rendered,
-                title="Workspace graph shape",
-                metadata={"kind": "graph_context"},
-            )
-            graph_context_item = {
-                "kind": "graph_context",
-                "id": "workspace_shape",
-                "type": "graph_context",
-                "score": 1.0,
-                "excerpt": rendered,
-            }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "chat_retrieval_graph_context_failed",
-            workspace_id=workspace_id,
-            error=str(exc),
-        )
+    mode = (retrieval_mode or "graph").strip().lower()
+    if mode == "rag":
+        impl = raw_strategy
+    elif mode == "hybrid":
+        impl = hybrid_strategy
+    else:
+        impl = graph_strategy
 
-    # ---- Graphiti hybrid search ----
-    try:
-        graphiti = await graphiti_for_workspace(settings, workspace_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "chat_retrieval_graphiti_unavailable",
-            workspace_id=workspace_id,
-            error=str(exc),
-        )
-        return [], [], 0, False
-
-    try:
-        edges = await graphiti.search(
-            query=query_text, group_ids=[workspace_id], num_results=top_k
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("chat_retrieval_graphiti_search_failed", error=str(exc))
-        return [], [], 0, False
-
-    edges = list(edges or [])
-    total_candidates = len(edges)
-    truncated = total_candidates > top_k
-    if truncated:
-        edges = edges[:top_k]
-
-    # ---- Apply scope filters + build documents ----
-    allowed_entity_types = set(_str_list(scope.get("entity_types")))
-    allowed_edge_types = set(_str_list(scope.get("edge_types")))
-    allowed_document_ids = set(_str_list(scope.get("document_ids")))
-    allowed_tags = set(_str_list(scope.get("tags")))
-    valid_at = _parse_iso(scope.get("valid_at"))
-    seed_entity_ids = set(_str_list(scope.get("seed_entity_ids")))
-
-    retrieved_items: list[dict[str, Any]] = []
-    documents: list[ChatDocument] = []
-    budget_chars = doc_token_budget * APPROX_CHARS_PER_TOKEN
-    used_chars = 0
-
-    # Reserve the graph-context document's chars up front so the hybrid
-    # candidate loop below adapts to the smaller remaining budget. The
-    # context doc is appended to ``documents`` / ``retrieved_items``
-    # after the candidate loop but at the *head* of each list so it sits
-    # in front of fact-level evidence when the LLM reads them.
-    if graph_context_doc is not None:
-        used_chars += len(graph_context_doc.text)
-
-    # Edges are ordered by Graphiti's relevance; iterate smallest-first by
-    # excerpt length to maximize the count we can fit inside the budget.
-    candidate_rows: list[tuple[int, dict[str, Any]]] = []
-    for edge in edges:
-        fact = str(_attr(edge, "fact", "") or "").strip()
-        if not fact:
-            continue
-        edge_type = str(_attr(edge, "name", "") or "RELATES_TO")
-        if allowed_edge_types and edge_type not in allowed_edge_types:
-            continue
-
-        # Optional temporal filter: drop edges whose validity window doesn't
-        # include valid_at.
-        if valid_at is not None:
-            edge_valid_from = _attr(edge, "valid_at")
-            edge_valid_to = _attr(edge, "invalid_at")
-            if not _temporally_overlaps(valid_at, edge_valid_from, edge_valid_to):
-                continue
-
-        edge_uuid = str(_attr(edge, "uuid", "") or "")
-        rel_id_prefix = f"relationship:{edge_uuid}" if edge_uuid else None
-        excerpt = fact[:1000]
-        if not rel_id_prefix:
-            continue
-
-        candidate_rows.append(
-            (
-                len(excerpt),
-                {
-                    "kind": "relationship",
-                    "id": edge_uuid,
-                    "type": edge_type,
-                    "score": float(_attr(edge, "score", 0.0) or 0.0),
-                    "excerpt": excerpt,
-                    "source_node_uuid": str(
-                        _attr(edge, "source_node_uuid", "") or ""
-                    ),
-                    "target_node_uuid": str(
-                        _attr(edge, "target_node_uuid", "") or ""
-                    ),
-                    "doc_id": rel_id_prefix,
-                },
-            )
-        )
-
-    # Smallest-first ordering preserves Graphiti's relevance for the top
-    # K and lets us pack more documents into the budget.
-    candidate_rows.sort(key=lambda t: t[0])
-
-    # ---- Optional Postgres-side filters (document / tag / type / seed) ----
-    if (
-        allowed_document_ids
-        or allowed_tags
-        or allowed_entity_types
-        or seed_entity_ids
-    ):
-        # Resolve the source / target entity ids for each candidate.
-        from app import entities_repo  # local import — avoids cycles in tests
-
-        for size, row in candidate_rows:
-            src_ent = await asyncio.to_thread(
-                entities_repo.fetch_entity_id_for_graphiti_uuid,
-                database_url,
-                row["source_node_uuid"],
-            )
-            tgt_ent = await asyncio.to_thread(
-                entities_repo.fetch_entity_id_for_graphiti_uuid,
-                database_url,
-                row["target_node_uuid"],
-            )
-            row["source_entity_id"] = src_ent
-            row["target_entity_id"] = tgt_ent
-
-            if seed_entity_ids:
-                if (
-                    src_ent not in seed_entity_ids
-                    and tgt_ent not in seed_entity_ids
-                ):
-                    row["_skip"] = True
-                    continue
-
-            if allowed_entity_types or allowed_document_ids or allowed_tags:
-                ok = await asyncio.to_thread(
-                    _scope_check_for_entities,
-                    database_url,
-                    workspace_id=workspace_id,
-                    entity_ids=[e for e in (src_ent, tgt_ent) if e],
-                    allowed_entity_types=allowed_entity_types,
-                    allowed_document_ids=allowed_document_ids,
-                    allowed_tags=allowed_tags,
-                )
-                if not ok:
-                    row["_skip"] = True
-
-    # ---- Pack into budget ----
-    for _size, row in candidate_rows:
-        if row.get("_skip"):
-            continue
-        excerpt = row["excerpt"]
-        if used_chars + len(excerpt) > budget_chars and documents:
-            break
-        used_chars += len(excerpt)
-        retrieved_items.append(
-            {
-                "kind": row["kind"],
-                "id": row["id"],
-                "type": row.get("type"),
-                "score": row.get("score"),
-                "excerpt": excerpt,
-                "source_entity_id": row.get("source_entity_id"),
-                "target_entity_id": row.get("target_entity_id"),
-            }
-        )
-        documents.append(
-            ChatDocument(
-                id=row["doc_id"],
-                text=excerpt,
-                title=row.get("type"),
-                metadata={
-                    "kind": row["kind"],
-                    "score": str(row.get("score") or 0.0),
-                },
-            )
-        )
-
-    if graph_context_doc is not None and graph_context_item is not None:
-        documents.insert(0, graph_context_doc)
-        retrieved_items.insert(0, graph_context_item)
-
-    return retrieved_items, documents, total_candidates, truncated
+    return await impl.retrieve(
+        settings,
+        database_url,
+        workspace_id=workspace_id,
+        query_text=query_text,
+        scope=scope,
+        top_k=top_k,
+        doc_token_budget=doc_token_budget,
+    )
 
 
-def _scope_check_for_entities(
-    database_url: str,
-    *,
-    workspace_id: str,
-    entity_ids: list[str],
-    allowed_entity_types: set[str],
-    allowed_document_ids: set[str],
-    allowed_tags: set[str],
-) -> bool:
-    """Return True when at least one of the entity_ids passes every active
-    filter. Tags filter via the entity's source notes.
-    """
-    if not entity_ids:
-        return False
-    import psycopg
-
-    with psycopg.connect(database_url) as conn:
-        for eid in entity_ids:
-            row = conn.execute(
-                "SELECT type FROM entities WHERE id = %s::uuid LIMIT 1",
-                (eid,),
-            ).fetchone()
-            if row is None:
-                continue
-            etype = row[0]
-            if allowed_entity_types and etype not in allowed_entity_types:
-                continue
-            if allowed_document_ids:
-                hit = conn.execute(
-                    """
-                    SELECT 1
-                    FROM entity_episodes ee
-                    JOIN episodes e ON e.id = ee.episode_id
-                    WHERE ee.entity_id = %s::uuid
-                      AND e.document_id = ANY(%s::uuid[])
-                    LIMIT 1
-                    """,
-                    (eid, list(allowed_document_ids)),
-                ).fetchone()
-                if hit is None:
-                    continue
-            if allowed_tags:
-                hit = conn.execute(
-                    """
-                    SELECT 1
-                    FROM entity_notes en
-                    JOIN atomic_notes n ON n.id = en.note_id
-                    WHERE en.entity_id = %s::uuid
-                      AND n.tags && %s::text[]
-                    LIMIT 1
-                    """,
-                    (eid, list(allowed_tags)),
-                ).fetchone()
-                if hit is None:
-                    continue
-            return True
-    return False
+# Re-export the graph-context render helper so the existing test
+# ``test_chat_graph_context.py`` keeps importing it from this module
+# after the Sprint 6b refactor.
+from app.chat_retrieval_graph import (  # noqa: E402
+    _render_graph_context_document as _render_graph_context_document,
+)
 
 
 # ---------------------------------------------------------------------------

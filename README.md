@@ -12,7 +12,7 @@ The product is **self-hostable first** (Docker Compose, BYO Cohere key) with a p
 | 5b | `sprint-5b` | Graph viz, merge with persisted undo, snapshots + review, JobLogConsole drawer, heartbeat reconciler, Diagnostics page |
 | 5c | `sprint-5c` | Typed Graphiti extraction (Pydantic taxonomy), LangExtract source-grounded evidence, picklist filter UX |
 | 6 | `sprint-6` | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; **graph-context grounding document** (BUG-013 mitigation) gives the LLM typed counts and exemplars for aggregation queries; pipeline log attached to Documents column; workspace layout overhaul |
-| 6b | `sprints/sprint-6b` (branch) | GraphRAG vs naive-RAG evaluation harness + deterministic traversal handlers (TD-015): Naive RAG uses original parsed document chunks only (no zettelkasten / graph); GraphRAG uses notes + entities + relationships + graph context; Hybrid adds typed traversal handlers |
+| 6b | `sprints/sprint-6b` (branch) | GraphRAG-vs-Naive-RAG eval + TD-015 traversal handlers shipped. Naive RAG uses original parsed PDF chunks only; GraphRAG uses notes + entities + relationships + graph context; Hybrid composes the typed-entity / multi-hop handlers with graph supporting evidence. Side-by-side comparison built into the regular Chat surface for every user. Migration `0010_retrieval_eval_indexes` adds `retrieval_embeddings` (pgvector) and `chat_eval_*` tables. |
 
 ## Architecture
 

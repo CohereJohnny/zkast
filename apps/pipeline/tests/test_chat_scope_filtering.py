@@ -107,7 +107,7 @@ def test_session_scope_passes_into_retrieve(
 
     async def fake_retrieve(*_a, **kwargs):
         captured["retrieve_kwargs"] = kwargs
-        return [], [], 0, False
+        return [], [], 0, False, "graph_graphiti_context_v1"
 
     monkeypatch.setattr(chat_turn, "_retrieve", fake_retrieve)
 

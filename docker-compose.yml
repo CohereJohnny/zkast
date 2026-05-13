@@ -1,6 +1,11 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # Sprint 6b: switched to the official pgvector image (Postgres 16 base)
+    # so the migration ``0010_retrieval_eval_indexes`` can ``CREATE
+    # EXTENSION vector`` for the Naive-RAG / GraphRAG retrieval indexes.
+    # Same on-disk layout as ``postgres:16-alpine`` -> existing ``pgdata``
+    # volume is preserved without re-ingesting.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: zkast
       POSTGRES_PASSWORD: zkast

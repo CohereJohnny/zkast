@@ -107,7 +107,7 @@ def test_citation_rows_persisted_with_correct_kind_and_offsets(
     ]
 
     async def fake_retrieve(*_a, **_k):
-        return retrieved_items, docs, 2, False
+        return retrieved_items, docs, 2, False, "graph_graphiti_context_v1"
 
     monkeypatch.setattr(chat_turn, "_retrieve", fake_retrieve)
 

@@ -1,0 +1,232 @@
+name: oil_gas_v1
+description: |
+  Sprint 6b canned eval dataset for the Oil & Gas Industry Overview
+  fixture. Designed to surface the GraphRAG vs Naive RAG vs Hybrid
+  retrieval gaps across four question categories:
+
+  - vector       semantic facts that vector retrieval can win
+  - aggregation  "how many" / "list all" — typed structure wins
+  - multi_hop    "how is A related to B" — graph traversal wins
+  - refusal      grounded refusal expected from every strategy
+
+  Each question carries:
+    question_text             : user-facing prompt
+    expected_answer_patterns  : list of regex strings; passing means
+                                ANY match against the assistant answer
+                                (lower-cased)
+    expected_entity_ids       : list of canonical_name values whose
+                                presence in citations earns recall
+                                credit (we match canonical_name against
+                                the workspace; missing names just lower
+                                recall, they don't fail the run)
+    expected_source_ids       : list of prefixed source ids to look for
+                                in chat_citations.sources[] entries
+                                (optional)
+    refusal_expected          : true => the answer must refuse
+    notes                     : human notes about why the question fits
+                                the category
+
+questions:
+
+  # --- Aggregation -----------------------------------------------------
+  - key: agg_location_count
+    category: aggregation
+    question_text: "How many Locations are in this workspace's graph?"
+    expected_answer_patterns:
+      - "\\b6\\b"
+      - "six"
+    expected_entity_ids:
+      - Asia-Pacific
+      - Australia
+      - Canada
+      - Japan
+      - Middle East
+      - North America
+    refusal_expected: false
+    notes: |
+      Smoking-gun case from BUG-013. Sprint 6 GraphRAG path returned 3
+      via the graph-context document; hybrid typed-entity handler must
+      return 6 and name all of them.
+
+  - key: agg_list_standards
+    category: aggregation
+    question_text: "List all Standards mentioned in this workspace."
+    expected_answer_patterns:
+      - "standard"
+    expected_entity_ids: []
+    refusal_expected: false
+    notes: |
+      Pure list-all question. Hybrid path should enumerate the
+      Standard entities; rag will only quote whatever chunks the
+      ranker surfaced.
+
+  - key: agg_count_organizations
+    category: aggregation
+    question_text: "How many Organizations are represented in the workspace graph?"
+    expected_answer_patterns:
+      - "\\b\\d+\\b"
+    expected_entity_ids: []
+    refusal_expected: false
+    notes: |
+      Should pull from the typed taxonomy. Naive RAG often guesses
+      from raw text counts.
+
+  - key: agg_count_people
+    category: aggregation
+    question_text: "How many people are named in the document graph?"
+    expected_answer_patterns:
+      - "\\b\\d+\\b"
+    expected_entity_ids: []
+    refusal_expected: false
+    notes: |
+      Cross-checks Person typing. Few-Person workspaces are good
+      probes for typed-entity handler.
+
+  # --- Multi-hop -------------------------------------------------------
+  - key: hop_deloitte_psa
+    category: multi_hop
+    question_text: "How is Deloitte related to Probabilistic Safety Assessment?"
+    expected_answer_patterns:
+      - "deloitte"
+      - "probabilistic safety assessment"
+    expected_entity_ids:
+      - Deloitte
+      - Probabilistic Safety Assessment
+    refusal_expected: false
+    notes: |
+      Requires graph traversal. Vector retrieval rarely pulls both
+      entities in the same context window because they live in
+      different sections of the document.
+
+  - key: hop_epri_mrp227
+    category: multi_hop
+    question_text: "What connects EPRI and MRP-227?"
+    expected_answer_patterns:
+      - "epri"
+      - "mrp-227"
+    expected_entity_ids:
+      - EPRI
+      - MRP-227
+    refusal_expected: false
+    notes: |
+      Should resolve via the PUBLISHED relationship.
+
+  - key: hop_scada_agent
+    category: multi_hop
+    question_text: "How is SCADA connected to the Emissions & Environmental Reporting Agent?"
+    expected_answer_patterns:
+      - "scada"
+      - "emissions"
+    expected_entity_ids:
+      - SCADA
+      - Emissions & Environmental Reporting Agent
+    refusal_expected: false
+    notes: |
+      Tests USES / FEEDS-INTO style relationships across two hops.
+
+  - key: hop_corrosion_steel
+    category: multi_hop
+    question_text: "What is the relationship between Stress Corrosion Cracking and carbon steel?"
+    expected_answer_patterns:
+      - "carbon steel"
+      - "stress corrosion cracking"
+    expected_entity_ids:
+      - Stress Corrosion Cracking
+      - carbon steel
+    refusal_expected: false
+    notes: |
+      AFFECTS-style edge. Naive RAG may quote relevant sentences but
+      cannot enumerate the relationship type deterministically.
+
+  # --- Vector-friendly -------------------------------------------------
+  - key: vec_deloitte_predictive
+    category: vector
+    question_text: "What does Deloitte say about predictive algorithms preventing downtime?"
+    expected_answer_patterns:
+      - "deloitte"
+      - "downtime"
+    expected_entity_ids:
+      - Deloitte
+    refusal_expected: false
+    notes: |
+      Direct citation of a Deloitte quote. Naive RAG and GraphRAG
+      should both succeed; checks that Naive RAG is at least
+      competitive on its own turf.
+
+  - key: vec_sensor_fusion
+    category: vector
+    question_text: "How is sensor fusion used for leak detection?"
+    expected_answer_patterns:
+      - "sensor"
+      - "leak"
+    expected_entity_ids: []
+    refusal_expected: false
+    notes: |
+      Domain-specific topic distributed across several chunks.
+
+  - key: vec_mrp227_about
+    category: vector
+    question_text: "What is MRP-227 about?"
+    expected_answer_patterns:
+      - "mrp-227"
+      - "reactor"
+    expected_entity_ids:
+      - MRP-227
+    refusal_expected: false
+    notes: |
+      Single named-entity, single-topic. Tests whether Naive RAG
+      pulls the relevant raw chunks.
+
+  - key: vec_aging_management
+    category: vector
+    question_text: "What does the aging management framework cover?"
+    expected_answer_patterns:
+      - "aging"
+    expected_entity_ids: []
+    refusal_expected: false
+    notes: |
+      Tests domain phrasing the chat picked up directly from the PDF.
+
+  # --- Refusal ---------------------------------------------------------
+  - key: refuse_iphone
+    category: refusal
+    question_text: "When was the iPhone first released according to this paper?"
+    expected_answer_patterns:
+      - "(no|not|cannot|insufficient)"
+    expected_entity_ids: []
+    refusal_expected: true
+    notes: |
+      The Oil & Gas paper has nothing about iPhones. All modes should
+      refuse rather than answer from parametric knowledge.
+
+  - key: refuse_population
+    category: refusal
+    question_text: "What is the current population of Canada per this document?"
+    expected_answer_patterns:
+      - "(no|not|cannot|insufficient)"
+    expected_entity_ids: []
+    refusal_expected: true
+    notes: |
+      Canada appears as a Location entity but no population data is in
+      the corpus. Refusal must be honest.
+
+  - key: refuse_president
+    category: refusal
+    question_text: "Who is the president of the United States according to this workspace?"
+    expected_answer_patterns:
+      - "(no|not|cannot|insufficient)"
+    expected_entity_ids: []
+    refusal_expected: true
+    notes: |
+      Refusal must surface as failure of the corpus to mention this,
+      not a parametric guess.
+
+  - key: refuse_crude_price
+    category: refusal
+    question_text: "What is the current spot price of crude oil per this document?"
+    expected_answer_patterns:
+      - "(no|not|cannot|insufficient)"
+    expected_entity_ids: []
+    refusal_expected: true
+    notes: |
+      Industry-shaped distractor question.

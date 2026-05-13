@@ -244,9 +244,15 @@ Use this file for **non-blocking** refactors, dependency upgrades, and cleanup d
 - **Suggested sprint**: Sprint 6b (eval harness pins the failure modes) +
   Sprint 7 (handler implementations). TD-015 is the precondition for SM-6
   (grounded answer quality) to surpass a naive-RAG baseline.
-- **Status**: Open — partial mitigation shipped in Sprint 6 via graph-context
-  grounding document. Open work: structured-query routing + traversal
-  handlers.
+- **Status**: **Largely resolved in Sprint 6b.** Shipped: intent router
+  (`chat_intent`), typed-entity handler (`chat_handler_typed`),
+  depth-bounded multi-hop handler (`chat_handler_path`), and the
+  `hybrid` retrieval strategy that composes them with supporting graph
+  evidence. Eval suite + side-by-side comparison UI also shipped.
+  Remaining follow-ups: LLM-backed intent classifier as a fallback for
+  the heuristics, asymmetric Cohere embed input types, and dataset
+  expansion. Tracked in [`sprints/sprint_6b/sprint_6b_report.md`](../sprints/sprint_6b/sprint_6b_report.md)
+  under "Known follow-ups".
 
 ### TD-014 — Snapshot review: extend `needs_changes` end-to-end
 - **Date**: 2026-05-12
