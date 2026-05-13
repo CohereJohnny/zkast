@@ -62,6 +62,8 @@ async def generate_notes_from_episodes(
     max_notes: int,
     streaming: bool = True,
     progress_callback: Callable[[int], Awaitable[None]] | None = None,
+    warning_callback: Callable[[str, dict[str, Any] | None], Awaitable[None]]
+    | None = None,
     timeout_s: float = 120.0,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Synthesize notes from episodes.
@@ -69,6 +71,10 @@ async def generate_notes_from_episodes(
     Returns ``(notes_payload, suggested_links)`` where notes have
     ``title``, ``body``, ``tags``, ``source_episode_ids`` (caller fills the
     final IDs).
+
+    ``warning_callback`` (optional) lets the caller fan operationally
+    interesting warnings (empty-stream fallback, JSON parse retry) out
+    to the JobLogConsole drawer in addition to the worker's stderr.
     """
     if not episodes:
         return [], []
@@ -155,6 +161,17 @@ async def generate_notes_from_episodes(
                     "notes_llm_empty_stream_fallback_to_nonstreaming",
                     episodes=len(episodes),
                 )
+                if warning_callback:
+                    try:
+                        await warning_callback(
+                            (
+                                "Notes LLM stream returned no content; "
+                                "retrying with stream=False"
+                            ),
+                            {"episodes": len(episodes), "reason": "empty_stream"},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 used_streaming = False
                 raw_text = await _non_streaming_call()
         else:
@@ -188,6 +205,17 @@ async def generate_notes_from_episodes(
                 error=str(exc),
                 raw_preview=raw_text[:200],
             )
+            if warning_callback:
+                try:
+                    await warning_callback(
+                        (
+                            "Notes LLM stream returned non-JSON; "
+                            "retrying with stream=False"
+                        ),
+                        {"error": str(exc)[:200], "reason": "unparseable_stream"},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             raw_text = await _non_streaming_call()
             data = _extract_json_object(raw_text)
         else:

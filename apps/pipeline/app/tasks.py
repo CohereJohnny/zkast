@@ -637,6 +637,21 @@ async def generate_atomic_notes(
                     stage="generating_notes",
                 )
 
+            async def _warning_cb(message: str, data: dict[str, Any] | None) -> None:
+                # Surface notes_llm warnings (empty stream, unparseable
+                # stream fallback) into the JobLogConsole drawer so the
+                # user can see "the system is recovering, not stuck".
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    stage="generating_notes",
+                    message=message,
+                    data=data,
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+
             note_payloads: list[dict[str, Any]] = []
             suggested_links: list[dict[str, Any]] = []
             if episodes:
@@ -647,6 +662,7 @@ async def generate_atomic_notes(
                     max_notes=max_notes,
                     streaming=streaming_enabled,
                     progress_callback=_progress_cb,
+                    warning_callback=_warning_cb,
                 )
 
             created_ids: list[str] = []
