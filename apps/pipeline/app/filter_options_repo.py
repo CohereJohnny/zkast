@@ -34,11 +34,11 @@ def list_edge_type_counts(database_url: str, *, workspace_id: str) -> list[dict[
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         rows = conn.execute(
             """
-            SELECT rel_type AS name, COUNT(*) AS count
+            SELECT type AS name, COUNT(*) AS count
             FROM relationships
             WHERE workspace_id = %s::uuid
-            GROUP BY rel_type
-            ORDER BY COUNT(*) DESC, rel_type ASC
+            GROUP BY type
+            ORDER BY COUNT(*) DESC, type ASC
             """,
             (workspace_id,),
         ).fetchall()
