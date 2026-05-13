@@ -417,6 +417,69 @@ function ZoomControl({ icon, label, onClick }: { icon: string; label: string; on
   );
 }
 
+/**
+ * Sprint 6 / layout-fix: explicit camera fit + container resize handling.
+ *
+ * Two failure modes this component repairs:
+ * 1. **Initial load**: ``GraphLoader`` runs ForceAtlas2 in a worker for
+ *    several seconds, then calls ``loadGraph()``. By the time the
+ *    positioned graph lands, the SigmaContainer may have rendered while
+ *    the parent flex column was still mid-layout — Sigma's camera defaults
+ *    to a position that doesn't cover the new node bounding box, so all
+ *    the nodes appear clustered at the top edge of the canvas.
+ * 2. **Container resize**: when the user expands the embedded log, opens
+ *    the selection panel, or toggles the Documents column, the canvas
+ *    resizes. Sigma's built-in ResizeObserver refreshes the WebGL
+ *    viewport but **does not reset the camera**, so the previously-fit
+ *    bounding box becomes a tiny corner of the larger canvas.
+ *
+ * ``cam.animatedReset()`` recomputes the camera to fit all visible nodes
+ * inside the current container.
+ */
+function CameraFitAndResize({ epoch }: { epoch: number }) {
+  const sigma = useSigma();
+
+  // Fit-on-data: every time GraphLoader replaces the underlying graph,
+  // bump the camera to fit. We watch ``epoch`` rather than the graph
+  // contents so the reset fires exactly once per load instead of on every
+  // hover-driven reducer mutation.
+  useEffect(() => {
+    if (!sigma) return;
+    // Defer one frame so Sigma has applied the new graph before fitting.
+    const id = window.requestAnimationFrame(() => {
+      const cam = sigma.getCamera();
+      cam.animatedReset({ duration: 350 });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [sigma, epoch]);
+
+  // Fit-on-resize: observe the canvas container and reset whenever the
+  // pixel size changes by more than a trivial amount. The 24px gate
+  // avoids over-firing on Sub-pixel layout passes.
+  useEffect(() => {
+    if (!sigma) return;
+    const container = sigma.getContainer();
+    if (!container) return;
+    let lastW = container.clientWidth;
+    let lastH = container.clientHeight;
+    const ro = new ResizeObserver(() => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (Math.abs(w - lastW) < 24 && Math.abs(h - lastH) < 24) return;
+      lastW = w;
+      lastH = h;
+      // ``sigma.refresh()`` repaints WebGL; ``animatedReset`` re-centers
+      // and re-zooms the camera so the graph fills the new viewport.
+      sigma.refresh();
+      sigma.getCamera().animatedReset({ duration: 250 });
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [sigma]);
+
+  return null;
+}
+
 function ZoomControls() {
   const sigma = useSigma();
   return (
@@ -453,10 +516,19 @@ function GraphLoader({
   data,
   reducedMotion,
   onSelectNode,
+  onLoaded,
 }: {
   data: GraphPayload;
   reducedMotion: boolean;
   onSelectNode: (id: string | null) => void;
+  /**
+   * Fires once the FA2-positioned graph has been handed to Sigma. The
+   * outer component uses this to trigger an explicit camera fit — Sigma
+   * itself doesn't re-center on graph-replace, which is what caused
+   * "nodes clustered at the top of the canvas" after the layout fix
+   * gave the canvas its full vertical room.
+   */
+  onLoaded?: () => void;
 }) {
   const loadGraph = useLoadGraph();
 
@@ -645,6 +717,7 @@ function GraphLoader({
         settings: fa2Settings,
       });
       loadGraph(g);
+      onLoaded?.();
       return;
     }
 
@@ -678,7 +751,10 @@ function GraphLoader({
           settings: fa2Settings,
         });
       }
-      if (!cancelled) loadGraph(g);
+      if (!cancelled) {
+        loadGraph(g);
+        onLoaded?.();
+      }
     })();
 
     return () => {
@@ -686,7 +762,7 @@ function GraphLoader({
       layout?.stop();
       layout?.kill();
     };
-  }, [data, loadGraph, reducedMotion]);
+  }, [data, loadGraph, reducedMotion, onLoaded]);
 
   const registerEvents = useRegisterEvents();
   useEffect(() => {
@@ -718,6 +794,11 @@ export function GraphCanvas({
   const [data, setData] = useState<GraphPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+  // Monotonic counter that bumps once per successful ``setData`` so
+  // ``CameraFitAndResize`` can re-fit the camera every time the graph
+  // payload changes (filter change, ingest invalidation, etc.) without
+  // having to deep-compare ``data``.
+  const [loadEpoch, setLoadEpoch] = useState(0);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -776,6 +857,10 @@ export function GraphCanvas({
         edges: body.edges ?? [],
         truncated: Boolean(body.truncated),
       });
+      // ``loadEpoch`` is bumped from the GraphLoader's ``onLoaded``
+      // callback once FA2 finishes and Sigma has the positioned graph —
+      // bumping here would fire the camera-reset too early (before FA2
+      // even started) and cluster the graph at the top edge again.
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load graph");
       setData(null);
@@ -833,9 +918,15 @@ export function GraphCanvas({
             allowInvalidContainer: true,
           }}
         >
-          <GraphLoader data={data} reducedMotion={reducedMotion} onSelectNode={onSelectNode} />
+          <GraphLoader
+            data={data}
+            reducedMotion={reducedMotion}
+            onSelectNode={onSelectNode}
+            onLoaded={() => setLoadEpoch((n) => n + 1)}
+          />
           <ChipFilterApplier data={data} chipFilters={chipFilters} />
           <HoverEmphasis />
+          <CameraFitAndResize epoch={loadEpoch} />
           <ZoomControls />
         </SigmaContainer>
         <GraphLegend data={data} />
