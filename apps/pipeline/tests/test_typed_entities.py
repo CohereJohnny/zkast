@@ -50,6 +50,36 @@ def test_every_entity_type_has_a_docstring() -> None:
         )
 
 
+def test_every_entity_type_has_at_least_one_required_field() -> None:
+    """BUG-010 / TD-010 — Cohere's OpenAI-compat ``response_format`` rejects
+    JSON schemas whose ``object`` block has an empty ``required`` array with
+    HTTP 400 "object type must have at least one required field". Every
+    custom entity model passed to ``graphiti.add_episode(entity_types=...)``
+    must therefore have ≥ 1 required field, or graph extraction silently
+    produces 0 entities per episode.
+    """
+    for name, cls in entity_schemas.ENTITY_TYPES.items():
+        schema = cls.model_json_schema()
+        required = schema.get("required") or []
+        assert required, (
+            f"{name} has no required fields in its JSON schema; Cohere will "
+            "reject this with 400 invalid 'json_schema' (BUG-010)."
+        )
+
+
+def test_every_edge_type_has_at_least_one_required_field() -> None:
+    """Same constraint applies to edge type models — Graphiti calls
+    Cohere with each edge type's schema to fill in typed attributes.
+    """
+    for name, cls in entity_schemas.EDGE_TYPES.items():
+        schema = cls.model_json_schema()
+        required = schema.get("required") or []
+        assert required, (
+            f"Edge type {name} has no required fields; Cohere will reject "
+            "the schema (BUG-010)."
+        )
+
+
 def test_edge_types_cover_canonical_relations() -> None:
     expected_minimum = {
         "WORKS_FOR",

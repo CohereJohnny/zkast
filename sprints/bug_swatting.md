@@ -17,6 +17,44 @@ Log **critical bugs that block sprint progress** here. Resume sprint work after 
 ## Entries
 
 ## Bug Entry: 2026-05-12
+- **ID**: BUG-010
+- **Description**: Sprint 5c Phase 1 introduced typed entity extraction via
+  `graphiti.add_episode(entity_types=ENTITY_TYPES, edge_types=EDGE_TYPES, …)`.
+  The Pydantic models in
+  [`apps/pipeline/app/entity_schemas.py`](../apps/pipeline/app/entity_schemas.py)
+  declared all fields as `Optional[str] = Field(default=None, ...)`, so the
+  JSON schemas Pydantic emits have an empty `required: []` array. Cohere's
+  OpenAI-compat endpoint rejects those with HTTP 400 *"invalid 'json_schema'
+  provided: object type must have at least one required field"*. Graphiti
+  retries 2× then surrenders for that LLM call, so every per-episode entity
+  + edge extraction returned an empty list. Result: 33 episodes processed,
+  **0 entities, 0 edges, 0 evidence_spans_linked**.
+- **Discovered**: User noticed the JobLogConsole drawer was reporting
+  `episode N/33: +0 entities, +0 edges` for every chunk. Worker stderr
+  showed `Error in generating LLM response: Error code: 400 - ... invalid
+  'json_schema' provided: object type must have at least one required
+  field` for every Graphiti call.
+- **Context**: Same root cause as TD-010 (Graphiti's internal
+  `_extract_edge_timestamps`), but the typed-extraction path made the
+  problem block **every** call rather than just edge timestamps. So the
+  graph went from "slow but populated" pre-Sprint-5c to "fast but empty"
+  post-Sprint-5c.
+- **Fix**: Added a single required field per model in
+  [`apps/pipeline/app/entity_schemas.py`](../apps/pipeline/app/entity_schemas.py):
+  - Every entity type model gets `description: str = Field(...)`
+    (no default), except `Standard` which already had a required
+    `identifier`.
+  - Every edge type model gets `rationale: str = Field(...)`.
+  The LLM can always fill these from the source context; they're distinct
+  from Graphiti's own `EntityNode.name` so no collision.
+- **Status**: Resolved
+- **Follow-up**: Two new regression tests in
+  [`tests/test_typed_entities.py`](../apps/pipeline/tests/test_typed_entities.py)
+  assert every entity type and every edge type has ≥ 1 required field in
+  its JSON schema, so a future refactor that adds an all-optional model
+  fails CI immediately rather than silently zeroing out extraction.
+
+## Bug Entry: 2026-05-12
 - **ID**: BUG-009
 - **Description**: Notes stage failed with
   `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. Root cause:
