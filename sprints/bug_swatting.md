@@ -17,6 +17,38 @@ Log **critical bugs that block sprint progress** here. Resume sprint work after 
 ## Entries
 
 ## Bug Entry: 2026-05-13
+- **ID**: BUG-012
+- **Description**: After BUG-011 unblocked retrieval, every chat turn that
+  reached the LLM step failed with
+  `TypeError: object async_generator can't be used in 'await' expression`.
+  Root cause: ``cohere.AsyncClientV2.chat_stream`` is declared
+  ``async def chat_stream(...) -> typing.AsyncIterator[V2ChatStreamResponse]``
+  in the Cohere v5 SDK, which the Cohere SDK compiles into an
+  **async-generator function**, not a plain coroutine — calling it returns
+  the async iterator *synchronously*. Our wrapper at
+  `apps/pipeline/app/cohere_chat.py` did `await client.chat_stream(...)`,
+  which raises immediately. `chat_stream_grounded` then propagated the
+  error and the chat-turn handler ran the "failed" path with the
+  ``TypeError`` as the user-visible failure reason.
+  The non-streaming fallback (`client.chat`) really *is* a coroutine
+  function so the second leg of the BUG-009 fallback was correct — the
+  bug only fires on the primary streaming path.
+- **Discovered**: Manual smoke after BUG-011 fix — graphiti search
+  returned 5 hits for "Deloitte", the turn passed refusal, then died on
+  the very first Cohere call.
+- **Context**: Sprint 6 (chat turn wrapper). Hidden behind BUG-011 until
+  the FalkorDB database-naming bug was fixed.
+- **Fix**: Call `client.chat_stream(...)` directly (no `await`). Keep
+  the transient-error retry by wrapping the synchronous call in a tiny
+  ad-hoc retry loop (one re-open on transient errors). Updated
+  `tests/test_chat_turn_empty_stream_fallback.py` to mock
+  `chat_stream` with `MagicMock(return_value=…)` (sync, mirrors the
+  real Cohere shape) instead of `AsyncMock`, and pinned the contract
+  with a comment so a future refactor can't quietly reintroduce
+  the wrong shape.
+- **Status**: Resolved
+
+## Bug Entry: 2026-05-13
 - **ID**: BUG-011
 - **Description**: Every chat turn refused with "No grounding context found"
   even though the workspace graph clearly had relevant entities (e.g.

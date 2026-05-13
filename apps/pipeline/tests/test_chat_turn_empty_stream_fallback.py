@@ -57,7 +57,12 @@ async def test_empty_stream_falls_back_to_nonstreaming_and_warns() -> None:
     )
 
     mock_client = MagicMock()
-    mock_client.chat_stream = AsyncMock(return_value=_EmptyAsyncIter())
+    # BUG-012 contract: cohere.AsyncClientV2.chat_stream is an async-generator
+    # function, NOT a coroutine function — calling it returns the iterator
+    # synchronously. Mocking with ``AsyncMock`` would force callers to
+    # ``await`` the result, masking the production bug. ``MagicMock`` with
+    # ``return_value`` mimics the real Cohere behaviour.
+    mock_client.chat_stream = MagicMock(return_value=_EmptyAsyncIter())
     mock_client.chat = AsyncMock(return_value=nonstream_resp)
     mock_client.aclose = AsyncMock()
 
@@ -75,8 +80,11 @@ async def test_empty_stream_falls_back_to_nonstreaming_and_warns() -> None:
             on_warning=on_warning,
         )
 
-    # Both paths invoked, in order.
-    assert mock_client.chat_stream.await_count == 1
+    # Both paths invoked, in order. ``chat_stream`` is a sync call that
+    # returns an async iterator (BUG-012 contract — see MagicMock wiring
+    # above), so we assert ``call_count`` not ``await_count``. ``chat``
+    # really is a coroutine function so it keeps ``await_count``.
+    assert mock_client.chat_stream.call_count == 1
     assert mock_client.chat.await_count == 1
 
     # Warning callback fired exactly once with an `empty_stream` data hint.

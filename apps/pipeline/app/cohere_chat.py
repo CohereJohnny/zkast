@@ -260,19 +260,44 @@ async def chat_stream_grounded(
     tokens_in: int | None = None
     tokens_out: int | None = None
 
-    async def _open_stream() -> Any:
-        return await client.chat_stream(
+    # NB: ``cohere.AsyncClientV2.chat_stream`` is itself an async generator
+    # function (see SDK signature ``-> AsyncIterator[V2ChatStreamResponse]``),
+    # so calling it does **not** return a coroutine — it returns the iterator
+    # directly. Awaiting it raises ``TypeError: object async_generator can't
+    # be used in 'await' expression``. The retry helper handles transient
+    # errors *during* iteration below; the function call itself never blocks
+    # on the network.
+    try:
+        stream = client.chat_stream(
             model=model,
             messages=messages,
             documents=docs_payload,
             temperature=temperature,
         )
-
-    try:
-        stream = await _call_with_retry("chat_stream", _open_stream)
     except asyncio.CancelledError:
         await _safe_close(client)
         raise
+    except BaseException as exc:
+        if not _is_transient(exc):
+            await _safe_close(client)
+            raise
+        # Transient error opening the stream — sleep + retry once. The
+        # full _call_with_retry ladder is reserved for the non-streaming
+        # path where it's safer to redo the whole request.
+        logger.warning(
+            f"cohere_chat_stream_open_retry err={type(exc).__name__}"
+        )
+        await asyncio.sleep(_BASE_BACKOFF_S)
+        try:
+            stream = client.chat_stream(
+                model=model,
+                messages=messages,
+                documents=docs_payload,
+                temperature=temperature,
+            )
+        except BaseException:
+            await _safe_close(client)
+            raise
 
     try:
         async for event in stream:
