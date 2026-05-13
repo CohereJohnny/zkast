@@ -219,9 +219,8 @@ async def stub_chat_turns() -> JSONResponse:
     )
 
 
-@app.post("/internal/v1/graph/search")
-async def stub_graph_search() -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content={"error": {"code": "not_implemented", "message": "Sprint 5+"}},
-    )
+# Sprint 5b — removed `POST /internal/v1/graph/search` stub (HTTP 501).
+# Hybrid search is now served by the workspace-scoped
+# `GET /internal/v1/workspaces/{workspaceId}/graph/search` route in
+# ``app.internal_graph``. See [specs/apis.md](../../specs/apis.md) Internal
+# Contract section.

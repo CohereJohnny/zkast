@@ -45,7 +45,7 @@ See [personas.md](personas.md) for detail. In short:
 - **G-4**: Let users persist the approved graph into a graph database they own (Neo4j or Postgres+AGE) without lock-in.
 - **G-5**: Run fully self-hosted on a single machine via Docker Compose, with no required external SaaS dependency beyond an LLM provider key the user supplies.
 - **G-6**: Preserve a clean upgrade path to multi-user and SaaS modes without re-architecting the working data model.
-- **G-7**: Be LLM-provider agnostic by design. **P0 ships with Cohere as the single supported provider** (Command for chat/extraction, Embed v3 for embeddings, Rerank v3 for the cross-encoder). Additional providers (OpenAI, Gemini, Anthropic, Ollama, generic OpenAI-compatible) are added in P1 without requiring an architectural change.
+- **G-7**: Be LLM-provider agnostic by design. **P0 ships with Cohere as the single supported provider** (Command for chat/extraction, Embed v4 — `embed-v4.0` — for embeddings, Rerank v4 — `rerank-v4.0-fast` — for the cross-encoder). Additional providers (OpenAI, Gemini, Anthropic, Ollama, generic OpenAI-compatible) are added in P1 without requiring an architectural change.
 - **G-8**: Let users **chat with their knowledge graph** in natural language and receive answers that are grounded in their own atomic notes, entities, and documents, with **inline citations** that resolve back to the source. Grounded chat is a first-class P0 feature and exploits Cohere Chat's native document-grounding and citation outputs.
 
 ## Non-Goals
@@ -65,7 +65,7 @@ See [personas.md](personas.md) for detail. In short:
 - **FR-2**: A user can see the upload and ingestion status (queued, parsing, extracting, building graph, ready, failed) for each document.
 - **FR-3**: The system parses the PDF into text chunks with page-level provenance (chunk -> page number(s) -> document).
 - **FR-4**: The system tolerates ingestion failures on a per-document basis without corrupting the workspace's existing graph.
-- **FR-5**: A user can re-ingest a document; re-ingestion produces a new snapshot rather than destructively overwriting the previous working graph.
+- **FR-5**: A user can re-ingest a document. The previous working-graph rows whose only provenance was the prior version are swept by orphan cleanup; user-edited entities (`is_user_edited = true`) and manual edges (`origin = manual`) are preserved. A new `IngestionRun` is recorded; existing `GraphSnapshot` rows are immutable and unaffected.
 - **FR-6**: A user can delete a document; deletion clearly indicates which atomic notes, entities, and edges trace back exclusively to that document and offers to remove them.
 
 ### Atomic Note Generation (Zettelkasten)
@@ -118,7 +118,7 @@ See [personas.md](personas.md) for detail. In short:
 
 ### Configuration and Settings
 
-- **FR-29**: A user can configure which LLM provider and models to use for note generation, extraction, embeddings, and reranking. **P0 supports Cohere only** (Command R+ / Command R for chat, Embed v3 for embeddings, Rerank v3 for the cross-encoder). P1 adds OpenAI, Gemini, Anthropic, Ollama, and a generic OpenAI-compatible provider option.
+- **FR-29**: A user can configure which LLM provider and models to use for note generation, extraction, embeddings, and reranking. **P0 supports Cohere only** (Command for chat — repo defaults `command-a-plus-05-2026` (large) and `command-r7b-12-2024` (small) — `embed-v4.0` for embeddings, `rerank-v4.0-fast` for the cross-encoder). P1 adds OpenAI, Gemini, Anthropic, Ollama, and a generic OpenAI-compatible provider option.
 - **FR-30**: A user can supply their own API keys for LLM providers; keys are encrypted at rest and never returned in API responses. The single required credential in P0 is a Cohere production API key.
 - **FR-31**: A user can configure pipeline parameters (chunk size, max atomic notes per document, language).
 
@@ -150,7 +150,7 @@ See [personas.md](personas.md) for detail. In short:
 - PDF ingestion, atomic-note generation, working graph in app-managed working store.
 - Graph review and editing UI.
 - Persistence to Neo4j and Postgres+AGE.
-- Cohere as the sole supported LLM provider (Command for chat, Embed v3 for embeddings, Rerank v3 for reranking).
+- Cohere as the sole supported LLM provider (Command for chat, `embed-v4.0` for embeddings, `rerank-v4.0-fast` for reranking). LangExtract co-extraction (source-grounded char-offset spans, also Cohere-backed) ships in P0 alongside Graphiti's typed extraction.
 - **Grounded chat** with the knowledge graph: streaming responses, inline citations to atomic notes and document pages, per-session scoping, "Ask about this" entry points from graph/note views.
 - Docker Compose deployment.
 
@@ -159,7 +159,7 @@ See [personas.md](personas.md) for detail. In short:
 - User accounts, workspaces with multiple members, roles (Owner / Editor / Viewer).
 - Per-user encrypted API key storage.
 - Audit log of pipeline runs and persistence jobs.
-- Additional LLM providers: OpenAI, Gemini, Anthropic, Ollama, and generic OpenAI-compatible endpoints. LangExtract-grounded extraction becomes available once a Gemini provider is configured.
+- Additional LLM providers: OpenAI, Gemini, Anthropic, Ollama, and generic OpenAI-compatible endpoints. The LangExtract co-extractor (shipped in P0 on Cohere) can swap to Gemini natively for higher-fidelity span alignment on long PDFs once a Gemini provider is configured.
 - Chat enhancements: saved/pinned answers, exportable chat transcripts (markdown with citations), session sharing (read-only) inside a workspace, and per-session retrieval profiles (e.g., "broad" vs "precise").
 - Custom entity/edge type definitions per workspace.
 
@@ -186,7 +186,7 @@ See [personas.md](personas.md) for detail. In short:
 - **C-1**: The atomic-note and extraction stages depend on third-party LLM APIs; behavior is bounded by their availability, rate limits, and structured-output support.
 - **C-2**: The persistence layer must support both Neo4j 5.26+ and Postgres 16 with Apache AGE; the abstract graph contract cannot use features absent from either.
 - **C-3**: For P0, the working graph engine is `graphiti-core`; the product inherits its Python runtime and supported backend matrix.
-- **C-4**: All long-running operations must be cancellable and observable; no operation may hold an HTTP connection longer than 60 seconds.
+- **C-4**: All long-running operations must be cancellable and observable. No *non-streaming* HTTP request may hold a connection longer than 60 seconds — long work runs as an arq job with an SSE progress channel (`text/event-stream`) and a cancel endpoint. SSE streams (ingestion log, chat tokens, persistence progress) are the explicit exception to the 60-second ceiling and are kept alive with 15-second `: keepalive` comment lines so reverse proxies don't drop idle connections.
 
 ## Assumptions
 

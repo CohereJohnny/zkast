@@ -450,6 +450,14 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 **Auth**: Editor.
 
+#### `GET /workspaces/{workspaceId}/notes/tags`
+
+> **Sprint 5c — implemented**. Drives the tag-picker combobox in the graph filter bar.
+
+**Outputs**: `{ tags: [{ name, count }] }` — distinct lowercase tag values present in `atomic_notes.tags` for the workspace, sorted by descending count.
+
+**Auth**: Member.
+
 ---
 
 ### Knowledge Graph
@@ -611,6 +619,46 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 **Errors**: `not_found` when no audit row exists for this survivor (no recent merge to undo, or already undone).
 
 **Auth**: Editor.
+
+#### `POST /workspaces/{workspaceId}/graph/cleanup-orphans`
+
+> **Sprint 5b — implemented**. Runs the orphan-cleanup sweep manually. Normally fires automatically at the end of a document delete that selects `cascade=exclusive_derivatives`; this endpoint exposes the same sweep for ad-hoc operator use from the graph filter bar.
+
+**Inputs**: empty body.
+
+**Outputs**: `{ removed_entities, removed_relationships }` (integers).
+
+**Auth**: Editor.
+
+**Notes**: Preserves rows with `is_user_edited = true` and Relationships with `origin = manual` so user-curated graph state is never swept by this call.
+
+#### `GET /workspaces/{workspaceId}/graph/entities/{entityId}/evidence`
+
+> **Sprint 5c — implemented**. Paged read of the `entity_evidence` rows linked to an entity. Backs the "Evidence" tab in the entity detail panel and the "View in document" navigation.
+
+**Query**: `limit` (1–200, default 50), `offset` (≥ 0, default 0).
+
+**Outputs**: `{ items: [{ id, document_id, document_filename, episode_id, page, char_start, char_end, quote, method, attributes, created_at }], total }`.
+
+**Auth**: Member.
+
+#### `GET /workspaces/{workspaceId}/graph/types`
+
+> **Sprint 5c — implemented**. Drives the entity- and edge-type multi-select pickers in the graph filter bar.
+
+**Outputs**: `{ entity_types: [{ name, count }], edge_types: [{ name, count }] }` — distinct types currently present in the workspace's graph, sorted by descending count.
+
+**Auth**: Member.
+
+#### `GET /workspaces/{workspaceId}/graph/entities/search-typeahead`
+
+> **Sprint 5c — implemented**. Cheap ILIKE-backed name search distinct from the heavier hybrid `/graph/search`; designed for keystroke-rate use by the seed-entity picker.
+
+**Query**: `q` (1–200 chars, required), `limit` (1–50, default 20).
+
+**Outputs**: `{ items: [{ id, name, type, degree }] }` — top matches sorted by descending degree.
+
+**Auth**: Member.
 
 ---
 
@@ -876,11 +924,13 @@ When `seed_context` is provided, the server computes the equivalent `scope` (e.g
 
 **Purpose**: Record a review decision for a snapshot.
 
-**Inputs**: `decision` (`approved | rejected`), optional `notes` (≤2000 chars).
+**Inputs**: `status` (`approved | rejected | needs_changes`), optional `rationale` (≤2000 chars). The legacy `decision` field is accepted as an alias for `status` and accepts the same enum values.
 
-**Outputs**: `{ review: { snapshot_id, decision, notes, reviewed_by_user_id, reviewed_at } }`.
+**Outputs**: `{ review: { snapshot_id, status, rationale, reviewer_user_id, created_at, updated_at } }`.
 
 **Auth**: Member.
+
+**Notes**: `needs_changes` denotes a soft block (reviewer wants edits before approval) and is treated the same as no decision for persistence-gating purposes. Implementations may still accept the legacy `approved | rejected` two-state form until TD-014 lands the third state end-to-end; see [tech_debt.md](../sprints/tech_debt.md).
 
 #### `DELETE /workspaces/{workspaceId}/snapshots/{snapshotId}`
 
@@ -1028,9 +1078,25 @@ These apply to any job (IngestionRun, PersistenceJob, large cascade delete).
 
 #### `GET /jobs/{jobId}/events`
 
-**Purpose**: Subscribe to a real-time stream of progress events for the job.
+**Purpose**: Subscribe to a real-time stream of progress events for the job. The endpoint replays the last ~200 events from the per-job Redis Stream (`XRANGE zkast:jobs:<jobId>:log`) immediately on connect, then tails the Redis pub/sub channel `zkast:jobs:<jobId>` for live messages — so a late subscriber sees recent history (Sprint 5b).
 
-**Outputs**: `text/event-stream`. Event types: `stage_started`, `stage_progress`, `stage_completed`, `warning`, `job_completed`, `job_failed`, `job_cancelled`.
+**Query**: `workspaceId` (UUID, required) — the workspace whose job this is. Used to scope pipeline-side authorization.
+
+**Outputs**: `text/event-stream`. Each `data:` payload is a JSON object with a `type` field.
+
+**Event types**:
+
+- `stage_started` — `{ type, stage }`. Stage begins; one of `parsing`, `generating_notes`, `extracting_graph`, `building_graph`.
+- `stage_progress` — `{ type, stage, percent, current, total, message? }`. Coarse-grained progress.
+- `stage_completed` — `{ type, stage }`.
+- `log` — `{ type, level: "info" | "warning" | "error", stage, message, data? }`. Human-readable line; durably persisted to `ingestion_run_logs` for replay via `GET .../ingestion-runs/{id}/logs`. Drives the pipeline-log drawer.
+- `metric` — `{ type, name, value, stage, data? }`. Numeric metric for the drawer's count tickers and the Diagnostics latency series. Common `name`s: `entity_count`, `edge_count`, `note_count`, `tokens_consumed`, `evidence_spans_extracted`, `evidence_spans_linked`. Metrics are streamed only — they are intentionally **not** persisted to `ingestion_run_logs`.
+- `warning` — `{ type, reason, ... }`. Reserved for top-level run warnings distinct from per-stage `log` warnings.
+- `job_completed` — `{ type, status }`.
+- `job_failed` — `{ type, reason, stage? }`.
+- `job_cancelled` — `{ type, reason }`.
+
+The wire format keeps comment lines (`: keepalive\n\n`) every 15 seconds so reverse proxies don't drop idle connections.
 
 **Auth**: Workspace member.
 
@@ -1104,6 +1170,42 @@ These apply to any job (IngestionRun, PersistenceJob, large cascade delete).
 
 ---
 
+### Administration
+
+Read-only diagnostics and cleanup affordances behind Settings → Diagnostics. All routes require Owner.
+
+#### `GET /workspaces/{workspaceId}/ingestion-runs/{ingestionRunId}/logs`
+
+> **Sprint 5b — implemented**. Reads the durable `ingestion_run_logs` table for one run.
+
+**Query**: `limit` (1–500, default 200), `cursor` (opaque pagination token).
+
+**Outputs**: `{ items: [{ id, ts, level, stage, message, data }], next_cursor }` — ordered ascending by `ts` so a streaming viewer can replay the run in time order.
+
+**Auth**: Member.
+
+#### `GET /admin/diagnostics`
+
+> **Sprint 5b — implemented**.
+
+**Purpose**: System-wide health snapshot for the Diagnostics page. Aggregates the arq queue depth, in-progress jobs, stalled documents (heartbeat older than `HEARTBEAT_STALE_THRESHOLD_S`), per-stage p50 / p95 latency from `ingestion_run_logs`, and a Redis hash-hygiene count (`zkast:job:*` entries in terminal status).
+
+**Outputs**: `{ arq: { queue, in_progress }, stalled_documents: [...], latency_per_stage: { parsing: {...}, generating_notes: {...}, extracting_graph: {...} }, job_hashes: { total, terminal, safe_to_delete } }`.
+
+**Auth**: Owner.
+
+#### `POST /admin/cleanup-stale-job-hashes`
+
+> **Sprint 5b — implemented**.
+
+**Purpose**: Delete Redis job hashes (`zkast:job:*`) whose `status` is in a terminal state (`succeeded`, `failed`, `cancelled`). Refuses to touch any hash with a live (`running` / `queued`) status — that's the BUG-005 footgun this endpoint exists to avoid.
+
+**Outputs**: `{ removed: integer, kept: integer }`.
+
+**Auth**: Owner.
+
+---
+
 ### Telemetry and Health
 
 #### `GET /healthz`
@@ -1126,25 +1228,69 @@ These apply to any job (IngestionRun, PersistenceJob, large cascade delete).
 
 ## Internal Contract (Web -> Pipeline)
 
-This is **not** part of the public API. It is the contract between the web tier and the pipeline service, deployed together. Documented here so the contract is reviewable.
+This is **not** part of the public API. It is the contract between the web tier and the pipeline service, deployed together. Documented here so the contract is reviewable. All internal endpoints authenticate with the shared `X-Zkast-Internal-Token` and are bound to the internal network in self-hosted mode.
+
+Workspace-scoped routes carry the workspace UUID in the path (`/internal/v1/workspaces/{workspaceId}/...`). The legacy unscoped form is retained for a handful of system-wide actions (Cohere probe, persistence jobs, generic jobs).
+
+### Provider probes and ingestion
 
 - `POST /internal/v1/providers/cohere/test` — Connectivity probe against Cohere (OpenAI-compat chat + native embed + rerank); uses plaintext `api_key` or decrypts `llm_cohere` for `workspace_id`.
-- `POST /internal/v1/documents` — Multipart PDF upload (`workspace_id`, `file`, optional `replaces_document_id`); streams to local storage, inserts `Document` + `IngestionRun`, enqueues Arq `parse_document`. Optional `Idempotency-Key` header (24h replay). Returns **202** with `document` + `job_id`.
-- `DELETE /internal/v1/documents/{documentId}?workspace_id=&cascade=` — `cascade` is `document_only` (default) or `exclusive_derivatives` (removes notes exclusive to the document and orphan graph rows first). Returns **204**. Responds **409** with `error.code: business_rule_violation` while ingestion is still active on that document.
+- `POST /internal/v1/documents` — Multipart PDF upload (`workspace_id`, `file`, optional `replaces_document_id`); streams to local storage, inserts `Document` + `IngestionRun`, enqueues arq `parse_document`. Optional `Idempotency-Key` header (24h replay). Returns **202** with `document` + `job_id`. Sub-job `_job_id`s are stage-suffixed (`:parse`, `:notes`, `:graph`) to avoid the arq dedup collision documented in BUG-001.
+- `DELETE /internal/v1/documents/{documentId}?workspace_id=&cascade=&force=` — `cascade` is `document_only` (default) or `exclusive_derivatives` (removes notes exclusive to the document, then runs the orphan-cleanup sweep). `force=true` cancels any active ingestion runs first (BUG-document-busy). Returns **204**. Responds **409** with `error.code: business_rule_violation` when ingestion is active and `force` is not set.
 - `GET /internal/v1/documents/{documentId}/delete-preview?workspace_id=&cascade=` — Returns counts of exclusive vs shared notes and touched entities/relationships for the delete modal.
-- `POST /internal/v1/ingestion-runs` — Body `{ "document_id", "from_stage" }` where `from_stage` is `parsing` (new `IngestionRun` + `parse_document`), `generating_notes` (reuse latest run that has episodes, clear generated notes for that run, enqueue `generate_atomic_notes`), or `extracting_graph` (reuse latest run with episodes, enqueue `extract_graph`). Returns **202** with `document`, `ingestion_run_id`, `job_id`. **409** `business_rule_violation` if the document is mid-pipeline.
-- `POST /internal/v1/extract/atomic-notes` — JSON `{ "workspace_id", "episode_ids": [...] }`; episodes must share one document + ingestion run. Clears note provenance for those episodes, restarts the run, enqueues `generate_atomic_notes` with an episode filter.
-- `GET/POST/PATCH/DELETE /internal/v1/notes` — Atomic notes CRUD, list filters (`q`, `tags`, `document_id`, `origin`, `is_user_edited`, `sort`, pagination); `POST .../notes/{id}/merge`, `POST .../notes/{id}/split`, link create/delete under `.../notes/{id}/links`.
-- **Merge body** — `{ "other_note_id": "<uuid>", "field_selection": { "title": "survivor"|"other", "body": "...", "tags": "..." } }` (per-field winner; merged tags are the union of both notes’ tags).
-- **Split body** — `{ "passage": "<verbatim substring of parent body>", "new_title": "..." }`; creates a new note with origin `split`, copies parent tags to the child, links parent → child with `related`, and removes the passage from the parent body.
-- `POST /internal/v1/persistence-jobs` — Start a persistence job for a snapshot/target pair.
-- `POST /internal/v1/graph/search` — Hybrid search delegated to Graphiti.
-- `POST /internal/v1/chat/turns` — Run a single chat turn: retrieve, call Cohere Chat with grounding, stream tokens and citations. Returns an SSE stream consumed by the web tier and proxied to the browser.
-- `POST /internal/v1/chat/turns/{turnId}/cancel` — Cancel an in-flight chat turn.
-- `GET /internal/v1/jobs/{jobId}` — Poll job hash state (requires `X-Zkast-Workspace-Id`).
-- `GET /internal/v1/jobs/{jobId}/events` — SSE over Redis pub/sub for that job (requires `X-Zkast-Workspace-Id`).
+- `POST /internal/v1/ingestion-runs` — Body `{ "document_id", "from_stage" }` where `from_stage` is `parsing` / `generating_notes` / `extracting_graph`. Returns **202** with `document`, `ingestion_run_id`, `job_id`. **409** `business_rule_violation` if the document is mid-pipeline.
+- `POST /internal/v1/extract/atomic-notes` — JSON `{ "workspace_id", "episode_ids": [...] }`; episodes must share one document + ingestion run. Restarts the run with an episode filter.
 
-All internal endpoints authenticate with the shared `X-Zkast-Internal-Token` and are bound to the internal network in self-hosted mode.
+### Notes
+
+- `GET/POST/PATCH/DELETE /internal/v1/notes` — Atomic notes CRUD, list filters (`q`, `tags`, `document_id`, `origin`, `is_user_edited`, `sort`, pagination); `POST .../notes/{id}/merge`, `POST .../notes/{id}/split`, `POST .../notes/{id}/unmerge` (Sprint 5b — restores victim from `merge_audit_log`), link create/delete under `.../notes/{id}/links`.
+- **Merge body** — `{ "other_note_id": "<uuid>", "field_selection": { "title": "survivor"|"other", "body": "...", "tags": "..." } }` (per-field winner; merged tags are the union of both notes' tags).
+- **Split body** — `{ "passage": "<verbatim substring of parent body>", "new_title": "..." }`.
+- `GET /internal/v1/workspaces/{workspaceId}/notes/tags` — Distinct tags with counts (Sprint 5c). Backs the tag-picker combobox.
+
+### Graph
+
+- `GET /internal/v1/workspaces/{workspaceId}/graph?...` — List the working graph for a workspace (view, seeds, depth, filters).
+- `GET /internal/v1/workspaces/{workspaceId}/graph/entities/{entityId}?neighbor_depth=&neighbor_limit=` — Entity detail including `incident_relationships` (Sprint 5).
+- `PATCH /internal/v1/workspaces/{workspaceId}/graph/entities/{entityId}` — Patch entity fields.
+- `POST /internal/v1/workspaces/{workspaceId}/graph/entities/{entityId}/merge` — Merge with `field_selection`; writes a `merge_audit_log` row (Sprint 5b).
+- `POST /internal/v1/workspaces/{workspaceId}/graph/entities/{entityId}/unmerge` — Restore victim from audit log (Sprint 5b).
+- `DELETE /internal/v1/workspaces/{workspaceId}/graph/entities/{entityId}` — Delete entity.
+- `GET /internal/v1/workspaces/{workspaceId}/graph/search?q=&limit=` — Graphiti hybrid search (Sprint 5b). **Replaces the prior unscoped `POST /internal/v1/graph/search` stub.**
+- `GET /internal/v1/workspaces/{workspaceId}/graph/entities/{entityId}/evidence?limit=&offset=` — LangExtract-derived evidence rows (Sprint 5c).
+- `GET /internal/v1/workspaces/{workspaceId}/graph/types` — Entity + edge type counts (Sprint 5c). Backs the filter pickers.
+- `GET /internal/v1/workspaces/{workspaceId}/graph/entities/search-typeahead?q=&limit=` — Cheap ILIKE typeahead (Sprint 5c). Distinct from the heavier `/graph/search`.
+- `POST /internal/v1/workspaces/{workspaceId}/graph/cleanup-orphans` — Manual orphan sweep (Sprint 5b). Preserves `is_user_edited = true` entities and `origin = manual` edges.
+- `POST /internal/v1/workspaces/{workspaceId}/graph/relationships` — Create manual relationship.
+- `PATCH /internal/v1/workspaces/{workspaceId}/graph/relationships/{relationshipId}` — Update (or end via `valid_to`).
+- `DELETE /internal/v1/workspaces/{workspaceId}/graph/relationships/{relationshipId}` — Soft-end.
+
+### Snapshots
+
+- `GET/POST /internal/v1/workspaces/{workspaceId}/snapshots` — List / create.
+- `GET /internal/v1/workspaces/{workspaceId}/snapshots/{snapshotId}` — Detail + stats.
+- `POST /internal/v1/workspaces/{workspaceId}/snapshots/{snapshotId}/review` — Record/update a `SnapshotReview` row (Sprint 5b). Body: `{ status, rationale? }` with `status` ∈ `approved | rejected | needs_changes`.
+- `DELETE /internal/v1/workspaces/{workspaceId}/snapshots/{snapshotId}` — Delete.
+
+### Persistence
+
+- `POST /internal/v1/persistence-jobs` — Start a persistence job for a snapshot/target pair.
+
+### Chat
+
+- `POST /internal/v1/workspaces/{workspaceId}/chat/turns` — Run a single chat turn: retrieve, call Cohere Chat with grounding, stream tokens and citations. Returns an SSE stream consumed by the web tier and proxied to the browser (Sprint 6).
+- `POST /internal/v1/workspaces/{workspaceId}/chat/turns/{turnId}/cancel` — Cancel an in-flight chat turn (Sprint 6).
+
+### Jobs and ingestion observability
+
+- `GET /internal/v1/jobs/{jobId}?workspace_id=` — Poll job hash state.
+- `GET /internal/v1/jobs/{jobId}/events?workspace_id=` — SSE for that job: **replays from Redis Stream `zkast:jobs:<jobId>:log` (XRANGE last ~200) then tails the pub/sub channel `zkast:jobs:<jobId>`** (Sprint 5b). Emits `log`, `metric`, `stage_*`, `job_*` event types (see the public `GET /jobs/{jobId}/events` section above for the schema).
+- `GET /internal/v1/workspaces/{workspaceId}/ingestion-runs/{ingestionRunId}/logs?limit=&cursor=` — Durable log read from `ingestion_run_logs` (Sprint 5b).
+
+### Administration
+
+- `GET /internal/v1/admin/diagnostics` — Queue depth, in-progress jobs, stalled documents, per-stage p50/p95, hash hygiene (Sprint 5b).
+- `POST /internal/v1/admin/cleanup-stale-job-hashes` — Delete `zkast:job:*` Redis hashes in terminal status only (Sprint 5b). Never touches live jobs.
 
 ## Rate Limits
 

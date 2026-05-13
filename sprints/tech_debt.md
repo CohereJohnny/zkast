@@ -204,3 +204,30 @@ Use this file for **non-blocking** refactors, dependency upgrades, and cleanup d
   we just resolved.
 - **Suggested sprint**: Sprint 6.
 - **Status**: Open
+
+### TD-014 — Snapshot review: extend `needs_changes` end-to-end
+- **Date**: 2026-05-12
+- **Area**: pipeline + web + migrations
+- **Description**: [specs/datamodel.md](../specs/datamodel.md) and
+  [specs/userstories.md](../specs/userstories.md) US-3.8 specify three
+  snapshot review states (`approved`, `rejected`, `needs_changes`). The
+  Sprint 5b implementation accepts only `approved | rejected` end-to-end
+  because the original `snapshot_reviews.status` CHECK constraint was
+  written against the two-state form. Three concrete changes are needed:
+  1. A new Alembic migration relaxes the CHECK on `snapshot_reviews.status`
+     to allow `needs_changes` (and re-asserts the FK + unique constraint).
+  2. `apps/pipeline/app/internal_graph.py` snapshot-review route accepts
+     the third value (validator + body schema).
+  3. The web snapshot detail UI renders a third action button and badge
+     variant; the snapshot list filter chips add the `needs_changes`
+     option.
+- **Reason**: Soft-block ("needs changes") is a distinct review intent
+  from outright `rejected` and is the workflow operators actually use in
+  practice. Persistence gating already treats only `approved` as
+  permissive, so adding `needs_changes` doesn't widen the security
+  surface — it just makes the audit trail honest.
+- **Suggested sprint**: Sprint 6 (small) or alongside Sprint 7 persistence
+  polish. Two-state UI continues to work until this lands; the API and
+  data model both already accept the legacy `decision` field as an alias
+  for `status`.
+- **Status**: Open
