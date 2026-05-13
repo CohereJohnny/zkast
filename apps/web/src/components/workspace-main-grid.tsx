@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 import { DocumentsPanel } from "@/components/documents-panel";
 import { GraphWorkspacePanel } from "@/components/graph-workspace-panel";
+import { JobLogConsole } from "@/components/job-log-console";
 
 const STORAGE_KEY = "zkast.workspace.documentsCollapsed";
 
@@ -115,12 +116,16 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 id="main-content"
                 tabIndex={-1}
                 aria-label="Documents"
-                className="flex min-h-[320px] flex-col rounded-lg border border-border-strong bg-surface outline-none"
+                className="flex min-h-0 min-h-[320px] flex-col gap-3 rounded-lg border border-border-strong bg-surface p-4 outline-none"
               >
-                <div className="flex items-center gap-2 px-4 pt-3">
+                <div className="flex items-center gap-2">
                   <CollapseHeaderButton onCollapse={toggle} />
                 </div>
-                <div className="min-h-0 flex-1">{children}</div>
+                {/* Documents takes natural height; the log fills the rest
+                    of the column. ``min-h-0`` on both is required for
+                    nested flex children to scroll instead of overflow. */}
+                <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+                <JobLogConsole />
               </section>
               <GraphWorkspacePanel workspaceId={workspaceId} />
             </>
@@ -132,13 +137,19 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
             ) : (
               <section
                 aria-label="Documents"
-                className="flex min-h-[480px] flex-col rounded-lg border border-border-subtle bg-surface/80 p-4"
+                className="flex min-h-0 min-h-[480px] flex-col gap-3 rounded-lg border border-border-subtle bg-surface/80 p-4"
               >
-                <div className="mb-2 flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   <p className="text-caption font-medium text-secondary">Documents</p>
                   <CollapseHeaderButton onCollapse={toggle} />
                 </div>
-                <DocumentsPanel workspaceId={workspaceId} variant="compact" />
+                {/* The DocumentsPanel scrolls internally; the log sits
+                    below it and the log's expanded body flex-grows into
+                    any remaining vertical room. */}
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <DocumentsPanel workspaceId={workspaceId} variant="compact" />
+                </div>
+                <JobLogConsole />
               </section>
             )}
             <section

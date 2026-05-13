@@ -182,7 +182,12 @@ export function GraphWorkspacePanel({ workspaceId }: { workspaceId: string }) {
   return (
     <section
       aria-label="Graph panel"
-      className="flex min-h-[480px] flex-col rounded-lg border border-border-subtle bg-surface/80 p-4"
+      // ``flex-1`` lets the panel grow to fill the grid row when it has
+      // the headroom (e.g. on /graph and on Notes/Chat side-by-side
+      // layouts). ``min-h-[480px]`` is the floor for very short
+      // viewports. Removed the previous fixed-height cap that caused the
+      // empty band below the canvas.
+      className="flex min-h-[480px] flex-1 flex-col rounded-lg border border-border-subtle bg-surface/80 p-4"
     >
       <Suspense fallback={<p className="text-caption text-muted">Loading graph panel…</p>}>
         <GraphWorkspaceInner workspaceId={workspaceId} />

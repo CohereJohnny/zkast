@@ -803,10 +803,14 @@ export function GraphCanvas({
           Graph truncated — add filters or lower scope (see node limit in URL).
         </p>
       ) : null}
-      <div className="relative min-h-[280px] flex-1 overflow-hidden rounded-md border border-border-subtle bg-canvas">
+      <div className="relative min-h-[420px] flex-1 overflow-hidden rounded-md border border-border-subtle bg-canvas">
         <SigmaContainer
           style={{
-            height: "min(60vh, 540px)",
+            // Fill the parent's flex-allocated height instead of capping at
+            // 540px — the previous fixed ceiling left a large empty band
+            // below the canvas on tall viewports. ``min-h-[420px]`` on the
+            // wrapper ensures we never collapse below a useful size.
+            height: "100%",
             width: "100%",
             // Subtle radial gradient gives the canvas depth so the graph
             // floats over the surface rather than sitting flat on it.
