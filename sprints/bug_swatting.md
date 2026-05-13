@@ -17,6 +17,47 @@ Log **critical bugs that block sprint progress** here. Resume sprint work after 
 ## Entries
 
 ## Bug Entry: 2026-05-13
+- **ID**: BUG-013
+- **Description**: User asked "how many locations are mentioned in this paper?"
+  The graph clearly contained 6 `Location` entities (Asia-Pacific,
+  Australia, Canada, Japan, Middle East, North America), but chat
+  answered "3" and named "United States", "Columbia University SIPA", and
+  "UNENE" — none of which are actually `Location` entities. Root cause:
+  `chat_turn._retrieve` uses `graphiti.search(query, num_results=30)`,
+  which is a hybrid BM25 + vector + Cohere-rerank search ordered by
+  semantic similarity to the query. The top-30 facts for that question
+  returned reactor / standards / agent edges (none mentioning the six
+  graph Locations), and the LLM then text-extracted three location-like
+  noun phrases from those grounded facts. The graph's typed taxonomy was
+  never consulted.
+  This is the standard failure mode of "vanilla GraphRAG" — vector
+  retrieval over a graph-shaped index. Aggregation and typed-enumeration
+  questions cannot be answered reliably because vector ranking is the
+  wrong scoring function for that intent.
+- **Discovered**: 2026-05-13 chat smoke after BUG-012 fix unblocked the
+  Cohere streaming path.
+- **Context**: Sprint 6 (chat retrieval). Will be the central motivating
+  case study for Sprint 6b's GraphRAG-vs-RAG eval harness.
+- **Fix (Sprint 6, partial)**: `chat_turn._retrieve` now always prepends
+  a synthetic ``graph_context:workspace_shape`` document built from
+  `filter_options_repo.summarize_workspace_graph`. The document lists
+  entity-type counts and named exemplars (capped at 25 per type) so the
+  LLM has authoritative ground truth for "how many" / "list all" /
+  "count by type" questions. The LLM is instructed in the document body
+  to treat those numbers as authoritative and use vector-retrieved
+  facts only as supporting context. Refusal logic was relaxed: an
+  empty hybrid search no longer triggers refusal so long as the
+  graph-context document is non-empty (only truly empty workspaces
+  refuse). Pinned by `tests/test_chat_graph_context.py`.
+- **Long-term fix**: Tracked as **TD-015** — structured-query routing
+  + typed-entity / multi-hop traversal handlers so chat can answer
+  graph-native questions deterministically rather than relying on the
+  context document. Sprint 6b will pin the failure modes via eval; Sprint
+  7 will land the handlers.
+- **Status**: **Mitigated** — typed aggregates now correct; structured
+  routing pending TD-015.
+
+## Bug Entry: 2026-05-13
 - **ID**: BUG-012
 - **Description**: After BUG-011 unblocked retrieval, every chat turn that
   reached the LLM step failed with

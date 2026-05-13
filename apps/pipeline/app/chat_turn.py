@@ -45,6 +45,7 @@ from app.cohere_chat import (
     chat_stream_grounded,
 )
 from app.config import get_settings
+from app.filter_options_repo import summarize_workspace_graph
 from app.graphiti_factory import (
     graphiti_for_workspace,
     resolve_cohere_api_key,
@@ -221,6 +222,14 @@ async def run_chat_turn(
         )
 
         # ---- Refusal short-circuit (FR-45) ----
+        #
+        # ``documents`` may contain only the synthetic ``graph_context``
+        # document when the hybrid ranker found zero fact-level hits —
+        # that's still enough to answer aggregate / "what's in this
+        # workspace" style questions, so we only refuse when there is
+        # truly nothing to ground on (empty workspace, where the
+        # graph-context render itself returned an empty string and was
+        # skipped).
         if not documents:
             refusal_text = (
                 "I could not find anything in this workspace to ground an answer. "
@@ -470,14 +479,60 @@ async def _retrieve(
 
     - ``retrieved_items``: JSON-serializable list for the
       ``retrieval_records.retrieved_items`` column. One entry per hit with
-      ``kind``, ``id``, ``score``, ``excerpt``.
+      ``kind``, ``id``, ``score``, ``excerpt``. Also includes a single
+      synthesized ``kind="graph_context"`` row capturing the workspace
+      shape (type counts + named exemplars) so the audit trail records
+      what graph-level ground truth the LLM saw.
     - ``documents``: the same hits rendered as ``ChatDocument`` objects to
-      pass to Cohere.
+      pass to Cohere. Always includes one
+      ``id="graph_context:workspace_shape"`` document prepended so the
+      LLM has ground truth for aggregation questions ("how many X",
+      "list all Y") even when the hybrid ranker misses the relevant
+      entities. This is the first incremental step toward true graph
+      traversal in chat — see TD-015.
     - ``total_candidates``: Graphiti's pre-truncation count.
     - ``truncated``: True when more candidates existed than ``top_k``.
     """
     if not query_text.strip():
         return [], [], 0, False
+
+    # ---- Always-on graph-context grounding document ----
+    # Pure GraphRAG with vector retrieval cannot answer "how many X" or
+    # "list all Y" questions reliably: the ranker returns the top-K most
+    # semantically similar *facts*, which is the wrong unit for typed
+    # aggregations. We inject a small, structured "shape of the graph"
+    # document so the LLM has deterministic ground truth for counts and
+    # short type-scoped exemplar lists.
+    graph_context_doc: ChatDocument | None = None
+    graph_context_item: dict[str, Any] | None = None
+    try:
+        shape = await asyncio.to_thread(
+            summarize_workspace_graph,
+            database_url,
+            workspace_id=workspace_id,
+            max_names_per_type=25,
+        )
+        rendered = _render_graph_context_document(shape)
+        if rendered:
+            graph_context_doc = ChatDocument(
+                id="graph_context:workspace_shape",
+                text=rendered,
+                title="Workspace graph shape",
+                metadata={"kind": "graph_context"},
+            )
+            graph_context_item = {
+                "kind": "graph_context",
+                "id": "workspace_shape",
+                "type": "graph_context",
+                "score": 1.0,
+                "excerpt": rendered,
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "chat_retrieval_graph_context_failed",
+            workspace_id=workspace_id,
+            error=str(exc),
+        )
 
     # ---- Graphiti hybrid search ----
     try:
@@ -516,6 +571,14 @@ async def _retrieve(
     documents: list[ChatDocument] = []
     budget_chars = doc_token_budget * APPROX_CHARS_PER_TOKEN
     used_chars = 0
+
+    # Reserve the graph-context document's chars up front so the hybrid
+    # candidate loop below adapts to the smaller remaining budget. The
+    # context doc is appended to ``documents`` / ``retrieved_items``
+    # after the candidate loop but at the *head* of each list so it sits
+    # in front of fact-level evidence when the LLM reads them.
+    if graph_context_doc is not None:
+        used_chars += len(graph_context_doc.text)
 
     # Edges are ordered by Graphiti's relevance; iterate smallest-first by
     # excerpt length to maximize the count we can fit inside the budget.
@@ -641,6 +704,10 @@ async def _retrieve(
                 },
             )
         )
+
+    if graph_context_doc is not None and graph_context_item is not None:
+        documents.insert(0, graph_context_doc)
+        retrieved_items.insert(0, graph_context_item)
 
     return retrieved_items, documents, total_candidates, truncated
 
@@ -812,3 +879,65 @@ def _temporally_overlaps(
     if vt and target > vt:
         return False
     return True
+
+
+def _render_graph_context_document(shape: dict[str, Any]) -> str:
+    """Render the workspace shape into a compact text document.
+
+    Output format is a human + LLM readable summary:
+
+    ::
+
+        Workspace graph (ground truth from the structured graph store):
+        Total entities: 117
+        Total relationships: 67
+        Entity types:
+          - Process (count=48): Hydraulic Fracturing, Refining, ... (showing first 25 of 48)
+          - Location (count=6): Asia-Pacific, Australia, Canada, Japan, Middle East, North America
+        Relationship types:
+          - RELATES_TO (count=48)
+          - CITES (count=7)
+
+    Returns an empty string when the workspace has zero entities so the
+    caller can skip the document entirely.
+    """
+    entity_total = int(shape.get("entity_total") or 0)
+    edge_total = int(shape.get("edge_total") or 0)
+    if entity_total <= 0:
+        return ""
+
+    lines: list[str] = []
+    lines.append(
+        "Workspace graph (ground truth from the structured graph store):"
+    )
+    lines.append(f"Total entities: {entity_total}")
+    lines.append(f"Total relationships: {edge_total}")
+    lines.append("Entity types:")
+    for et in shape.get("entity_types") or []:
+        name = str(et.get("name") or "Unknown")
+        count = int(et.get("count") or 0)
+        examples = [str(x) for x in (et.get("top_examples") or []) if x]
+        truncated = bool(et.get("truncated_examples"))
+        examples_str = ", ".join(examples) if examples else "(no named examples)"
+        if truncated:
+            shown = len(examples)
+            lines.append(
+                f"  - {name} (count={count}): {examples_str} "
+                f"(showing first {shown} of {count})"
+            )
+        else:
+            lines.append(f"  - {name} (count={count}): {examples_str}")
+    edge_types = shape.get("edge_types") or []
+    if edge_types:
+        lines.append("Relationship types:")
+        for et in edge_types:
+            name = str(et.get("name") or "Unknown")
+            count = int(et.get("count") or 0)
+            lines.append(f"  - {name} (count={count})")
+    lines.append(
+        "When the user asks 'how many', 'list all', or otherwise asks "
+        "about aggregates by type, treat the counts and example names "
+        "above as authoritative. Use the fact snippets that follow only "
+        "as supporting context."
+    )
+    return "\n".join(lines)
