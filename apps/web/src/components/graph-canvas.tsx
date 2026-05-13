@@ -694,21 +694,21 @@ function GraphLoader({
     }
 
     // ---- ForceAtlas2 settings ----
-    // linLogMode + low gravity + high scalingRatio is the canonical
-    // recipe for spreading dense knowledge graphs out without losing
-    // their community structure. strongGravityMode stays off so isolated
-    // subgraphs can drift to the periphery instead of being smashed
-    // into the hub.
+    // Use the library's ``inferSettings(graph)`` rather than hand-rolled
+    // numbers. Empirically the previous combo (``barnesHutOptimize: true``
+    // + ``linLogMode: true``) was collapsing the graph onto a thin
+    // horizontal band — graphology-layout-forceatlas2's docs explicitly
+    // warn that BarnesHut approximation interacts badly with linLog mode,
+    // and ``inferSettings`` correctly disables BarnesHut for graphs
+    // under 2 000 nodes while turning on ``strongGravityMode`` so
+    // disconnected components stay bounded on the canvas.
+    //
+    // ``adjustSizes`` is the one aesthetic add-on we keep: it makes FA2
+    // respect each node's rendered radius for collision avoidance so the
+    // big hub nodes don't overlap their neighbours.
     const fa2Settings = {
-      barnesHutOptimize: true,
-      barnesHutTheta: 0.6,
-      linLogMode: true,
-      adjustSizes: true, // respect node size for collision avoidance
-      gravity: 0.08,
-      scalingRatio: 20,
-      slowDown: 6,
-      edgeWeightInfluence: 0,
-      strongGravityMode: false,
+      ...forceAtlas2.inferSettings(g),
+      adjustSizes: true,
     };
 
     if (reducedMotion) {
