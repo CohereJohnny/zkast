@@ -49,7 +49,7 @@ EMBED_BATCH_SIZE = 32
 CHUNK_TEXT_MAX_CHARS = 6_000
 
 
-def _list_pdf_chunks(
+def _list_raw_chunks(
     database_url: str,
     *,
     workspace_id: str,
@@ -58,18 +58,24 @@ def _list_pdf_chunks(
         rows = conn.execute(
             """
             SELECT
-                id::text AS id,
-                document_id::text AS document_id,
-                text,
-                page_start,
-                page_end,
-                sequence
-            FROM episodes
-            WHERE workspace_id = %s::uuid
-              AND kind = 'pdf_chunk'
-              AND text IS NOT NULL
-              AND length(trim(text)) > 0
-            ORDER BY document_id, sequence
+                e.id::text AS id,
+                e.document_id::text AS document_id,
+                e.text,
+                e.page_start,
+                e.page_end,
+                e.sequence,
+                e.agent_id::text AS agent_id
+            FROM episodes e
+            WHERE e.workspace_id = %s::uuid
+              AND e.kind IN (
+                'pdf_chunk',
+                'north_message',
+                'north_turn_window',
+                'north_tool_event'
+              )
+              AND e.text IS NOT NULL
+              AND length(trim(e.text)) > 0
+            ORDER BY e.document_id, e.sequence
             """,
             (workspace_id,),
         ).fetchall()
@@ -83,7 +89,7 @@ def count_raw_chunks(
 ) -> dict[str, int]:
     """Return ``{episodes_total, embeddings_total, missing}`` so callers
     can decide whether to trigger a backfill."""
-    chunks = _list_pdf_chunks(database_url, workspace_id=workspace_id)
+    chunks = _list_raw_chunks(database_url, workspace_id=workspace_id)
     have = list_existing_source_ids(
         database_url,
         workspace_id=workspace_id,
@@ -120,7 +126,7 @@ async def backfill_raw_chunks(
     fires after each Cohere batch — wired by the eval runner / internal
     route so users see progress for big workspaces.
     """
-    chunks = _list_pdf_chunks(database_url, workspace_id=workspace_id)
+    chunks = _list_raw_chunks(database_url, workspace_id=workspace_id)
     if not chunks:
         return {"processed": 0, "skipped": 0, "errors": 0, "total": 0}
 
@@ -170,7 +176,7 @@ async def backfill_raw_chunks(
                     database_url,
                     workspace_id=workspace_id,
                     index_kind=INDEX_KIND_RAW_CHUNK,
-                    source_kind="episode_pdf_chunk",
+                    source_kind="episode_chunk",
                     source_id=str(chunk["id"]),
                     text=chunk["text"][:CHUNK_TEXT_MAX_CHARS],
                     embedding=list(vec),
@@ -180,6 +186,8 @@ async def backfill_raw_chunks(
                     chunk_sequence=chunk.get("sequence"),
                     embedding_model=embedding_model,
                     embedding_dim=embedding_dim,
+                    attributes={"agent_id": chunk["agent_id"]} if chunk.get("agent_id") else {},
+                    agent_id=chunk.get("agent_id"),
                 )
                 processed += 1
             except Exception as exc:  # noqa: BLE001

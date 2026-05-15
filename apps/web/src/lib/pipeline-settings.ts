@@ -10,7 +10,10 @@ export const PIPELINE_DEFAULTS = {
   embed_model: "embed-v4.0",
   rerank_model: "rerank-v4.0-fast",
   include_provenance_subgraph_default: true,
+  north_base_url: "",
 };
+
+const northBaseUrlSchema = z.union([z.literal(""), z.string().url().max(2048)]);
 
 export const pipelineSettingsSchema = z.object({
   chunk_size: z.number().int().min(128).max(8192),
@@ -22,6 +25,8 @@ export const pipelineSettingsSchema = z.object({
   embed_model: z.string().min(1).max(128),
   rerank_model: z.string().min(1).max(128),
   include_provenance_subgraph_default: z.boolean(),
+  /** North Agents API base URL (https). Empty string = unset. */
+  north_base_url: northBaseUrlSchema,
 });
 
 export const pipelineSettingsPatchSchema = pipelineSettingsSchema.partial();
@@ -34,6 +39,8 @@ export function mergePipelineSettings(raw: unknown): PipelineSettings {
     return pipelineSettingsSchema.parse(base);
   }
   const merged = { ...base, ...(raw as Record<string, unknown>) };
+  // Never surface legacy plaintext North tokens via Settings GET (FR-30).
+  delete (merged as { north_bearer_token?: unknown }).north_bearer_token;
   const parsed = pipelineSettingsSchema.safeParse(merged);
   if (!parsed.success) {
     return pipelineSettingsSchema.parse(base);

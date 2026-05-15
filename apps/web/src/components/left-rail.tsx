@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bot,
   FileText,
   MessageSquare,
   Network,
@@ -16,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 const items = [
   { href: "/documents", label: "Documents", Icon: FileText },
+  { href: "/agents", label: "Agents", Icon: Bot },
   { href: "/notes", label: "Notes", Icon: StickyNote },
   { href: "/graph", label: "Graph", Icon: Network },
   { href: "/chat", label: "Chat", Icon: MessageSquare },

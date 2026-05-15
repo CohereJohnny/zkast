@@ -38,11 +38,14 @@ import yaml
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from types import SimpleNamespace
+
 from app import (
     chat_retrieval_graph,
     chat_retrieval_hybrid,
     chat_retrieval_raw,
 )
+from app.chat_retrieval_notes_vector import retrieve_amem, retrieve_zettel
 from app.cohere_chat import (
     ChatDocument,
     CitationSpan,
@@ -64,12 +67,17 @@ DEFAULT_MODES: list[str] = ["rag", "graph", "hybrid"]
 
 
 def _retrieval_module(mode: str) -> Any:
-    if mode == "rag":
+    m = (mode or "").strip().lower()
+    if m in ("rag", "raw_transcript"):
         return chat_retrieval_raw
-    if mode == "graph":
+    if m == "graph":
         return chat_retrieval_graph
-    if mode == "hybrid":
+    if m == "hybrid":
         return chat_retrieval_hybrid
+    if m in ("zettelkasten_notes", "zettelkasten"):
+        return SimpleNamespace(retrieve=retrieve_zettel)
+    if m in ("amem_lite", "amem"):
+        return SimpleNamespace(retrieve=retrieve_amem)
     raise ValueError(f"unknown retrieval mode: {mode!r}")
 
 
@@ -211,12 +219,17 @@ async def _answer_one(
     mode: str,
     top_k: int,
     doc_token_budget: int,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Run retrieval + Cohere for one (question, mode). Returns a dict
     with ``answer_text``, ``refused``, ``citations``, ``tokens_in``,
     ``tokens_out``, ``latency_ms``."""
     impl = _retrieval_module(mode)
     started = time.perf_counter()
+
+    scope: dict[str, Any] = {}
+    if agent_id:
+        scope["agent_id"] = agent_id
 
     (
         retrieved_items,
@@ -229,7 +242,7 @@ async def _answer_one(
         database_url,
         workspace_id=workspace_id,
         query_text=query_text,
-        scope={},
+        scope=scope,
         top_k=top_k,
         doc_token_budget=doc_token_budget,
     )
@@ -324,6 +337,7 @@ async def run_eval(
     dataset_path: Path | None = None,
     modes: list[str] | None = None,
     notes: str | None = None,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Drive the canned eval and return ``{run_id, summary, results}``.
 
@@ -376,6 +390,7 @@ async def run_eval(
                         mode=mode,
                         top_k=30,
                         doc_token_budget=6000,
+                        agent_id=agent_id,
                     )
                     sc = score_answer(
                         answer_text=res["answer_text"],
@@ -458,6 +473,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--notes", default=None, help="Free-form notes attached to the run."
     )
+    parser.add_argument(
+        "--agent-id",
+        default=None,
+        help="Optional North agent UUID to scope Naive-RAG raw retrieval.",
+    )
+
     args = parser.parse_args(argv)
 
     dataset_path = Path(args.dataset) if args.dataset else None
@@ -468,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_path=dataset_path,
             modes=modes,
             notes=args.notes,
+            agent_id=args.agent_id,
         )
     )
     print(json.dumps(summary, indent=2, default=str))

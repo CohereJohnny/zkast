@@ -77,7 +77,13 @@ function AccessibleGraphList({
   );
 }
 
-function GraphWorkspaceInner({ workspaceId }: { workspaceId: string }) {
+function GraphWorkspaceInner({
+  workspaceId,
+  onCollapse,
+}: {
+  workspaceId: string;
+  onCollapse?: () => void;
+}) {
   const pathname = usePathname() ?? "/notes";
   const sp = useSearchParams();
   const filters = useMemo(() => searchParamsToGraphFilters(sp), [sp]);
@@ -106,10 +112,24 @@ function GraphWorkspaceInner({ workspaceId }: { workspaceId: string }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <p className="text-title-3 text-secondary">Graph</p>
-          <label className="flex items-center gap-2 text-caption text-muted">
-            <input type="checkbox" checked={listMode} onChange={(e) => setListMode(e.target.checked)} />
-            Accessible list
-          </label>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-caption text-muted">
+              <input type="checkbox" checked={listMode} onChange={(e) => setListMode(e.target.checked)} />
+              Accessible list
+            </label>
+            {onCollapse ? (
+              <button
+                type="button"
+                onClick={onCollapse}
+                title="Collapse graph panel"
+                aria-label="Collapse graph panel"
+                aria-expanded
+                className="cursor-pointer rounded border border-border-subtle px-1.5 py-0.5 text-caption text-muted transition-colors duration-150 hover:bg-surface hover:text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+              >
+                <span aria-hidden="true">›</span>
+              </button>
+            ) : null}
+          </div>
         </div>
         <GraphFilterBar basePath={pathname} workspaceId={workspaceId} />
         {canvasBroken ? (
@@ -178,7 +198,13 @@ function GraphWorkspaceInner({ workspaceId }: { workspaceId: string }) {
   );
 }
 
-export function GraphWorkspacePanel({ workspaceId }: { workspaceId: string }) {
+export function GraphWorkspacePanel({
+  workspaceId,
+  onCollapse,
+}: {
+  workspaceId: string;
+  onCollapse?: () => void;
+}) {
   return (
     <section
       aria-label="Graph panel"
@@ -190,7 +216,7 @@ export function GraphWorkspacePanel({ workspaceId }: { workspaceId: string }) {
       className="flex min-h-[480px] flex-1 flex-col rounded-lg border border-border-subtle bg-surface/80 p-4"
     >
       <Suspense fallback={<p className="text-caption text-muted">Loading graph panel…</p>}>
-        <GraphWorkspaceInner workspaceId={workspaceId} />
+        <GraphWorkspaceInner workspaceId={workspaceId} onCollapse={onCollapse} />
       </Suspense>
     </section>
   );

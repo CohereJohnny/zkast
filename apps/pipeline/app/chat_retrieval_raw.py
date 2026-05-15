@@ -96,6 +96,9 @@ async def retrieve(
             query_embedding=vec,
             top_k=top_k,
             document_id=document_filter,
+            agent_id=str(scope.get("agent_id")).strip()
+            if scope.get("agent_id")
+            else None,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(

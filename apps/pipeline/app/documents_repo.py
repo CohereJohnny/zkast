@@ -61,6 +61,8 @@ def fetch_document(
         _uuid_str(row, "workspace_id")
         if row.get("replaces_document_id"):
             _uuid_str(row, "replaces_document_id")
+        if row.get("agent_id"):
+            _uuid_str(row, "agent_id")
         return row
 
 
@@ -82,8 +84,29 @@ def list_documents_for_workspace(database_url: str, workspace_id: str, *, limit:
             _uuid_str(row, "workspace_id")
             if row.get("replaces_document_id"):
                 _uuid_str(row, "replaces_document_id")
+            if row.get("agent_id"):
+                _uuid_str(row, "agent_id")
             out.append(row)
         return out
+
+
+def list_document_ids_for_agent(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str,
+) -> list[str]:
+    """Document ids owned by a North agent within a workspace."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT id::text AS id
+            FROM documents
+            WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
+            """,
+            (workspace_id, agent_id),
+        ).fetchall()
+        return [r["id"] for r in rows]
 
 
 def list_episodes_for_ingestion_run(
@@ -95,7 +118,7 @@ def list_episodes_for_ingestion_run(
         rows = conn.execute(
             """
             SELECT id, workspace_id, document_id, ingestion_run_id, kind, text,
-                   page_start, page_end, sequence, created_at
+                   page_start, page_end, sequence, created_at, agent_id
             FROM episodes
             WHERE ingestion_run_id = %s::uuid
             ORDER BY sequence ASC
@@ -109,6 +132,8 @@ def list_episodes_for_ingestion_run(
             _uuid_str(r, "workspace_id")
             _uuid_str(r, "document_id")
             _uuid_str(r, "ingestion_run_id")
+            if r.get("agent_id"):
+                _uuid_str(r, "agent_id")
             out.append(r)
         return out
 
@@ -361,17 +386,24 @@ def insert_document(
     checksum: str,
     replaces_document_id: str | None,
     status: str,
+    source_kind: str = "pdf",
+    agent_id: str | None = None,
+    north_conversation_id: str | None = None,
+    north_metadata: dict[str, Any] | None = None,
+    raw_transcript_json: dict[str, Any] | list[Any] | None = None,
 ) -> dict[str, Any]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
             """
             INSERT INTO documents (
               id, workspace_id, original_filename, mime_type, byte_size,
-              storage_uri, checksum, replaces_document_id, status
+              storage_uri, checksum, replaces_document_id, status,
+              source_kind, agent_id, north_conversation_id, north_metadata,
+              raw_transcript_json
             )
             VALUES (
               %s::uuid, %s::uuid, %s, %s, %s, %s, %s,
-              %s::uuid, %s
+              %s::uuid, %s, %s, %s::uuid, %s, %s::jsonb, %s::jsonb
             )
             RETURNING *
             """,
@@ -385,6 +417,11 @@ def insert_document(
                 checksum,
                 replaces_document_id,
                 status,
+                source_kind,
+                agent_id,
+                north_conversation_id,
+                Json(north_metadata or {}),
+                Json(raw_transcript_json) if raw_transcript_json is not None else None,
             ),
         ).fetchone()
         conn.commit()
@@ -393,6 +430,8 @@ def insert_document(
         _uuid_str(row, "workspace_id")
         if row.get("replaces_document_id"):
             _uuid_str(row, "replaces_document_id")
+        if row.get("agent_id"):
+            _uuid_str(row, "agent_id")
         return row
 
 
@@ -532,20 +571,20 @@ def insert_episodes(
     workspace_id: str,
     document_id: str,
     ingestion_run_id: str,
-    rows: list[tuple[str, str, int, int, int]],
+    rows: list[tuple[str, str, int, int, int, str, str | None]],
 ) -> None:
-    """rows: (episode_id, text, page_start, page_end, sequence)"""
+    """rows: (episode_id, text, page_start, page_end, sequence, kind, agent_id)"""
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.executemany(
                 """
                 INSERT INTO episodes (
                   id, workspace_id, document_id, ingestion_run_id,
-                  kind, text, page_start, page_end, sequence
+                  kind, text, page_start, page_end, sequence, agent_id
                 )
                 VALUES (
                   %s::uuid, %s::uuid, %s::uuid, %s::uuid,
-                  'pdf_chunk', %s, %s, %s, %s
+                  %s, %s, %s, %s, %s, %s::uuid
                 )
                 """,
                 [
@@ -554,10 +593,12 @@ def insert_episodes(
                         workspace_id,
                         document_id,
                         ingestion_run_id,
+                        r[5],
                         r[1],
                         r[2],
                         r[3],
                         r[4],
+                        r[6],
                     )
                     for r in rows
                 ],

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import {
   PIPELINE_DEFAULTS,
+  pipelineSettingsPatchSchema,
   pipelineSettingsSchema,
   type PipelineSettings,
 } from "@/lib/pipeline-settings";
@@ -25,6 +26,9 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
   );
   const [label, setLabel] = useState("Cohere production");
   const [secret, setSecret] = useState("");
+  const [northLabel, setNorthLabel] = useState("North API");
+  const [northSecret, setNorthSecret] = useState("");
+  const [northUrlDraft, setNorthUrlDraft] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,6 +45,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
     if (pRes.ok) {
       const pJson = (await pRes.json()) as PipelineSettings;
       setPipeline(pJson);
+      setNorthUrlDraft(pJson.north_base_url ?? "");
     }
   }
 
@@ -50,6 +55,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
   }, [workspaceId]);
 
   const cohereKey = keys.find((k) => k.kind === "llm_cohere");
+  const northKey = keys.find((k) => k.kind === "north_bearer");
 
   async function saveKey(e: React.FormEvent) {
     e.preventDefault();
@@ -95,6 +101,143 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
         setSecret("");
         setMsg("Key saved. Secret is not shown again.");
       }
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveNorthUrl(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setMsg(null);
+    setBusy(true);
+    try {
+      const trimmed = northUrlDraft.trim();
+      const patch = { north_base_url: trimmed === "" ? "" : trimmed };
+      const parsed = pipelineSettingsPatchSchema.safeParse(patch);
+      if (!parsed.success) {
+        setErr(parsed.error.flatten().fieldErrors.north_base_url?.join(", ") ?? "Invalid North URL");
+        return;
+      }
+      const res = await fetch(`/api/v1/workspaces/${workspaceId}/settings/pipeline`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string };
+      };
+      if (!res.ok) {
+        setErr(body.error?.message ?? `Save failed (${res.status})`);
+        return;
+      }
+      setMsg("North API URL saved.");
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveNorthKey(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setMsg(null);
+    setBusy(true);
+    try {
+      if (northKey) {
+        const patchBody: { label: string; secret?: string } = { label: northLabel };
+        if (northSecret.length >= 8) {
+          patchBody.secret = northSecret;
+        }
+        const res = await fetch(
+          `/api/v1/workspaces/${workspaceId}/api-keys/${northKey.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patchBody),
+          },
+        );
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: { message?: string };
+        };
+        if (!res.ok) {
+          setErr(body.error?.message ?? `Update failed (${res.status})`);
+          return;
+        }
+        setNorthSecret("");
+        setMsg(patchBody.secret ? "North token rotated." : "North token label updated.");
+      } else {
+        const res = await fetch(`/api/v1/workspaces/${workspaceId}/api-keys`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: "north_bearer",
+            label: northLabel,
+            secret: northSecret,
+          }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: { message?: string };
+        };
+        if (!res.ok) {
+          setErr(body.error?.message ?? `Save failed (${res.status})`);
+          return;
+        }
+        setNorthSecret("");
+        setMsg("North bearer token saved. Secret is not shown again.");
+      }
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function testNorth() {
+    setErr(null);
+    setMsg(null);
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/v1/workspaces/${workspaceId}/providers/north/test`, {
+        method: "POST",
+      });
+      const body = (await res.json()) as {
+        ok?: boolean;
+        agent_count?: number;
+        error?: { message?: string };
+      };
+      if (!res.ok) {
+        setErr(body.error?.message ?? `North test failed (${res.status})`);
+        return;
+      }
+      if (body.ok) {
+        setMsg(`North connectivity OK (${body.agent_count ?? 0} agents visible).`);
+      } else {
+        setErr(body.error?.message ?? "North test failed");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeNorthKey() {
+    if (!northKey) return;
+    if (!confirm("Remove the stored North bearer token?")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(
+        `/api/v1/workspaces/${workspaceId}/api-keys/${northKey.id}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok && res.status !== 204) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: { message?: string };
+        };
+        setErr(body.error?.message ?? "Delete failed");
+        return;
+      }
+      setMsg("North token removed.");
       await reload();
     } finally {
       setBusy(false);
@@ -244,6 +387,98 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
 
       <section
         className="rounded-lg border border-border-strong bg-surface p-5"
+        aria-labelledby="north-integration-title"
+      >
+        <h2 id="north-integration-title" className="text-title-3 text-primary">
+          North integration
+        </h2>
+        <p className="mt-2 text-caption text-muted">
+          Base URL is stored in pipeline settings. Bearer token is encrypted like other API keys and never
+          returned on read.
+        </p>
+        <form className="mt-4 flex max-w-xl flex-col gap-3" onSubmit={saveNorthUrl}>
+          <label className="flex flex-col gap-1 text-caption text-secondary">
+            North API base URL
+            <input
+              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              value={northUrlDraft}
+              onChange={(ev) => setNorthUrlDraft(ev.target.value)}
+              placeholder="https://north.example.com"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-fit rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+          >
+            {busy ? "Working…" : "Save North URL"}
+          </button>
+        </form>
+
+        <form className="mt-8 flex max-w-xl flex-col gap-3" onSubmit={saveNorthKey}>
+          <h3 className="text-body font-medium text-primary">
+            {northKey ? "Rotate North bearer token" : "Add North bearer token"}
+          </h3>
+          <label className="flex flex-col gap-1 text-caption text-secondary">
+            Label
+            <input
+              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-body text-primary"
+              value={northLabel}
+              onChange={(ev) => setNorthLabel(ev.target.value)}
+              required
+              maxLength={80}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-secondary">
+            Bearer token
+            <input
+              type="password"
+              autoComplete="off"
+              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              value={northSecret}
+              onChange={(ev) => setNorthSecret(ev.target.value)}
+              required={!northKey}
+              minLength={northKey ? undefined : 8}
+              placeholder={northKey ? "Leave blank to keep current token" : "…"}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              type="submit"
+              disabled={
+                busy ||
+                (!northKey && northSecret.length < 8) ||
+                (northSecret.length > 0 && northSecret.length < 8)
+              }
+              className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+            >
+              {busy ? "Working…" : northKey ? "Rotate token" : "Save token"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || !northKey}
+              onClick={() => void testNorth()}
+              className="rounded-md border border-border-strong px-4 py-2 text-body text-secondary hover:bg-surface-raised disabled:opacity-50"
+            >
+              Test North
+            </button>
+            {northKey ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void removeNorthKey()}
+                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-body text-[color:var(--semantic-danger)] hover:bg-surface-raised disabled:opacity-50"
+              >
+                Remove token
+              </button>
+            ) : null}
+          </div>
+        </form>
+      </section>
+
+      <section
+        className="rounded-lg border border-border-strong bg-surface p-5"
         aria-labelledby="pipeline-title"
       >
         <h2 id="pipeline-title" className="text-title-3 text-primary">
@@ -281,6 +516,12 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
           <div>
             <dt className="text-muted">Max notes / document</dt>
             <dd className="font-mono text-primary">{pipeline.max_notes_per_document}</dd>
+          </div>
+          <div>
+            <dt className="text-muted">North base URL</dt>
+            <dd className="font-mono text-primary break-all">
+              {pipeline.north_base_url ? pipeline.north_base_url : "—"}
+            </dd>
           </div>
         </dl>
       </section>

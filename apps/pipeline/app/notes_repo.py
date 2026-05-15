@@ -116,8 +116,12 @@ def insert_note(
     created_by_user_id: str | None = None,
     episode_ids: list[str] | None = None,
     is_user_edited: bool = False,
+    agent_id: str | None = None,
+    memory_context: str | None = None,
+    memory_keywords: list[str] | None = None,
 ) -> dict[str, Any]:
     tags_n = _norm_tags(tags)
+    kws = sorted({k.strip().lower() for k in (memory_keywords or []) if k and k.strip()})[:40]
     ep_ids = episode_ids or []
     if origin == "generated" and not ep_ids:
         raise ValueError("generated notes require at least one source episode")
@@ -126,9 +130,13 @@ def insert_note(
             """
             INSERT INTO atomic_notes (
               id, workspace_id, title, body, tags, origin,
-              is_user_edited, created_by_user_id
+              is_user_edited, created_by_user_id, agent_id,
+              memory_context, memory_keywords
             )
-            VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, CAST(%s AS uuid))
+            VALUES (
+              %s::uuid, %s::uuid, %s, %s, %s, %s, %s,
+              CAST(%s AS uuid), %s::uuid, %s, %s::text[]
+            )
             """,
             (
                 note_id,
@@ -139,6 +147,9 @@ def insert_note(
                 origin,
                 is_user_edited,
                 created_by_user_id,
+                agent_id,
+                memory_context[:2000] if memory_context else None,
+                kws,
             ),
         )
         for eid in ep_ids:
@@ -176,7 +187,8 @@ def fetch_note_detail(database_url: str, *, workspace_id: str, note_id: str) -> 
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         links_out = conn.execute(
             """
-            SELECT id::text, target_note_id::text, kind, custom_label, origin, created_at
+            SELECT id::text, target_note_id::text, kind, custom_label, origin,
+                   link_reason, link_strength, created_at
             FROM note_links
             WHERE workspace_id = %s::uuid AND source_note_id = %s::uuid
             ORDER BY created_at ASC
@@ -185,7 +197,8 @@ def fetch_note_detail(database_url: str, *, workspace_id: str, note_id: str) -> 
         ).fetchall()
         links_in = conn.execute(
             """
-            SELECT id::text, source_note_id::text, kind, custom_label, origin, created_at
+            SELECT id::text, source_note_id::text, kind, custom_label, origin,
+                   link_reason, link_strength, created_at
             FROM note_links
             WHERE workspace_id = %s::uuid AND target_note_id = %s::uuid
             ORDER BY created_at ASC
@@ -216,7 +229,9 @@ def _serialize_note_row(row: dict[str, Any]) -> dict[str, Any]:
     out["workspace_id"] = str(out["workspace_id"])
     if out.get("created_by_user_id"):
         out["created_by_user_id"] = str(out["created_by_user_id"])
-    for k in ("created_at", "updated_at"):
+    if out.get("agent_id"):
+        out["agent_id"] = str(out["agent_id"])
+    for k in ("created_at", "updated_at", "dreaming_touched_at"):
         if out.get(k) and hasattr(out[k], "isoformat"):
             out[k] = out[k].isoformat()
     return out
@@ -231,6 +246,7 @@ def list_notes(
     document_id: str | None = None,
     origin: str | None = None,
     is_user_edited: bool | None = None,
+    agent_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
     sort: str = "updated_at_desc",
@@ -259,6 +275,9 @@ def list_notes(
     if is_user_edited is not None:
         where.append("n.is_user_edited = %s")
         params.append(is_user_edited)
+    if agent_id:
+        where.append("n.agent_id = %s::uuid")
+        params.append(agent_id)
 
     order = "n.updated_at DESC"
     if sort == "created_at_desc":
@@ -275,7 +294,9 @@ def list_notes(
         rows = conn.execute(
             f"""
             SELECT n.id, n.workspace_id, n.title, n.body, n.tags, n.origin,
-                   n.is_user_edited, n.created_at, n.updated_at
+                   n.is_user_edited, n.created_at, n.updated_at,
+                   n.agent_id, n.memory_context, n.memory_keywords,
+                   n.evolution_history, n.dreaming_touched_at
             FROM atomic_notes n
             WHERE {where_sql}
             ORDER BY {order}
@@ -326,6 +347,75 @@ def update_note(
     return fetch_note(database_url, workspace_id=workspace_id, note_id=note_id)
 
 
+def append_evolution_history(
+    database_url: str,
+    *,
+    workspace_id: str,
+    note_id: str,
+    entry: dict[str, Any],
+) -> None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT evolution_history FROM atomic_notes
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            """,
+            (note_id, workspace_id),
+        ).fetchone()
+        if not row:
+            return
+        hist = list(row["evolution_history"] or [])
+        hist.append(entry)
+        conn.execute(
+            """
+            UPDATE atomic_notes
+            SET evolution_history = %s::jsonb,
+                dreaming_touched_at = now(),
+                updated_at = now()
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            """,
+            (Json(hist), note_id, workspace_id),
+        )
+        conn.commit()
+
+
+def patch_note_derivations(
+    database_url: str,
+    *,
+    workspace_id: str,
+    note_id: str,
+    memory_context: str | None = None,
+    memory_keywords: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Update derived A-MEM / dreaming fields without marking user-edited."""
+    sets: list[str] = []
+    params: list[Any] = []
+    if memory_context is not None:
+        sets.append("memory_context = %s")
+        params.append(memory_context[:2000])
+    if memory_keywords is not None:
+        sets.append("memory_keywords = %s")
+        params.append(sorted({k.strip().lower() for k in memory_keywords if k and k.strip()})[:40])
+    if tags is not None:
+        sets.append("tags = %s")
+        params.append(_norm_tags(tags))
+    if not sets:
+        return
+    sets.append("dreaming_touched_at = now()")
+    sets.append("updated_at = now()")
+    params.extend([note_id, workspace_id])
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            f"""
+            UPDATE atomic_notes SET {", ".join(sets)}
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            """,
+            params,
+        )
+        conn.commit()
+
+
 def delete_note(database_url: str, *, workspace_id: str, note_id: str) -> bool:
     with psycopg.connect(database_url) as conn:
         cur = conn.execute(
@@ -348,6 +438,8 @@ def add_note_link(
     kind: str,
     custom_label: str | None,
     origin: str,
+    link_reason: str | None = None,
+    link_strength: float = 1.0,
 ) -> dict[str, Any]:
     if source_note_id == target_note_id:
         raise ValueError("cannot link note to itself")
@@ -355,12 +447,26 @@ def add_note_link(
         raise ValueError("custom_label required for kind=custom")
     lid = str(uuid4())
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        ra = conn.execute(
+            "SELECT agent_id FROM atomic_notes WHERE id = %s::uuid AND workspace_id = %s::uuid",
+            (source_note_id, workspace_id),
+        ).fetchone()
+        rb = conn.execute(
+            "SELECT agent_id FROM atomic_notes WHERE id = %s::uuid AND workspace_id = %s::uuid",
+            (target_note_id, workspace_id),
+        ).fetchone()
+        if not ra or not rb:
+            raise ValueError("note not found for link")
+        aid_a, aid_b = ra["agent_id"], rb["agent_id"]
+        if aid_a is not None and aid_b is not None and str(aid_a) != str(aid_b):
+            raise ValueError("cross_agent_link_forbidden")
         conn.execute(
             """
             INSERT INTO note_links (
-              id, workspace_id, source_note_id, target_note_id, kind, custom_label, origin
+              id, workspace_id, source_note_id, target_note_id, kind, custom_label, origin,
+              link_reason, link_strength
             )
-            VALUES (%s::uuid, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s)
             """,
             (
                 lid,
@@ -370,6 +476,8 @@ def add_note_link(
                 kind,
                 custom_label.strip() if custom_label else None,
                 origin,
+                link_reason[:2000] if link_reason else None,
+                float(link_strength),
             ),
         )
         conn.commit()

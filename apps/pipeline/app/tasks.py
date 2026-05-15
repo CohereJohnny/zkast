@@ -76,6 +76,14 @@ from app.notes_repo import (
 from app.relationships_repo import insert_relationship_from_graphiti
 from app.storage import LocalStorage
 from app.workspace_repo import fetch_pipeline_settings
+from app.amem_enrich import enrich_notes_amem_batch
+from app.dreaming import run_dreaming_job
+from app.note_embedding_index import (
+    upsert_amem_embeddings_for_notes,
+    upsert_zettel_embeddings_for_notes,
+)
+from app.north_repo import fetch_north_agent
+from app.transcript_episodes import build_episode_rows_from_transcript
 from app import entities_repo
 
 logger = structlog.get_logger(__name__)
@@ -98,6 +106,7 @@ RECONCILER_LOCK_TTL_S = 50
 TIMEOUT_PARSE_S = 600       # 10 min
 TIMEOUT_NOTES_S = 1_200     # 20 min
 TIMEOUT_GRAPH_S = 2_400     # 40 min
+TIMEOUT_DREAM_S = 1_200     # 20 min — per-agent consolidation + LLM
 # Used as the global ceiling; per-function settings override per task.
 TIMEOUT_WORKER_DEFAULT_S = TIMEOUT_GRAPH_S
 
@@ -127,8 +136,28 @@ async def worker_shutdown(ctx: dict[str, Any]) -> None:
 
 
 def _redis_settings_for_worker() -> RedisSettings:
+    """Build the arq ``RedisSettings`` with retry-friendly defaults.
+
+    The bare ``RedisSettings.from_dsn`` defaults (``conn_timeout=1``,
+    ``conn_retries=5``, ``conn_retry_delay=1``, ``retry_on_timeout=False``)
+    are too aggressive for the local Docker-on-Mac stack: a brief Redis
+    pause (e.g. host CPU pressure during a sibling rebuild) can blow past
+    five retries inside the 1s window and arq's ``_poll_iteration`` then
+    raises ``redis.exceptions.TimeoutError`` — which kills the worker
+    process. We observed exactly this in BUG-014 follow-up: a 94s cron
+    delay preceded the worker's exit-1.
+
+    With these tuned values the worker survives ~60s of Redis flakiness
+    without losing jobs (they sit in the queue and resume on
+    reconnect).
+    """
     url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
-    return RedisSettings.from_dsn(url)
+    settings = RedisSettings.from_dsn(url)
+    settings.conn_timeout = 5
+    settings.conn_retries = 20
+    settings.conn_retry_delay = 2
+    settings.retry_on_timeout = True
+    return settings
 
 
 async def _ensure_arq_pool(ctx: dict[str, Any]) -> Any:
@@ -209,9 +238,41 @@ def _describe_exception(exc: BaseException, *, max_len: int = 500) -> str:
     straight to ``documents.failure_reason``, the UI shows "Job failed:" with
     nothing after the colon. This helper guarantees we always have at least the
     exception type name.
+
+    For SDKs that dump full HTTP headers into ``str(exc)`` (Cohere's
+    ``UnprocessableEntityError`` is the worst offender — its repr is hundreds
+    of characters of access-control headers), we prefer the parsed JSON body's
+    ``error_type`` / ``message`` fields so the chat UI shows
+    ``UnprocessableEntityError: NO_VALID_RESPONSE_GENERATED — No valid
+    response generated.`` rather than a wall of metadata.
     """
-    msg = (str(exc) or "").strip()
     name = type(exc).__name__
+
+    # Cohere SDK errors carry a ``body`` attribute with the JSON payload.
+    body = getattr(exc, "body", None)
+    parsed_body: dict[str, Any] | None = None
+    if isinstance(body, dict):
+        parsed_body = body
+    elif isinstance(body, (bytes, bytearray, str)):
+        try:
+            decoded = (
+                body.decode() if isinstance(body, (bytes, bytearray)) else body
+            )
+            parsed = json.loads(decoded)
+            if isinstance(parsed, dict):
+                parsed_body = parsed
+        except Exception:  # noqa: BLE001
+            parsed_body = None
+
+    if parsed_body:
+        error_type = str(parsed_body.get("error_type") or "").strip()
+        message = str(parsed_body.get("message") or "").strip()
+        parts = [p for p in (error_type, message) if p]
+        if parts:
+            text = f"{name}: " + " — ".join(parts)
+            return text[:max_len]
+
+    msg = (str(exc) or "").strip()
     text = f"{name}: {msg}" if msg else name
     return text[:max_len]
 
@@ -309,6 +370,125 @@ async def _mark_task_failed(
     )
 
 
+async def _parse_north_transcript(
+    ctx: dict[str, Any],
+    *,
+    workspace_id: str,
+    document_id: str,
+    ingestion_run_id: str,
+    job_id: str,
+    doc: dict[str, Any],
+) -> None:
+    """Parse cached North JSON into transcript episodes (agent scoped)."""
+    redis = ctx["redis"]
+    database_url: str = ctx["database_url"]
+
+    raw: Any = doc.get("raw_transcript_json")
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    if raw is None:
+        raw = {}
+    agent_id = doc.get("agent_id")
+    if not agent_id:
+        raise RuntimeError("north document missing agent_id")
+
+    agent = await asyncio.to_thread(
+        fetch_north_agent,
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=str(agent_id),
+    )
+    if not agent:
+        raise RuntimeError("north agent row missing for document")
+
+    import_settings = dict(agent.get("import_settings") or {})
+    north_meta = dict(doc.get("north_metadata") or {})
+
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="parsing",
+        message="Parsing North transcript into episodes",
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+
+    await asyncio.to_thread(delete_episodes_for_document, database_url, document_id=document_id)
+
+    transcript_root: dict[str, Any] = raw if isinstance(raw, dict) else {"messages": raw}
+    rows = build_episode_rows_from_transcript(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        ingestion_run_id=ingestion_run_id,
+        agent_id=str(agent_id),
+        raw_transcript=transcript_root,
+        import_settings=import_settings,
+        north_metadata=north_meta,
+    )
+    if not rows:
+        raise RuntimeError("North transcript produced zero episodes (check message filters)")
+
+    await asyncio.to_thread(
+        insert_episodes,
+        database_url,
+        workspace_id=workspace_id,
+        document_id=document_id,
+        ingestion_run_id=ingestion_run_id,
+        rows=rows,
+    )
+    chunk_count = len(rows)
+    await asyncio.to_thread(
+        merge_run_stats_incremental,
+        database_url,
+        run_id=ingestion_run_id,
+        extra={"chunk_count": chunk_count, "page_count": chunk_count, "stage": "parsing_done"},
+    )
+    await asyncio.to_thread(
+        update_document,
+        database_url,
+        document_id=document_id,
+        page_count=chunk_count,
+    )
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="parsing",
+        message=f"Parsed North transcript into {chunk_count} episodes",
+        data={"chunk_count": chunk_count},
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+    await publish_job_event(redis, job_id, "stage_completed", stage="parsing")
+
+    pool = await _ensure_arq_pool(ctx)
+    enqueued = await pool.enqueue_job(
+        "generate_atomic_notes",
+        workspace_id=workspace_id,
+        document_id=document_id,
+        ingestion_run_id=ingestion_run_id,
+        job_id=job_id,
+        _job_id=f"{job_id}:notes",
+    )
+    if enqueued is None:
+        raise RuntimeError(
+            "Failed to enqueue generate_atomic_notes — arq returned None "
+            "(stage may already be queued/in-flight)."
+        )
+    await asyncio.to_thread(
+        update_document,
+        database_url,
+        document_id=document_id,
+        status="generating_notes",
+    )
+    await job_hset(
+        redis,
+        job_id,
+        progress=json.dumps({"percent": 100, "stage": "parsing", "message": "queued_notes"}),
+    )
+
+
 async def parse_document(
     ctx: dict[str, Any],
     *,
@@ -342,6 +522,26 @@ async def parse_document(
                 document_id=document_id,
                 status="parsing",
             )
+            doc = await asyncio.to_thread(
+                fetch_document,
+                database_url,
+                workspace_id=workspace_id,
+                document_id=document_id,
+            )
+            if not doc:
+                raise RuntimeError("document not found")
+
+            if str(doc.get("source_kind") or "pdf") == "north_conversation":
+                await _parse_north_transcript(
+                    ctx,
+                    workspace_id=workspace_id,
+                    document_id=document_id,
+                    ingestion_run_id=ingestion_run_id,
+                    job_id=job_id,
+                    doc=doc,
+                )
+                return
+
             await record_log(
                 redis,
                 job_id=job_id,
@@ -351,15 +551,6 @@ async def parse_document(
                 database_url=database_url,
                 ingestion_run_id=ingestion_run_id,
             )
-
-            doc = await asyncio.to_thread(
-                fetch_document,
-                database_url,
-                workspace_id=workspace_id,
-                document_id=document_id,
-            )
-            if not doc:
-                raise RuntimeError("document not found")
 
             pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
             chunk_tokens = int(pipe.get("chunk_size") or 512)
@@ -395,7 +586,7 @@ async def parse_document(
                     delete_episodes_for_document, database_url, document_id=document_id
                 )
 
-                episode_rows: list[tuple[str, str, int, int, int]] = []
+                episode_rows: list[tuple[str, str, int, int, int, str, str | None]] = []
                 sequence = 0
                 throttle = max(1, page_count // 20) if page_count else 1
 
@@ -408,7 +599,9 @@ async def parse_document(
 
                         text = await asyncio.to_thread(_page_text)
                         for chunk_text, ps, pe in chunk_page_text(page_num, text, max_chars):
-                            episode_rows.append((str(uuid4()), chunk_text, ps, pe, sequence))
+                            episode_rows.append(
+                                (str(uuid4()), chunk_text, ps, pe, sequence, "pdf_chunk", None)
+                            )
                             sequence += 1
                     except Exception as exc:  # noqa: BLE001
                         msg = f"page {page_num}: {exc}"
@@ -609,6 +802,12 @@ async def generate_atomic_notes(
                 episodes = [e for e in episodes if e.get("id") in allow]
             if not episodes:
                 raise RuntimeError("No episodes to generate notes from (check episode_ids filter)")
+            agent_ids = {str(ep["agent_id"]) for ep in episodes if ep.get("agent_id")}
+            if len(agent_ids) > 1:
+                raise RuntimeError(
+                    "Mixed-agent episode batch: all episodes must share the same agent_id for note generation"
+                )
+            agent_scope: str | None = next(iter(agent_ids)) if len(agent_ids) == 1 else None
             pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
             max_notes = min(500, max(1, int(pipe.get("max_notes_per_document") or 50)))
             model = str(pipe.get("large_model") or "command-a-plus-05-2026")
@@ -683,6 +882,7 @@ async def generate_atomic_notes(
                         created_by_user_id=None,
                         episode_ids=payload["source_episode_ids"],
                         is_user_edited=False,
+                        agent_id=agent_scope,
                     )
                     created_ids.append(nid)
                 except psycopg.errors.ForeignKeyViolation as fk_exc:
@@ -721,9 +921,40 @@ async def generate_atomic_notes(
                             kind=ln.get("kind", "related"),
                             custom_label=None,
                             origin="generated",
+                            link_reason=str(ln.get("link_reason") or ln.get("reason") or "")[:2000]
+                            or None,
+                            link_strength=float(ln.get("link_strength") or 1.0),
                         )
                     except Exception as link_exc:  # noqa: BLE001
                         logger.warning("note_link_skip", error=str(link_exc))
+
+            embed_model = str(pipe.get("embed_model") or "embed-v4.0")
+            if created_ids:
+                await upsert_zettel_embeddings_for_notes(
+                    api_key=api_key,
+                    database_url=database_url,
+                    workspace_id=workspace_id,
+                    note_ids=created_ids,
+                    agent_id=agent_scope,
+                    embed_model=embed_model,
+                )
+            if created_ids:
+                await enrich_notes_amem_batch(
+                    api_key=api_key,
+                    model=model,
+                    database_url=database_url,
+                    workspace_id=workspace_id,
+                    note_ids=created_ids,
+                )
+            if created_ids:
+                await upsert_amem_embeddings_for_notes(
+                    api_key=api_key,
+                    database_url=database_url,
+                    workspace_id=workspace_id,
+                    note_ids=created_ids,
+                    agent_id=agent_scope,
+                    embed_model=embed_model,
+                )
 
             await asyncio.to_thread(
                 merge_run_stats_incremental,
@@ -1427,6 +1658,7 @@ class WorkerSettings:
         arq_func(generate_atomic_notes, timeout=TIMEOUT_NOTES_S, max_tries=1),
         arq_func(extract_graph, timeout=TIMEOUT_GRAPH_S, max_tries=1),
         arq_func(run_chat_turn, timeout=TIMEOUT_CHAT_TURN_S, max_tries=1),
+        arq_func(run_dreaming_job, timeout=TIMEOUT_DREAM_S, max_tries=1),
     ]
     # Global ceiling for any task that doesn't override (e.g. cron jobs).
     job_timeout = TIMEOUT_WORKER_DEFAULT_S

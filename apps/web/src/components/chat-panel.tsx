@@ -54,7 +54,13 @@ type SessionShape = {
   scope: Record<string, unknown>;
 };
 
-export type RetrievalMode = "rag" | "graph" | "hybrid";
+export type RetrievalMode =
+  | "rag"
+  | "raw_transcript"
+  | "graph"
+  | "hybrid"
+  | "zettelkasten_notes"
+  | "amem_lite";
 
 const MAX_INPUT_LEN = 20_000;
 const ARIA_LIVE_THROTTLE_MS = 150;
@@ -74,6 +80,11 @@ export const RETRIEVAL_MODE_LABELS: Record<
     helper:
       "Embed the question and retrieve top-K original parsed PDF chunks. No zettelkasten notes, entities, or graph traversal.",
   },
+  raw_transcript: {
+    label: "Raw transcript",
+    tagline: "Same as Naive RAG",
+    helper: "Alias for Naive RAG — evaluates North transcript chunks under agent scope when configured.",
+  },
   graph: {
     label: "GraphRAG",
     tagline: "Zettelkasten + graph context",
@@ -85,6 +96,16 @@ export const RETRIEVAL_MODE_LABELS: Record<
     tagline: "Traversal + supporting evidence",
     helper:
       "Deterministic typed-entity and multi-hop handlers for 'how many' / 'list all' / 'how is A related to B'; falls through to GraphRAG for vector questions.",
+  },
+  zettelkasten_notes: {
+    label: "Zettel notes",
+    tagline: "Vector over note bodies",
+    helper: "Embeddings on title+body only (note_zettel index). Respects agent scope when set.",
+  },
+  amem_lite: {
+    label: "A-MEM lite",
+    tagline: "Vector over enriched notes",
+    helper: "Embeddings include memory_context and memory_keywords after enrichment (note_amem index).",
   },
 };
 
@@ -639,53 +660,35 @@ function RetrievalModeSelector({
   onChange: (mode: RetrievalMode) => void;
   disabled: boolean;
 }) {
-  const modes: RetrievalMode[] = ["rag", "graph", "hybrid"];
+  const modes: RetrievalMode[] = [
+    "rag",
+    "raw_transcript",
+    "graph",
+    "hybrid",
+    "zettelkasten_notes",
+    "amem_lite",
+  ];
+  const meta = RETRIEVAL_MODE_LABELS[value];
   return (
-    <div
-      role="radiogroup"
-      aria-label="Retrieval strategy"
-      className="flex flex-col gap-1.5"
-    >
-      <div className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface/40 p-0.5">
-        {modes.map((m) => {
-          const meta = RETRIEVAL_MODE_LABELS[m];
-          const active = m === value;
-          return (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              disabled={disabled && !active}
-              onClick={() => !disabled && onChange(m)}
-              title={meta.helper}
-              className={
-                active
-                  ? "flex flex-1 cursor-pointer flex-col items-start rounded px-2 py-1 text-left text-caption font-medium text-canvas bg-accent-primary transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
-                  : disabled
-                    ? "flex flex-1 cursor-not-allowed flex-col items-start rounded px-2 py-1 text-left text-caption text-muted opacity-50"
-                    : "flex flex-1 cursor-pointer flex-col items-start rounded px-2 py-1 text-left text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
-              }
-            >
-              <span>{meta.label}</span>
-              <span
-                className={
-                  active
-                    ? "text-[10px] uppercase tracking-wider text-canvas/80"
-                    : "text-[10px] uppercase tracking-wider text-muted"
-                }
-              >
-                {meta.tagline}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+    <div className="flex flex-col gap-1.5">
+      <label className="text-caption text-muted">
+        Retrieval strategy
+        <select
+          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 text-body text-primary"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value as RetrievalMode)}
+        >
+          {modes.map((m) => (
+            <option key={m} value={m}>
+              {RETRIEVAL_MODE_LABELS[m].label} — {RETRIEVAL_MODE_LABELS[m].tagline}
+            </option>
+          ))}
+        </select>
+      </label>
       <p className="text-caption text-muted">
-        {RETRIEVAL_MODE_LABELS[value].helper}
-        {disabled
-          ? " — locked for this session; start a new chat to switch."
-          : ""}
+        {meta.helper}
+        {disabled ? " — locked for this session; start a new chat to switch." : ""}
       </p>
     </div>
   );

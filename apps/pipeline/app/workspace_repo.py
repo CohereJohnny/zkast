@@ -18,6 +18,9 @@ DEFAULT_PIPELINE_SETTINGS: dict[str, Any] = {
     "embed_model": "embed-v4.0",
     "rerank_model": "rerank-v4.0-fast",
     "include_provenance_subgraph_default": True,
+    # North Agents API base URL (optional). Bearer token is stored in
+    # ``api_keys`` row kind ``north_bearer`` (encrypted), not in JSON.
+    "north_base_url": None,
 }
 
 
@@ -56,6 +59,32 @@ def touch_llm_cohere_last_used(database_url: str, workspace_id: str) -> None:
             """
             UPDATE api_keys SET last_used_at = now(), updated_at = now()
             WHERE workspace_id = %s AND kind = 'llm_cohere'
+            """,
+            (workspace_id,),
+        )
+        conn.commit()
+
+
+def fetch_north_bearer_secret_row(database_url: str, workspace_id: str) -> str | None:
+    """Return encrypted_secret for ``north_bearer`` or None."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT encrypted_secret FROM api_keys
+            WHERE workspace_id = %s AND kind = 'north_bearer'
+            LIMIT 1
+            """,
+            (workspace_id,),
+        ).fetchone()
+        return row["encrypted_secret"] if row else None
+
+
+def touch_north_bearer_last_used(database_url: str, workspace_id: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            """
+            UPDATE api_keys SET last_used_at = now(), updated_at = now()
+            WHERE workspace_id = %s AND kind = 'north_bearer'
             """,
             (workspace_id,),
         )

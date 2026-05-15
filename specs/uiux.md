@@ -17,6 +17,7 @@ This document defines the user interface and interaction requirements for zkast.
 ```mermaid
 flowchart TD
     Onboarding[First-Run Setup] --> Workspace[Workspace Home]
+    Workspace --> Agents[Agents View]
     Workspace --> Documents[Documents View]
     Workspace --> Notes[Notes View]
     Workspace --> Graph[Graph View]
@@ -44,6 +45,7 @@ flowchart TD
 A persistent **left rail** is the primary navigation. Items:
 
 - Documents
+- Agents (North sync, conversations, import, dreaming, eval shortcuts)
 - Notes
 - Graph (default landing inside a workspace after first ingestion)
 - Chat
@@ -123,6 +125,8 @@ Four modes for the layout:
 
 ### Notes Panel (in Workspace)
 
+- Lists atomic notes with search, origin filter, optional document id filter, and **optional North `agent_id` filter** (also deep-linkable via `?agentId=` on the Notes route) so researchers stay inside one agent memory boundary.
+
 **Purpose**: Browse, search, and edit atomic notes.
 
 **Display elements**:
@@ -148,7 +152,8 @@ Four modes for the layout:
 **Display elements**:
 
 - Editable title, tags, and body. Body editor supports Markdown with inline preview, image and link rendering, and `[[wikilink]]` syntax that resolves to other note titles.
-- **Links section**: inbound and outbound links, each with kind (related, supports, refutes, extends, references, custom). Each link is clickable and shows the target's title and tags.
+- **Agent memory (A-MEM / dreaming)**: when present, read-only summary of `memory_context`, keyword chips, last dreaming touch timestamp, and a concise indicator that evolution history exists (expandable in future).
+- **Links section**: inbound and outbound links, each with kind (related, supports, refutes, extends, references, custom) plus **link reason** text when supplied by generation or dreaming. Each link is clickable and shows the target's title and tags.
 - **Source section**: source episodes with their page references and a "View in PDF" action that scrolls the document preview to the matching page.
 - **Graph mini-map**: a small visualization of this note's local entity neighborhood (the entities mentioned in the note and their direct connections).
 - Actions: merge with…, split, delete, mark reviewed, **Ask about this**.
@@ -263,7 +268,7 @@ The chat surface lets the user ask natural-language questions of the workspace's
 
 **Display elements**:
 
-- **Header**: session title (editable inline), scope chips, model badge, snapshot pin indicator (if any), a session menu (rename, change scope, pin/unpin snapshot, share, export, delete).
+- **Header**: session title (editable inline), scope chips, model badge, snapshot pin indicator (if any), **retrieval strategy** selector (Naive RAG / raw transcript alias, GraphRAG, Hybrid, Zettel note vectors, A-MEM lite vectors — locked after first message), a session menu (rename, change scope, pin/unpin snapshot, share, export, delete).
 - **Transcript**: scrollable history of message bubbles.
   - **User messages**: right-aligned, plain text, with timestamp on hover.
   - **Assistant messages**: left-aligned, support markdown rendering, with citation markers inline (see below), a footer row showing citation count, coverage percentage, latency, and a context menu (regenerate, show retrieved context, copy, report bad answer).
@@ -348,6 +353,13 @@ The chat surface lets the user ask natural-language questions of the workspace's
 **States**: empty (no targets configured — explain why a target is needed and link to docs), testing, ok, failing (banner with last error).
 
 ## Settings Surfaces
+
+### North integration (Settings)
+
+- **North API base URL** field with validation (must be empty or `http(s)` URL), saved via pipeline settings PATCH. Never stores bearer tokens in JSON.
+- **North bearer token** captured only through the API Keys flow as kind `north_bearer` (masked after save, rotate/remove like other keys).
+- **Test North** action calls the connectivity probe and surfaces success (`agent_count`) or structured failure (misconfiguration vs upstream).
+- **Configured state**: show whether URL + token are present without revealing secrets; link to Agents when North is incomplete.
 
 ### Workspace Settings
 

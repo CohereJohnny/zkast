@@ -17,9 +17,11 @@ export function NotesList({
   q,
   origin,
   documentFilter,
+  agentFilter,
   onQChange,
   onOriginChange,
   onDocumentFilterChange,
+  onAgentFilterChange,
   onNewNote,
 }: {
   items: NoteListItem[];
@@ -30,9 +32,11 @@ export function NotesList({
   q: string;
   origin: string;
   documentFilter: string;
+  agentFilter: string;
   onQChange: (v: string) => void;
   onOriginChange: (v: string) => void;
   onDocumentFilterChange: (v: string) => void;
+  onAgentFilterChange: (v: string) => void;
   onNewNote: () => void;
 }) {
   return (
@@ -76,6 +80,15 @@ export function NotesList({
           onChange={(e) => onDocumentFilterChange(e.target.value)}
           className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
           placeholder="Optional uuid"
+        />
+      </label>
+      <label className="block text-caption text-muted">
+        Agent id filter
+        <input
+          value={agentFilter}
+          onChange={(e) => onAgentFilterChange(e.target.value)}
+          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
+          placeholder="Optional North agent uuid"
         />
       </label>
 

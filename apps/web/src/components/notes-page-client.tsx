@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { useToast } from "@/components/feedback-provider";
 import { NoteDetail } from "@/components/note-detail";
 import { NotesList, type NoteListItem } from "@/components/notes-list";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
+  const searchParams = useSearchParams();
   const [items, setItems] = useState<NoteListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [listLoading, setListLoading] = useState(true);
@@ -16,6 +21,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
   const [qDebounced, setQDebounced] = useState("");
   const [origin, setOrigin] = useState("");
   const [documentFilter, setDocumentFilter] = useState("");
+  const [agentFilter, setAgentFilter] = useState("");
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
@@ -26,6 +32,13 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
     return () => window.clearTimeout(t);
   }, [qInput]);
 
+  useEffect(() => {
+    const fromUrl = searchParams.get("agentId") ?? searchParams.get("agent_id");
+    if (fromUrl && UUID_RE.test(fromUrl)) {
+      setAgentFilter(fromUrl);
+    }
+  }, [searchParams]);
+
   const refreshList = useCallback(async () => {
     setListError(null);
     setListLoading(true);
@@ -34,11 +47,12 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
       if (qDebounced.trim()) qs.set("q", qDebounced.trim());
       if (origin) qs.set("origin", origin);
       const df = documentFilter.trim();
-      if (
-        df &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(df)
-      ) {
+      if (df && UUID_RE.test(df)) {
         qs.set("document_id", df);
+      }
+      const af = agentFilter.trim();
+      if (af && UUID_RE.test(af)) {
+        qs.set("agent_id", af);
       }
       qs.set("limit", "100");
       qs.set("offset", "0");
@@ -61,7 +75,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
     } finally {
       setListLoading(false);
     }
-  }, [workspaceId, qDebounced, origin, documentFilter]);
+  }, [workspaceId, qDebounced, origin, documentFilter, agentFilter]);
 
   useEffect(() => {
     void refreshList();
@@ -115,9 +129,11 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
           q={qInput}
           origin={origin}
           documentFilter={documentFilter}
+          agentFilter={agentFilter}
           onQChange={setQInput}
           onOriginChange={setOrigin}
           onDocumentFilterChange={setDocumentFilter}
+          onAgentFilterChange={setAgentFilter}
           onNewNote={() => void newNote()}
         />
 

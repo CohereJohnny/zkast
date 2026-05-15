@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/feedback-provider";
 import {
   RETRIEVAL_MODE_LABELS,
-  type RetrievalMode,
 } from "@/components/chat-panel";
 import {
   useChatStream,
@@ -29,10 +28,12 @@ import {
 
 const MAX_INPUT_LEN = 4_000;
 
-const COMPARE_MODES: RetrievalMode[] = ["rag", "graph", "hybrid"];
+type CompareMode = "rag" | "graph" | "hybrid";
+
+const COMPARE_MODES: CompareMode[] = ["rag", "graph", "hybrid"];
 
 type ColumnState = {
-  mode: RetrievalMode;
+  mode: CompareMode;
   sessionId: string | null;
   assistantMessageId: string | null;
   turnId: string | null;
@@ -51,7 +52,7 @@ type ColumnState = {
   errorMessage: string | null;
 };
 
-function initialColumn(mode: RetrievalMode): ColumnState {
+function initialColumn(mode: CompareMode): ColumnState {
   return {
     mode,
     sessionId: null,
@@ -72,14 +73,14 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
   const [question, setQuestion] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [columns, setColumns] = useState<Record<RetrievalMode, ColumnState>>({
+  const [columns, setColumns] = useState<Record<CompareMode, ColumnState>>({
     rag: initialColumn("rag"),
     graph: initialColumn("graph"),
     hybrid: initialColumn("hybrid"),
   });
 
   const updateColumn = useCallback(
-    (mode: RetrievalMode, delta: Partial<ColumnState>) => {
+    (mode: CompareMode, delta: Partial<ColumnState>) => {
       setColumns((prev) => ({
         ...prev,
         [mode]: { ...prev[mode], ...delta },
@@ -97,7 +98,7 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
   }, []);
 
   const launchOne = useCallback(
-    async (mode: RetrievalMode, q: string): Promise<void> => {
+    async (mode: CompareMode, q: string): Promise<void> => {
       updateColumn(mode, { status: "starting", startedAt: Date.now() });
       try {
         const sessRes = await fetch(
@@ -158,7 +159,11 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
   return (
     <section
       aria-label="Compare retrieval strategies"
-      className="mx-auto flex w-full max-w-6xl flex-col gap-3"
+      // No ``max-w`` cap here: the side rails on the workspace shell
+      // (Documents, Graph) are collapsible, and the Compare view should
+      // reclaim that horizontal real-estate when either rail is folded
+      // so the three answer columns aren't squeezed.
+      className="flex w-full flex-col gap-3"
     >
       <header className="flex flex-col gap-1 border-b border-border-subtle pb-2">
         <h2 className="text-body font-medium text-primary">
@@ -244,7 +249,7 @@ function CompareColumn({
 }: {
   workspaceId: string;
   column: ColumnState;
-  onState: (mode: RetrievalMode, delta: Partial<ColumnState>) => void;
+  onState: (mode: CompareMode, delta: Partial<ColumnState>) => void;
 }) {
   const meta = RETRIEVAL_MODE_LABELS[column.mode];
   const startedAtRef = useRef<number | null>(column.startedAt);
@@ -305,7 +310,7 @@ function CompareColumn({
   return (
     <article
       aria-label={`${meta.label} answer`}
-      className="flex min-h-[260px] flex-col gap-2 rounded-md border border-border-subtle bg-canvas/60 p-3"
+      className="flex min-h-[260px] min-w-0 flex-col gap-2 rounded-md border border-border-subtle bg-canvas/60 p-3"
     >
       <header className="flex items-start justify-between">
         <div>

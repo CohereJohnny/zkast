@@ -84,14 +84,17 @@ def test_preview_and_exclusive_delete() -> None:
         workspace_id=DEFAULT_WS,
         document_id=doc_a,
         ingestion_run_id=run_a,
-        rows=[(ep_a1, "chunk a1", 1, 1, 0), (ep_a2, "chunk a2", 1, 1, 1)],
+        rows=[
+            (ep_a1, "chunk a1", 1, 1, 0, "pdf_chunk", None),
+            (ep_a2, "chunk a2", 1, 1, 1, "pdf_chunk", None),
+        ],
     )
     insert_episodes(
         db,
         workspace_id=DEFAULT_WS,
         document_id=doc_b,
         ingestion_run_id=run_b,
-        rows=[(ep_b1, "chunk b1", 1, 1, 0)],
+        rows=[(ep_b1, "chunk b1", 1, 1, 0, "pdf_chunk", None)],
     )
 
     n_exclusive = str(uuid.uuid4())

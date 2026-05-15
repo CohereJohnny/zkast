@@ -268,6 +268,43 @@ async def retrieve(
     valid_at = _parse_iso(scope.get("valid_at"))
     seed_entity_ids = set(_str_list(scope.get("seed_entity_ids")))
 
+    agent_scope = str(scope.get("agent_id") or "").strip() or None
+    if agent_scope:
+        from app.documents_repo import list_document_ids_for_agent
+
+        agent_docs = set(
+            await asyncio.to_thread(
+                list_document_ids_for_agent,
+                database_url,
+                workspace_id=workspace_id,
+                agent_id=agent_scope,
+            )
+        )
+        if not agent_docs:
+            return _finalize(
+                [],
+                [],
+                0,
+                False,
+                GRAPH_STRATEGY,
+                graph_context_doc,
+                graph_context_item,
+            )
+        if allowed_document_ids:
+            allowed_document_ids = allowed_document_ids & agent_docs
+        else:
+            allowed_document_ids = agent_docs
+        if not allowed_document_ids:
+            return _finalize(
+                [],
+                [],
+                0,
+                False,
+                GRAPH_STRATEGY,
+                graph_context_doc,
+                graph_context_item,
+            )
+
     candidate_rows: list[tuple[int, dict[str, Any]]] = []
     for edge in edges:
         fact = str(_attr(edge, "fact", "") or "").strip()

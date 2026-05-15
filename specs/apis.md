@@ -350,9 +350,9 @@ Operations that exceed 60 seconds (ingestion, persistence, bulk operations) are 
 
 **Purpose**: List atomic notes.
 
-**Query**: `q` (full-text), `tags[]`, `document_id`, `origin`, `is_user_edited`, `sort`, pagination.
+**Query**: `q` (full-text), `tags[]`, `document_id`, `agent_id` (North agent UUID — returns only notes whose `agent_id` matches), `origin`, `is_user_edited`, `sort`, pagination.
 
-**Outputs**: Paginated notes with summary fields (title, tags, updated_at, document_id).
+**Outputs**: Paginated notes with summary fields (title, tags, updated_at, document_id, agent_id when present).
 
 **Auth**: Member.
 
@@ -1118,7 +1118,7 @@ The wire format keeps comment lines (`: keepalive\n\n`) every 15 seconds so reve
 
 **Purpose**: Add a new API key.
 
-**Inputs**: `kind`, `label`, `secret`, `metadata`.
+**Inputs**: `kind` (`llm_cohere` | `north_bearer` | other supported kinds), `label`, `secret`, optional `metadata`. At most one `north_bearer` row per workspace; conflicts return HTTP 409 with a rotate/remove message.
 
 **Outputs**: The record (no secret).
 
@@ -1146,13 +1146,21 @@ The wire format keeps comment lines (`: keepalive\n\n`) every 15 seconds so reve
 
 **Purpose**: Get pipeline parameters.
 
-**Outputs**: `chunk_size`, `max_notes_per_document`, `language`, `default_llm_provider`, `small_model`, `large_model`, `include_provenance_subgraph_default`.
+**Outputs**: `chunk_size`, `max_notes_per_document`, `language`, `default_llm_provider`, `small_model`, `large_model`, `embed_model`, `rerank_model`, `include_provenance_subgraph_default`, `north_base_url` (empty string when unset). Legacy `north_bearer_token` values stored in older workspaces are stripped on read — callers must use the `north_bearer` API key instead.
 
 **Auth**: Member (read), Owner (write).
 
 #### `PATCH /workspaces/{workspaceId}/settings/pipeline`
 
-**Purpose**: Update pipeline parameters.
+**Purpose**: Update pipeline parameters (including `north_base_url`).
+
+**Auth**: Owner.
+
+#### `POST /workspaces/{workspaceId}/providers/north/test`
+
+**Purpose**: Verify North HTTP connectivity for the workspace using saved `north_base_url` + decrypted `north_bearer` secret (or legacy pipeline token until migrated).
+
+**Outputs**: `{ ok: true, agent_count }` on success; `{ error: { code, message } }` with non-2xx status when misconfigured or upstream errors.
 
 **Auth**: Owner.
 
@@ -1288,6 +1296,16 @@ Workspace-scoped routes carry the workspace UUID in the path (`/internal/v1/work
 - `GET /internal/v1/jobs/{jobId}?workspace_id=` — Poll job hash state.
 - `GET /internal/v1/jobs/{jobId}/events?workspace_id=` — SSE for that job: **replays from Redis Stream `zkast:jobs:<jobId>:log` (XRANGE last ~200) then tails the pub/sub channel `zkast:jobs:<jobId>`** (Sprint 5b). Emits `log`, `metric`, `stage_*`, `job_*` event types (see the public `GET /jobs/{jobId}/events` section above for the schema).
 - `GET /internal/v1/workspaces/{workspaceId}/ingestion-runs/{ingestionRunId}/logs?limit=&cursor=` — Durable log read from `ingestion_run_logs` (Sprint 5b).
+
+### North Agents (conversation source)
+
+- `POST /internal/v1/workspaces/{workspaceId}/north/agents/sync` — Upsert local `north_agents` rows from the configured North instance (`pipeline_settings.north_base_url` + encrypted `north_bearer` API key, with legacy `north_bearer_token` in pipeline JSON still honored until migrated).
+- `POST /internal/v1/workspaces/{workspaceId}/north/test-connection` — Calls North `GET /v1/agents` with workspace credentials; returns `{ ok, agent_count }` or upstream error payload.
+- `GET /internal/v1/workspaces/{workspaceId}/north/agents` — List registered agents for the workspace.
+- `GET /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations?refresh=` — When `refresh=true`, list conversations from North and upsert `north_conversation_cache`; when false, return rows from the local cache only.
+- `GET /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations/{conversationId}/cache` — Return cached payload for one conversation id.
+- `POST /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations/{conversationId}/import` — Create a `north_conversation` document, persist transcript JSON to storage, enqueue `parse_document` (transcript → episodes → notes → graph). Dedupes on transcript checksum.
+- `POST /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/dream` — Enqueue `run_dreaming_job` (per-agent memory evolution with audited mutations).
 
 ### Administration
 

@@ -85,7 +85,7 @@ erDiagram
 - `name` (string, 1–80 chars).
 - `slug` (string, unique per deployment, URL-safe).
 - `description` (string, nullable, ≤ 500 chars).
-- `pipeline_settings` (structured: chunk size, max notes per document, language, default LLM provider (P0 fixed to `cohere`), chat models for "small" and "large" tasks, embedding model, rerank model).
+- `pipeline_settings` (structured: chunk size, max notes per document, language, default LLM provider (P0 fixed to `cohere`), chat models for "small" and "large" tasks, embedding model, rerank model, optional `north_base_url` for the North Agents HTTP API — must be empty or an `https?` URL; North bearer credentials are **not** stored here).
 - `created_at`, `updated_at`.
 
 **Constraints**:
@@ -118,7 +118,7 @@ erDiagram
 
 - `id` (UUID, PK).
 - `workspace_id` (FK -> Workspace).
-- `kind` (enum). The enum is forward-defined so future providers do not require a schema migration. **P0 supports `llm_cohere`, `target_neo4j`, `target_age` only.** P1 enables: `llm_openai`, `llm_anthropic`, `llm_gemini`, `llm_ollama`, `llm_generic`. Records with unsupported kinds are rejected at write time in the current phase.
+- `kind` (enum). The enum is forward-defined so future providers do not require a schema migration. **P0 supports `llm_cohere`, `target_neo4j`, `target_age`, and `north_bearer` (North Agents API token)** only. P1 enables: `llm_openai`, `llm_anthropic`, `llm_gemini`, `llm_ollama`, `llm_generic`. Records with unsupported kinds are rejected at write time in the current phase.
 - `label` (string, ≤ 80 chars): User-visible name.
 - `encrypted_secret` (opaque blob): Encrypted at rest with a per-deployment key.
 - `metadata` (structured: base URL, model names — never includes the secret).
@@ -128,33 +128,45 @@ erDiagram
 
 - The secret is never returned by any API response, ever.
 - Rotating a key updates `encrypted_secret` and `updated_at` atomically.
+- At most one `north_bearer` key row exists per workspace (partial unique index).
 
 ## Ingestion Provenance
 
 ### Document
 
-**Purpose**: A user-uploaded PDF.
+**Purpose**: An ingested source document: user-uploaded PDF, or a North conversation transcript imported as JSON.
 
 **Fields**:
 
 - `id` (UUID, PK).
 - `workspace_id` (FK -> Workspace).
 - `original_filename` (string).
-- `mime_type` (string, must be `application/pdf` in P0).
+- `mime_type` (string): `application/pdf` for PDFs; `application/json` for North transcript payloads.
+- `source_kind` (enum: `pdf`, `north_conversation`): Discriminator for ingestion semantics.
+- `agent_id` (FK -> NorthAgent, nullable): Required when `source_kind = north_conversation` (enforced by DB check); optional for PDFs.
+- `north_conversation_id` (string, nullable): Upstream conversation id when imported from North.
+- `north_metadata` (structured map, nullable): Display-oriented metadata (titles, external ids) for UI and audit.
+- `raw_transcript_json` (structured, nullable): Parsed transcript payload retained for provenance / re-parse.
 - `byte_size` (integer).
 - `storage_uri` (string): Opaque pointer to object storage; never user-visible.
 - `checksum` (string, SHA-256 hex).
-- `page_count` (integer, nullable until parsed).
+- `page_count` (integer, nullable until parsed; may be null for JSON transcripts).
 - `replaces_document_id` (FK -> Document, nullable): For re-ingestion of an updated version.
 - `status` (enum: `queued`, `parsing`, `generating_notes`, `extracting_graph`, `building_graph`, `ready`, `failed`).
 - `failure_reason` (string, nullable): Short human-readable error.
 - `created_at`, `updated_at`.
+
+**Constraints**:
+
+- `source_kind = north_conversation` implies `agent_id` is not null.
+- PDF rows continue to require PDF mime type per existing check constraints.
 
 **Indexes**:
 
 - `(workspace_id, created_at desc)` for listing.
 - `(workspace_id, status)` for status filtering.
 - Unique `(workspace_id, checksum)` to deduplicate uploads.
+- `(workspace_id, source_kind)` for filtering by ingestion channel.
 
 ### IngestionRun
 
@@ -206,7 +218,8 @@ erDiagram
 - `workspace_id` (FK -> Workspace).
 - `document_id` (FK -> Document).
 - `ingestion_run_id` (FK -> IngestionRun).
-- `kind` (enum: `pdf_chunk`, `manual_text`): Source kind.
+- `agent_id` (FK -> NorthAgent, nullable): Copied from the parent document for agent-scoped notes and retrieval.
+- `kind` (enum): `pdf_chunk`, `manual_text`, plus North transcript slice kinds (`north_message`, `north_turn_window`, `north_tool_event`, …) for conversation-derived episodes.
 - `text` (string): The raw chunk content.
 - `page_start`, `page_end` (integers, nullable for manual): Source page references.
 - `sequence` (integer): Order within the document.
@@ -232,6 +245,11 @@ erDiagram
 - `tags` (list of strings, normalized lowercase).
 - `origin` (enum: `generated`, `manual`, `merged`, `split`): Provenance kind.
 - `is_user_edited` (boolean): Has the user touched this note?
+- `agent_id` (FK -> NorthAgent, nullable): When notes are generated from North-sourced episodes, ties the note to the owning agent for isolation and UI filters.
+- `memory_context` (string, nullable): One-line A-MEM-style summary of how this note sits in agent memory (LLM-derived; immutable user body separately).
+- `memory_keywords` (list of strings, nullable): Short concept keywords for retrieval and dreaming.
+- `evolution_history` (list of structured entries, optional): Append-only audit of dreaming / consolidation events.
+- `dreaming_touched_at` (timestamp, nullable): Last time offline dreaming mutated derived fields.
 - `source_episode_ids` (list of FK -> Episode): Episodes that grounded this note.
 - `created_by_user_id` (FK -> User, nullable).
 - `created_at`, `updated_at`.
@@ -244,6 +262,7 @@ erDiagram
 **Indexes**:
 
 - `(workspace_id, updated_at desc)`.
+- `(workspace_id, agent_id)` when scoping North agent notebooks.
 - Full-text index on `(title, body)` for search.
 - Tag inverted index for tag filtering.
 
@@ -259,6 +278,8 @@ erDiagram
 - `kind` (enum: `related`, `supports`, `refutes`, `extends`, `references`, `custom`).
 - `custom_label` (string, nullable, required if `kind = custom`).
 - `origin` (enum: `generated`, `manual`).
+- `link_reason` (string, nullable): Human-readable justification when the link was proposed by enrichment or dreaming.
+- `link_strength` (float, default 1.0): Relative weight for ranking / UI emphasis.
 - `created_at`.
 
 **Constraints**:
@@ -469,8 +490,9 @@ erDiagram
   - `edge_types` (list of strings, optional).
   - `valid_at` (timestamp, optional): Restrict retrieval to facts valid at this instant.
   - `pinned_snapshot_id` (FK -> GraphSnapshot, optional): Pin retrieval to a frozen snapshot.
+  - `agent_id` (FK -> NorthAgent, optional): When set, GraphRAG / hybrid paths intersect candidate relationship evidence with documents owned by this agent so retrieval stays within one memory boundary.
 - `share_visibility` (enum: `private`, `workspace_read`, `workspace_edit`): Default `private`. (`workspace_*` values are P1+.)
-- `model_settings` (structured: chat model, embedding model, rerank model, retrieval `top_k`, citation threshold). Captured at session creation; per-message overrides are possible but rare.
+- `model_settings` (structured: chat model, embedding model, rerank model, retrieval `top_k`, citation threshold, `retrieval_mode` including `rag`, `raw_transcript`, `graph`, `hybrid`, `zettelkasten_notes`, `amem_lite`). Captured at session creation; per-message overrides are possible but rare.
 - `created_at`, `updated_at`, `last_activity_at`.
 
 **Constraints**:

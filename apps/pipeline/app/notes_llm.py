@@ -37,9 +37,10 @@ Rules:
 - One idea per note (atomicity).
 - Each note must cite which chunk indices (0-based) support it via source_chunk_indices array.
 - Respect max_notes hard limit.
-- Output strict JSON only: {"notes":[{"title":"...","body":"markdown","tags":["..."],"source_chunk_indices":[0]}],"suggested_links":[{"from":0,"to":1,"kind":"related"}]}
+- Output strict JSON only: {"notes":[{"title":"...","body":"markdown","tags":["..."],"source_chunk_indices":[0]}],"suggested_links":[{"from":0,"to":1,"kind":"related","link_reason":"why"}]}
 - suggested_links reference indices into the notes array you output (0-based).
 - kind must be one of: related, supports, refutes, extends, references.
+- link_reason is optional but recommended when the relationship is non-obvious.
 """
 
 
@@ -243,7 +244,14 @@ async def generate_notes_from_episodes(
             if kind not in ("related", "supports", "refutes", "extends", "references"):
                 kind = "related"
             if 0 <= fr < len(out_notes) and 0 <= to < len(out_notes) and fr != to:
-                out_links.append({"from": fr, "to": to, "kind": kind})
+                out_links.append(
+                    {
+                        "from": fr,
+                        "to": to,
+                        "kind": kind,
+                        "link_reason": str(ln.get("link_reason") or ln.get("reason") or "").strip() or None,
+                    }
+                )
         except (TypeError, ValueError):
             continue
 

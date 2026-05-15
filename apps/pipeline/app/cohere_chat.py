@@ -110,6 +110,69 @@ _TRANSIENT_TYPES: tuple[type[BaseException], ...] = (
 _MAX_ATTEMPTS = 3
 _BASE_BACKOFF_S = 1.0
 
+# Cohere's grounded chat returns ``422 NO_VALID_RESPONSE_GENERATED`` when
+# the model gives up grounding (e.g. the documents don't contain anything
+# relevant to the question). This is a *refusal*, not a transport error —
+# we surface it to the caller as a clean ChatStreamResult so the chat
+# turn ends with status="refused" instead of a generic exception.
+_REFUSAL_ERROR_TYPES = frozenset(
+    {
+        "NO_VALID_RESPONSE_GENERATED",
+        # Reserved: Cohere has shipped policy-style refusal codes under
+        # other names historically; add them here as they surface.
+    }
+)
+
+
+def _extract_cohere_body(exc: BaseException) -> dict[str, Any] | None:
+    """Best-effort pull the JSON ``body`` payload off a Cohere SDK error."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        return body
+    if isinstance(body, (bytes, bytearray, str)):
+        try:
+            import json as _json
+
+            decoded = body.decode() if isinstance(body, (bytes, bytearray)) else body
+            parsed = _json.loads(decoded)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def _is_refusal_error(exc: BaseException) -> bool:
+    """True iff ``exc`` is a Cohere 422 with a refusal-style ``error_type``."""
+    if type(exc).__name__ != "UnprocessableEntityError":
+        return False
+    body = _extract_cohere_body(exc)
+    if not body:
+        return False
+    et = str(body.get("error_type") or "").upper()
+    return et in _REFUSAL_ERROR_TYPES
+
+
+def _refusal_result_from_error(exc: BaseException) -> ChatStreamResult:
+    """Build a friendly refusal payload from a Cohere policy 422."""
+    body = _extract_cohere_body(exc) or {}
+    raw_msg = str(body.get("message") or "").strip()
+    text = (
+        "I couldn't ground an answer from the retrieved context for this "
+        "question. Try rephrasing, broadening the session scope, or "
+        "switching to a different retrieval strategy."
+    )
+    if raw_msg:
+        text = f"{text}\n\n(model: {raw_msg})"
+    return ChatStreamResult(
+        text=text,
+        citations=[],
+        finish_reason="refused",
+        tokens_in=None,
+        tokens_out=None,
+        used_streaming=False,
+    )
+
 
 def _is_transient(exc: BaseException) -> bool:
     if isinstance(exc, _TRANSIENT_TYPES):
@@ -343,6 +406,24 @@ async def chat_stream_grounded(
         await _safe_close(client)
         raise
     except Exception as exc:  # noqa: BLE001
+        # Cohere's "I can't ground this" 422 is a refusal, not a failure
+        # — surface it as a clean refusal result regardless of whether
+        # any partial tokens leaked first.
+        if _is_refusal_error(exc):
+            logger.info(
+                "cohere_chat_stream_refusal "
+                f"error_type={(_extract_cohere_body(exc) or {}).get('error_type')}"
+            )
+            await _safe_close(client)
+            if on_warning:
+                try:
+                    await on_warning(
+                        "Model declined to ground a response from retrieved context.",
+                        {"reason": "policy_refusal"},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            return _refusal_result_from_error(exc)
         # If we got *some* tokens before the stream broke, prefer surfacing
         # the partial result over an exception — but only when we got
         # citations or text. Otherwise re-raise to the caller for the
@@ -388,7 +469,26 @@ async def chat_stream_grounded(
         )
 
     try:
-        resp = await _call_with_retry("chat", _call_nonstream)
+        try:
+            resp = await _call_with_retry("chat", _call_nonstream)
+        except Exception as exc:  # noqa: BLE001
+            # Same refusal handling as the streaming branch — Cohere
+            # 422 NO_VALID_RESPONSE_GENERATED is a model-side refusal.
+            if _is_refusal_error(exc):
+                logger.info(
+                    "cohere_chat_nonstream_refusal "
+                    f"error_type={(_extract_cohere_body(exc) or {}).get('error_type')}"
+                )
+                if on_warning:
+                    try:
+                        await on_warning(
+                            "Model declined to ground a response from retrieved context.",
+                            {"reason": "policy_refusal"},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                return _refusal_result_from_error(exc)
+            raise
     finally:
         await _safe_close(client)
 

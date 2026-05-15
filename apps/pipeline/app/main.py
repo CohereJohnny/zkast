@@ -27,6 +27,7 @@ from app.internal_eval import router as internal_eval_router
 from app.internal_graph import router as internal_graph_router
 from app.internal_ingestion import router as internal_ingestion_router
 from app.internal_jobs import router as internal_jobs_router
+from app.internal_north import router as internal_north_router
 from app.internal_notes import router as internal_notes_router
 from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
@@ -89,6 +90,7 @@ app = FastAPI(
 )
 
 app.include_router(internal_ingestion_router)
+app.include_router(internal_north_router)
 app.include_router(internal_jobs_router)
 app.include_router(internal_notes_router)
 app.include_router(internal_graph_router)

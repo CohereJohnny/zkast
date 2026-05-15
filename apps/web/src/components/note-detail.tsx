@@ -13,6 +13,8 @@ type LinkRow = {
   kind: string;
   custom_label: string | null;
   origin: string;
+  link_reason?: string | null;
+  link_strength?: number | null;
 };
 
 type NoteDetail = {
@@ -22,6 +24,11 @@ type NoteDetail = {
   tags: string[];
   origin: string;
   updated_at: string;
+  agent_id?: string | null;
+  memory_context?: string | null;
+  memory_keywords?: string[] | null;
+  dreaming_touched_at?: string | null;
+  evolution_history?: unknown[] | null;
   links_out: LinkRow[];
   links_in: LinkRow[];
   source_episodes: Array<{ id: string; document_id?: string; page_start?: number | null; page_end?: number | null }>;
@@ -299,6 +306,9 @@ export function NoteDetail({
               <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-100">Manual</span>
             ) : null}
             · Updated {new Date(note.updated_at).toLocaleString()}
+            {note.agent_id ? (
+              <span className="ml-2 font-mono text-muted">· agent {note.agent_id}</span>
+            ) : null}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -323,6 +333,34 @@ export function NoteDetail({
           </button>
         </div>
       </header>
+
+      {(note.memory_context ||
+        (note.memory_keywords && note.memory_keywords.length > 0) ||
+        note.dreaming_touched_at) ? (
+        <section
+          aria-label="Agent memory"
+          className="rounded-md border border-border-subtle bg-surface/40 p-3 text-caption text-secondary"
+        >
+          <p className="font-medium text-primary">A-MEM / dreaming</p>
+          {note.memory_context ? (
+            <p className="mt-2">
+              <span className="text-muted">Context: </span>
+              {note.memory_context}
+            </p>
+          ) : null}
+          {note.memory_keywords && note.memory_keywords.length > 0 ? (
+            <p className="mt-2">
+              <span className="text-muted">Keywords: </span>
+              {note.memory_keywords.join(", ")}
+            </p>
+          ) : null}
+          {note.dreaming_touched_at ? (
+            <p className="mt-2 text-muted">
+              Dreaming touched {new Date(note.dreaming_touched_at).toLocaleString()}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <label className="block text-caption text-muted">
         Tags (comma-separated)
@@ -411,7 +449,9 @@ export function NoteDetail({
                     → {l.target_note_id}{" "}
                     <span className="text-muted">
                       ({l.kind}
-                      {l.custom_label ? `: ${l.custom_label}` : ""})
+                      {l.custom_label ? `: ${l.custom_label}` : ""}
+                      {l.link_reason ? ` · ${l.link_reason}` : ""}
+                      {l.link_strength != null ? ` · strength ${l.link_strength}` : ""})
                     </span>
                   </span>
                   <button
@@ -434,7 +474,9 @@ export function NoteDetail({
                   ← {l.source_note_id}{" "}
                   <span className="text-muted">
                     ({l.kind}
-                    {l.custom_label ? `: ${l.custom_label}` : ""})
+                    {l.custom_label ? `: ${l.custom_label}` : ""}
+                    {l.link_reason ? ` · ${l.link_reason}` : ""}
+                    {l.link_strength != null ? ` · strength ${l.link_strength}` : ""})
                   </span>
                 </li>
               ))}

@@ -7,45 +7,72 @@ import { DocumentsPanel } from "@/components/documents-panel";
 import { GraphWorkspacePanel } from "@/components/graph-workspace-panel";
 import { JobLogConsole } from "@/components/job-log-console";
 
-const STORAGE_KEY = "zkast.workspace.documentsCollapsed";
+const STORAGE_KEY_DOCS = "zkast.workspace.documentsCollapsed";
+const STORAGE_KEY_GRAPH = "zkast.workspace.graphCollapsed";
 
 type Props = {
   workspaceId: string;
   children: ReactNode;
 };
 
-function CollapseRail({ onExpand }: { onExpand: () => void }) {
+type Side = "left" | "right";
+
+function CollapseRail({
+  onExpand,
+  label,
+  side,
+}: {
+  onExpand: () => void;
+  label: string;
+  side: Side;
+}) {
+  // Chevron points "into" the rail: left rail expands to the right (›),
+  // right rail expands to the left (‹).
+  const chevron = side === "left" ? "›" : "‹";
   return (
     <button
       type="button"
       onClick={onExpand}
-      title="Expand documents panel"
-      aria-label="Expand documents panel"
+      title={`Expand ${label.toLowerCase()} panel`}
+      aria-label={`Expand ${label.toLowerCase()} panel`}
       aria-expanded={false}
-      className="flex h-full w-full flex-col items-center justify-start gap-3 rounded-lg border border-border-subtle bg-surface/80 py-3 text-caption text-muted hover:bg-surface hover:text-secondary"
+      className="flex h-full w-full cursor-pointer flex-col items-center justify-start gap-3 rounded-lg border border-border-subtle bg-surface/80 py-3 text-caption text-muted transition-colors duration-150 hover:bg-surface hover:text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
-      <span aria-hidden="true" className="text-body leading-none">›</span>
+      <span aria-hidden="true" className="text-body leading-none">
+        {chevron}
+      </span>
       <span
         aria-hidden="true"
         className="whitespace-nowrap text-[10px] uppercase tracking-wider [writing-mode:vertical-rl]"
       >
-        Documents
+        {label}
       </span>
     </button>
   );
 }
 
-function CollapseHeaderButton({ onCollapse }: { onCollapse: () => void }) {
+function CollapseHeaderButton({
+  onCollapse,
+  label,
+  side,
+}: {
+  onCollapse: () => void;
+  label: string;
+  side: Side;
+}) {
+  // Chevron points toward the rail it collapses to: left panel collapses
+  // toward the left edge (‹); right panel collapses toward the right edge (›).
+  const chevron = side === "left" ? "‹" : "›";
   return (
     <button
       type="button"
       onClick={onCollapse}
-      title="Collapse documents panel"
-      aria-label="Collapse documents panel"
+      title={`Collapse ${label.toLowerCase()} panel`}
+      aria-label={`Collapse ${label.toLowerCase()} panel`}
       aria-expanded
-      className="ml-auto rounded border border-border-subtle px-1.5 py-0.5 text-caption text-muted hover:bg-surface hover:text-secondary"
+      className="ml-auto cursor-pointer rounded border border-border-subtle px-1.5 py-0.5 text-caption text-muted transition-colors duration-150 hover:bg-surface hover:text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
-      <span aria-hidden="true">‹</span>
+      <span aria-hidden="true">{chevron}</span>
     </button>
   );
 }
@@ -63,21 +90,27 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
   // The main column on /graph is already a full graph view; don't render the
   // right-rail mini graph next to it.
   const showRailGraph = pathname !== "/graph";
-  const [collapsed, setCollapsed] = useState(false);
+  const [docsCollapsed, setDocsCollapsed] = useState(false);
+  const [graphCollapsed, setGraphCollapsed] = useState(false);
 
   useEffect(() => {
     try {
-      if (window.localStorage.getItem(STORAGE_KEY) === "1") setCollapsed(true);
+      if (window.localStorage.getItem(STORAGE_KEY_DOCS) === "1") {
+        setDocsCollapsed(true);
+      }
+      if (window.localStorage.getItem(STORAGE_KEY_GRAPH) === "1") {
+        setGraphCollapsed(true);
+      }
     } catch {
       /* ignore */
     }
   }, []);
 
-  const toggle = () => {
-    setCollapsed((prev) => {
+  const toggleDocs = () => {
+    setDocsCollapsed((prev) => {
       const next = !prev;
       try {
-        window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
+        window.localStorage.setItem(STORAGE_KEY_DOCS, next ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -85,20 +118,55 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
     });
   };
 
+  const toggleGraph = () => {
+    setGraphCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(STORAGE_KEY_GRAPH, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  // Grid templates are static literal strings (per combination) so that
+  // Tailwind's JIT scanner can detect them. Dynamic template-literal
+  // composition would silently drop these arbitrary-value classes.
+  const GRID_BASE = "grid min-h-[480px] flex-1 grid-cols-1 gap-2";
+
   let gridClass: string;
   if (isDocumentsRoute) {
-    gridClass = collapsed
-      ? "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[2.25rem_minmax(0,1fr)]"
-      : "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]";
+    // /documents route: main column hosts the full DocumentsPanel; the
+    // right side hosts the Graph. Both rails are collapsible.
+    if (docsCollapsed && graphCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)_2.25rem]`;
+    } else if (docsCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)]`;
+    } else if (graphCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_2.25rem]`;
+    } else {
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]`;
+    }
   } else if (!showRailGraph) {
-    // /graph route: documents peek (or rail) | main full-bleed graph
-    gridClass = collapsed
-      ? "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[2.25rem_minmax(0,1fr)]"
-      : "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]";
+    // /graph route: documents peek (or rail) | main full-bleed graph.
+    // The graph IS the main column here — no separate graph rail.
+    gridClass = docsCollapsed
+      ? `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)]`
+      : `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]`;
   } else {
-    gridClass = collapsed
-      ? "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[2.25rem_minmax(0,1fr)_minmax(0,1.6fr)]"
-      : "grid min-h-[480px] flex-1 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1fr)]";
+    // Default three-column layout: docs rail | main | graph rail. The
+    // middle column grows aggressively when either rail collapses so
+    // wide views like Compare strategies reclaim the space.
+    if (docsCollapsed && graphCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)_2.25rem]`;
+    } else if (docsCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1.6fr)_minmax(0,1fr)]`;
+    } else if (graphCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_2.25rem]`;
+    } else {
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1fr)]`;
+    }
   }
 
   // ``h-[calc(100vh-2rem)]`` instead of ``min-h`` — children need a
@@ -108,17 +176,27 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
   // ``overflow-hidden`` keeps any child overflow inside the panel
   // (which scrolls via its own ``overflow-auto``) instead of pushing
   // the whole page taller — the regression we saw with the log open.
+  const renderGraphCell = () => {
+    if (!showRailGraph) return null;
+    return graphCollapsed ? (
+      <CollapseRail onExpand={toggleGraph} label="Graph" side="right" />
+    ) : (
+      <GraphWorkspacePanel workspaceId={workspaceId} onCollapse={toggleGraph} />
+    );
+  };
+
   return (
     <div className="flex h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden">
       <div className={gridClass}>
         {isDocumentsRoute ? (
-          collapsed ? (
-            <>
-              <CollapseRail onExpand={toggle} />
-              <GraphWorkspacePanel workspaceId={workspaceId} />
-            </>
-          ) : (
-            <>
+          <>
+            {docsCollapsed ? (
+              <CollapseRail
+                onExpand={toggleDocs}
+                label="Documents"
+                side="left"
+              />
+            ) : (
               <section
                 id="main-content"
                 tabIndex={-1}
@@ -126,7 +204,11 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-border-strong bg-surface p-4 outline-none"
               >
                 <div className="flex items-center gap-2">
-                  <CollapseHeaderButton onCollapse={toggle} />
+                  <CollapseHeaderButton
+                    onCollapse={toggleDocs}
+                    label="Documents"
+                    side="left"
+                  />
                 </div>
                 {/* Documents takes the bulk of the column and scrolls
                     inside; the log is bounded below — when open it
@@ -135,13 +217,23 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 <div className="min-h-0 flex-1 overflow-auto">{children}</div>
                 <JobLogConsole />
               </section>
-              <GraphWorkspacePanel workspaceId={workspaceId} />
-            </>
-          )
+            )}
+            {/* On /documents both rails can collapse simultaneously; in
+                that edge case the middle empty cell is intentional so
+                the user can re-expand either rail. */}
+            {docsCollapsed && graphCollapsed ? (
+              <div aria-hidden="true" />
+            ) : null}
+            {renderGraphCell()}
+          </>
         ) : (
           <>
-            {collapsed ? (
-              <CollapseRail onExpand={toggle} />
+            {docsCollapsed ? (
+              <CollapseRail
+                onExpand={toggleDocs}
+                label="Documents"
+                side="left"
+              />
             ) : (
               <section
                 aria-label="Documents"
@@ -149,7 +241,11 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
               >
                 <div className="flex items-center gap-2">
                   <p className="text-caption font-medium text-secondary">Documents</p>
-                  <CollapseHeaderButton onCollapse={toggle} />
+                  <CollapseHeaderButton
+                    onCollapse={toggleDocs}
+                    label="Documents"
+                    side="left"
+                  />
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
                   <DocumentsPanel workspaceId={workspaceId} variant="compact" />
@@ -165,7 +261,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
             >
               {children}
             </section>
-            {showRailGraph ? <GraphWorkspacePanel workspaceId={workspaceId} /> : null}
+            {renderGraphCell()}
           </>
         )}
       </div>

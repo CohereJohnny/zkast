@@ -24,7 +24,7 @@ def test_worker_settings_uses_per_function_timeouts() -> None:
 
     from app.tasks import WorkerSettings
 
-    assert len(WorkerSettings.functions) >= 3
+    assert len(WorkerSettings.functions) >= 5
     by_name: dict[str, Function] = {}
     for entry in WorkerSettings.functions:
         # ``arq_func`` returns an ``arq.worker.Function`` instance; bare
@@ -39,12 +39,14 @@ def test_worker_settings_uses_per_function_timeouts() -> None:
     assert "parse_document" in by_name
     assert "generate_atomic_notes" in by_name
     assert "extract_graph" in by_name
+    assert "run_dreaming_job" in by_name
 
     # Concrete budgets — adjust deliberately. The graph stage must be the
     # most generous because of Graphiti's per-edge retry storm.
     assert by_name["parse_document"].timeout_s >= 300
     assert by_name["generate_atomic_notes"].timeout_s >= 600
     assert by_name["extract_graph"].timeout_s >= 1_800
+    assert by_name["run_dreaming_job"].timeout_s >= 600
 
 
 def test_classify_cancel_reason_within_timeout_window() -> None:

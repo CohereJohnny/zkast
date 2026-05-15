@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import structlog
@@ -169,7 +170,14 @@ async def run_chat_turn(
             or (user_msg.get("retrieval_mode") if False else None)
             or "graph"
         )
-        if retrieval_mode not in {"rag", "graph", "hybrid"}:
+        if retrieval_mode not in {
+            "rag",
+            "raw_transcript",
+            "graph",
+            "hybrid",
+            "zettelkasten_notes",
+            "amem_lite",
+        }:
             retrieval_mode = "graph"
         await publish_job_event(
             redis,
@@ -381,12 +389,20 @@ async def run_chat_turn(
 
         # ---- Finalize ----
         final_text = result.text or "".join(accumulated_text_parts)
+        # ``finish_reason='refused'`` is set by ``cohere_chat`` when the
+        # model returns a policy refusal (e.g. 422
+        # NO_VALID_RESPONSE_GENERATED). Persist that as ``status='refused'``
+        # so the UI renders the amber "Refused" badge rather than a green
+        # "Complete" with an empty body.
+        final_status = (
+            "refused" if (result.finish_reason or "").lower() == "refused" else "complete"
+        )
         await asyncio.to_thread(
             update_assistant_message,
             database_url,
             message_id=assistant_message_id,
             content=final_text,
-            status="complete",
+            status=final_status,
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             completed_now=True,
@@ -522,12 +538,17 @@ async def _retrieve(
     from app import chat_retrieval_graph as graph_strategy
     from app import chat_retrieval_hybrid as hybrid_strategy
     from app import chat_retrieval_raw as raw_strategy
+    from app.chat_retrieval_notes_vector import retrieve_amem, retrieve_zettel
 
     mode = (retrieval_mode or "graph").strip().lower()
-    if mode == "rag":
+    if mode in ("rag", "raw_transcript"):
         impl = raw_strategy
     elif mode == "hybrid":
         impl = hybrid_strategy
+    elif mode == "zettelkasten_notes":
+        impl = SimpleNamespace(retrieve=retrieve_zettel)
+    elif mode == "amem_lite":
+        impl = SimpleNamespace(retrieve=retrieve_amem)
     else:
         impl = graph_strategy
 

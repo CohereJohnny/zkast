@@ -2,6 +2,78 @@
 
 Log **critical bugs that block sprint progress** here. Resume sprint work after fix + commit referencing the Bug ID.
 
+## Bug Entry: 2026-05-13
+- **ID**: BUG-015
+- **Description**: After the BUG-014 worker rebuild, all three Compare
+  strategies columns failed with "Failed to fetch" — a browser-side
+  ``TypeError`` from ``fetch``/``EventSource``. Pipeline returned 201 on
+  the chat-session POSTs but the SSE streams never produced any events.
+  Root cause: the worker process crashed with
+  ``redis.exceptions.TimeoutError: Timeout connecting to server`` during
+  ``arq``'s ``_poll_iteration``. Triggered by a ~94s cron stall — Redis
+  was momentarily unresponsive (host CPU pressure during the BUG-014
+  rebuild), the worker's connect attempts hit ``RedisSettings`` defaults
+  (``conn_timeout=1``, ``conn_retries=5``, ``retry_on_timeout=False``)
+  and exhausted them in under 5s. arq has no top-level handler for the
+  resulting ``TimeoutError`` so the worker exit-1s. With the worker dead,
+  enqueued chat turns sat in Redis indefinitely and the SSE stream
+  produced no events, which the browser eventually surfaces as
+  ``Failed to fetch``.
+- **Discovered**: Sprint 6b — user re-ran the Compare strategies query
+  immediately after the BUG-014 fix. All three columns showed
+  "Failed to fetch" with sub-second latency. ``docker compose ps`` listed
+  ``zkast-worker-1`` as ``Exited (1)``.
+- **Context**: Sprint 6b — Compare strategies / worker resilience.
+- **Fix**: Hardened
+  [`apps/pipeline/app/tasks.py`](../apps/pipeline/app/tasks.py)
+  ``_redis_settings_for_worker`` with ``conn_timeout=5``,
+  ``conn_retries=20``, ``conn_retry_delay=2``, and
+  ``retry_on_timeout=True`` so the arq poller absorbs up to ~60s of
+  Redis flakiness instead of crashing the worker process. Jobs sit in
+  the queue and resume on reconnect.
+- **Status**: Resolved
+
+## Bug Entry: 2026-05-13
+- **ID**: BUG-014
+- **Description**: GraphRAG / Hybrid chat turns hard-failed with a wall of
+  HTTP headers when Cohere returned ``HTTP 422 NO_VALID_RESPONSE_GENERATED``.
+  The Cohere v2 chat endpoint returns this status when the supplied
+  documents do not let the model ground an answer (e.g. terse relationship
+  facts that don't cover the user's question). The SDK's
+  ``UnprocessableEntityError`` was bubbling up through
+  ``chat_stream_grounded`` → ``run_chat_turn``, with ``_describe_exception``
+  dumping ``str(exc)`` — which for this class includes the full response
+  headers — into ``chat_messages.failure_reason``. The Compare strategies
+  panel rendered the entire blob in the FAILED card.
+- **Discovered**: Sprint 6b — user ran "What is Deloitte's role within the
+  Oil & Gas industry?" in the Compare strategies tab. Naive RAG completed
+  successfully (rich PDF chunks); GraphRAG and Hybrid both showed
+  ``UnprocessableEntityError: headers: {'access-control-expose-headers':
+  ...}``. Cohere trace IDs ``7df152a1...`` (graph) and ``20575e560a...``
+  (hybrid).
+- **Context**: Sprint 6b — Compare strategies / GraphRAG.
+- **Fix**:
+  - [`apps/pipeline/app/cohere_chat.py`](../apps/pipeline/app/cohere_chat.py)
+    detects ``UnprocessableEntityError`` with
+    ``body.error_type='NO_VALID_RESPONSE_GENERATED'`` in both the
+    streaming and non-streaming fallback paths, surfaces a
+    ``policy_refusal`` warning via ``on_warning``, and returns a
+    ``ChatStreamResult`` with ``finish_reason='refused'`` and a
+    user-friendly text body.
+  - [`apps/pipeline/app/chat_turn.py`](../apps/pipeline/app/chat_turn.py)
+    persists ``finish_reason='refused'`` as ``status='refused'`` on the
+    assistant message so the UI shows the amber Refused badge.
+  - [`apps/pipeline/app/tasks.py`](../apps/pipeline/app/tasks.py)
+    `_describe_exception` now extracts ``error_type`` / ``message`` from
+    a Cohere SDK error's parsed ``body`` (dict or JSON string) instead
+    of dumping ``str(exc)``. Falls back to ``Name: msg`` for non-Cohere
+    exceptions.
+- **Tests**:
+  [`apps/pipeline/tests/test_chat_turn_policy_refusal.py`](../apps/pipeline/tests/test_chat_turn_policy_refusal.py)
+  covers streaming refusal, non-stream fallback refusal, and three
+  ``_describe_exception`` shapes (parsed body, JSON string body, no body).
+- **Status**: Resolved
+
 ## Entry template
 
 ```markdown

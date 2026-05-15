@@ -31,6 +31,8 @@ INDEX_KIND_ATOMIC_NOTE = "atomic_note"
 INDEX_KIND_ENTITY = "entity"
 INDEX_KIND_RELATIONSHIP = "relationship"
 INDEX_KIND_GRAPH_CONTEXT = "graph_context"
+INDEX_KIND_NOTE_ZETTEL = "note_zettel"
+INDEX_KIND_NOTE_AMEM = "note_amem"
 
 VALID_INDEX_KINDS = {
     INDEX_KIND_RAW_CHUNK,
@@ -38,6 +40,8 @@ VALID_INDEX_KINDS = {
     INDEX_KIND_ENTITY,
     INDEX_KIND_RELATIONSHIP,
     INDEX_KIND_GRAPH_CONTEXT,
+    INDEX_KIND_NOTE_ZETTEL,
+    INDEX_KIND_NOTE_AMEM,
 }
 
 
@@ -73,6 +77,7 @@ def upsert_embedding(
     embedding_model: str = "embed-v4.0",
     embedding_dim: int = 1536,
     attributes: dict[str, Any] | None = None,
+    agent_id: str | None = None,
 ) -> str:
     """Insert-or-update a single embedding row keyed by
     ``(workspace_id, index_kind, source_id)``.
@@ -91,13 +96,13 @@ def upsert_embedding(
                     id, workspace_id, index_kind, source_kind, source_id,
                     document_id, page_start, page_end, chunk_sequence,
                     text, embedding, embedding_model, embedding_dim,
-                    attributes
+                    attributes, agent_id
                 )
                 VALUES (
                     %s::uuid, %s::uuid, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s,
-                    %s
+                    %s, %s::uuid
                 )
                 ON CONFLICT (workspace_id, index_kind, source_id)
                 DO UPDATE SET
@@ -111,6 +116,7 @@ def upsert_embedding(
                     embedding_model = EXCLUDED.embedding_model,
                     embedding_dim = EXCLUDED.embedding_dim,
                     attributes = EXCLUDED.attributes,
+                    agent_id = EXCLUDED.agent_id,
                     updated_at = now()
                 RETURNING id::text AS id
                 """,
@@ -129,6 +135,7 @@ def upsert_embedding(
                     embedding_model,
                     embedding_dim,
                     Json(attributes or {}),
+                    agent_id,
                 ),
             )
             row = cur.fetchone()
@@ -189,6 +196,7 @@ def search_by_kind(
     query_embedding: list[float],
     top_k: int = 30,
     document_id: str | None = None,
+    agent_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Cosine-similarity ANN search against rows of a given
     ``index_kind``. The Naive-RAG path always passes
@@ -209,6 +217,9 @@ def search_by_kind(
     if document_id:
         extra_filter = " AND document_id = %s::uuid"
         extra_params.append(document_id)
+    if agent_id:
+        extra_filter += " AND agent_id = %s::uuid"
+        extra_params.append(agent_id)
 
     # Positional ``%s`` placeholders in order: SELECT score expression,
     # WHERE workspace_id, WHERE index_kind, optional document filter,
@@ -233,6 +244,7 @@ def search_by_kind(
                     source_kind,
                     source_id,
                     document_id::text AS document_id,
+                    agent_id::text AS agent_id,
                     page_start,
                     page_end,
                     chunk_sequence,
@@ -260,6 +272,7 @@ def search_by_kind(
                 "source_kind": r["source_kind"],
                 "source_id": r["source_id"],
                 "document_id": r["document_id"],
+                "agent_id": r["agent_id"],
                 "page_start": r["page_start"],
                 "page_end": r["page_end"],
                 "chunk_sequence": r["chunk_sequence"],

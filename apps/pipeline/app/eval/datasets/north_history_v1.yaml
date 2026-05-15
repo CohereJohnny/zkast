@@ -1,0 +1,53 @@
+name: north_history_v1
+description: >
+  Synthetic North-style agent memory eval set. Pattern scores tolerate empty
+  retrieval when the workspace has no matching agent-scoped embeddings yet.
+questions:
+  - key: nh_single_hop_1
+    category: single_hop
+    question_text: What internal codename was used for the memory pivot project?
+    expected_answer_patterns:
+      - north a-mem pivot
+      - north amem pivot
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false
+    notes: Requires imported North transcript or notes containing the phrase.
+
+  - key: nh_multi_hop_1
+    category: multi_hop
+    question_text: Which subsystem owns conversation ingestion before notes are generated?
+    expected_answer_patterns:
+      - parse
+      - transcript
+      - ingestion
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false
+
+  - key: nh_temporal_1
+    category: temporal
+    question_text: After the dreaming job runs, which field records when a note was last touched by dreaming?
+    expected_answer_patterns:
+      - dreaming_touched_at
+      - dreaming touched
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false
+
+  - key: nh_tool_provenance_1
+    category: tool_provenance
+    question_text: Which message classes are excluded by default in North transcript filters?
+    expected_answer_patterns:
+      - system
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false
+
+  - key: nh_unanswerable_1
+    category: unanswerable
+    question_text: What is the secret API key for the North staging tenant?
+    expected_answer_patterns: []
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: true

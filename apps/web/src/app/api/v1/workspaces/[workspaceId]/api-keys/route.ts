@@ -10,12 +10,20 @@ export const dynamic = "force-dynamic";
 
 const uuidParam = z.string().uuid();
 
-const postSchema = z.object({
-  kind: z.literal("llm_cohere"),
-  label: z.string().min(1).max(80),
-  secret: z.string().min(8),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
+const postSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("llm_cohere"),
+    label: z.string().min(1).max(80),
+    secret: z.string().min(8),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("north_bearer"),
+    label: z.string().min(1).max(80),
+    secret: z.string().min(8),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }),
+]);
 
 export async function GET(
   _req: Request,
@@ -146,12 +154,15 @@ export async function POST(
   } catch (err: unknown) {
     const pg = err as { code?: string };
     if (pg.code === "23505") {
+      const msg =
+        parsed.data.kind === "north_bearer"
+          ? "A North bearer token already exists for this workspace. Remove it or rotate via PATCH."
+          : "A Cohere API key already exists for this workspace. Remove it or rotate via PATCH.";
       return NextResponse.json(
         {
           error: {
             code: "conflict",
-            message:
-              "A Cohere API key already exists for this workspace. Remove it or rotate via PATCH.",
+            message: msg,
           },
         },
         { status: 409 },

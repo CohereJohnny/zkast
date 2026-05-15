@@ -65,3 +65,35 @@ class LocalStorage:
 
         uri = self.ensure_relative_uri(workspace_id, doc_id)
         return uri, hasher.hexdigest(), total
+
+    def ensure_relative_uri_north_json(self, workspace_id: str, doc_id: str) -> str:
+        """URI for a North transcript snapshot stored as JSON on disk."""
+        return f"local://{workspace_id}/{doc_id}.north.json"
+
+    def absolute_path_north_json(self, workspace_id: str, doc_id: str) -> Path:
+        d = self.root / workspace_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{doc_id}.north.json"
+
+    async def write_north_transcript_json(
+        self,
+        workspace_id: str,
+        doc_id: str,
+        payload: bytes,
+        *,
+        max_bytes: int,
+    ) -> tuple[str, str, int]:
+        """Persist transcript JSON; rolling SHA-256 checksum (not PDF magic)."""
+        if len(payload) > max_bytes:
+            raise ValueError("too_large")
+        if not payload:
+            raise ValueError("empty_file")
+
+        path = self.absolute_path_north_json(workspace_id, doc_id)
+        hasher = hashlib.sha256()
+        hasher.update(payload)
+        async with aiofiles.open(path, "wb") as out:
+            await out.write(payload)
+
+        uri = self.ensure_relative_uri_north_json(workspace_id, doc_id)
+        return uri, hasher.hexdigest(), len(payload)

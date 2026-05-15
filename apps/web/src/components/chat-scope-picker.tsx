@@ -26,6 +26,8 @@ export type ChatScopeValue = {
   seed_entity_ids?: string[];
   valid_at?: string;
   pinned_snapshot_id?: string | null;
+  /** When set, graph + hybrid retrieval restrict to documents owned by this North agent. */
+  agent_id?: string;
 };
 
 type SnapshotRow = {
@@ -90,6 +92,18 @@ export function ChatScopePicker({
         }
         label="Restrict to document"
       />
+      <label className="text-caption text-muted sm:col-span-2">
+        North agent scope (optional)
+        <input
+          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          value={value.agent_id ?? ""}
+          onChange={(e) =>
+            patch({ agent_id: e.target.value.trim() || undefined })
+          }
+          placeholder="Agent UUID — limits retrieval to that agent's documents"
+          spellCheck={false}
+        />
+      </label>
       <EntityTypeahead
         workspaceId={workspaceId}
         value={toCsv(value.seed_entity_ids)}

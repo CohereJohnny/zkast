@@ -18,6 +18,8 @@ import asyncio
 import uuid
 from typing import Any
 
+from pathlib import Path
+
 import psycopg
 import structlog
 from fastapi import APIRouter, HTTPException, Request
@@ -104,6 +106,7 @@ class StartEvalBody(BaseModel):
     dataset_name: str | None = Field(default=None)
     retrieval_modes: list[str] | None = Field(default=None)
     notes: str | None = Field(default=None, max_length=2000)
+    agent_id: uuid.UUID | None = Field(default=None)
 
 
 @router.get(
@@ -227,13 +230,19 @@ async def start_eval_run(
     """
     modes = list(body.retrieval_modes or ["rag", "graph", "hybrid"])
     notes = body.notes
+    agent_id_val = str(body.agent_id) if body.agent_id else None
+    ds_key = (body.dataset_name or "oil_gas_v1").removesuffix(".yaml")
+    ds_path = Path(__file__).resolve().parent / "eval" / "datasets" / f"{ds_key}.yaml"
+    dataset_path = ds_path if ds_path.is_file() else None
 
     async def _runner() -> None:
         try:
             await _run_eval_async(
                 workspace_id=str(workspace_id),
+                dataset_path=dataset_path,
                 modes=modes,
                 notes=notes,
+                agent_id=agent_id_val,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("eval_run_failed", workspace_id=str(workspace_id), err=str(exc))
