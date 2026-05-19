@@ -3,7 +3,7 @@
 **Branch**: `sprints/sprint-b`
 **Status**: Complete — merged to `main`, tag `sprint-b`
 **Primary spec**: [`specs/openspecs/north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md) — **FR-7**, **FR-9** (agent-scoped retrieval inputs; not FR-8 dreaming)
-**Depends on**: Sprint A ([`sprint_a_report.md`](../sprint-a/sprint_a_report.md)) — North import, `agent_id` on documents/episodes/notes
+**Depends on**: Sprint A ([`sprint_a_report.md`](../../sprint-a/sprint_a_report.md)) — North import, `agent_id` on documents/episodes/notes
 
 ## Goals
 
@@ -154,7 +154,7 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 **Gaps / issues:** Manual smoke on live North tenant pending. Chat scope picker does not yet expose agent filter (eval API supports `agent_id`).
 
-**Next steps:** Sprint C — dreaming jobs, link isolation, re-embed after dreaming ([`sprint_c_tasks.md`](../sprint-c/sprint_c_tasks.md)).
+**Next steps:** Sprint C — dreaming jobs, link isolation, re-embed after dreaming ([`sprint_c_tasks.md`](../../sprint-c/sprint_c_tasks.md)).
 
 ---
 

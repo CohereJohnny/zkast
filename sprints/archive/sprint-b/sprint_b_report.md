@@ -25,4 +25,4 @@
 
 ## Next
 
-Sprint C — dreaming jobs, link isolation, re-embed after dreaming ([sprint_c_tasks.md](../sprint-c/sprint_c_tasks.md)).
+Sprint C — dreaming jobs, link isolation, re-embed after dreaming ([sprint_c_tasks.md](../../sprint-c/sprint_c_tasks.md)).
