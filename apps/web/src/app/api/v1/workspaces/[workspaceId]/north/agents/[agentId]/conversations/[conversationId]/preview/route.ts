@@ -9,24 +9,28 @@ export const dynamic = "force-dynamic";
 const uuidParam = z.string().uuid();
 
 export async function GET(
-  req: Request,
-  { params }: { params: { workspaceId: string; agentId: string } },
+  _req: Request,
+  { params }: { params: { workspaceId: string; agentId: string; conversationId: string } },
 ) {
-  const { workspaceId, agentId } = params;
+  const { workspaceId, agentId, conversationId } = params;
   if (!uuidParam.safeParse(workspaceId).success || !uuidParam.safeParse(agentId).success) {
     return NextResponse.json(
       { error: { code: "validation_failed", message: "Invalid id" } },
       { status: 400 },
     );
   }
+  if (!conversationId || conversationId.length > 512) {
+    return NextResponse.json(
+      { error: { code: "validation_failed", message: "Invalid conversation id" } },
+      { status: 400 },
+    );
+  }
   const denied = await requireMatchingWorkspace(workspaceId);
   if (denied) return denied;
 
-  const url = new URL(req.url);
-  const refresh = url.searchParams.get("refresh") === "true" ? "?refresh=true" : "";
   try {
     const res = await pipelineFetch(
-      `/internal/v1/workspaces/${encodeURIComponent(workspaceId)}/north/agents/${encodeURIComponent(agentId)}/conversations${refresh}`,
+      `/internal/v1/workspaces/${encodeURIComponent(workspaceId)}/north/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(conversationId)}/preview`,
       { throwOnError: false },
     );
     const text = await res.text();
@@ -35,7 +39,7 @@ export async function GET(
       headers: { "Content-Type": res.headers.get("Content-Type") ?? "application/json" },
     });
   } catch (err) {
-    console.error("north conversations proxy failed", err);
+    console.error("north conversation preview proxy failed", err);
     return NextResponse.json(
       {
         error: {

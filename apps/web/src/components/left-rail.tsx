@@ -5,6 +5,7 @@ import {
   FileText,
   MessageSquare,
   Network,
+  ScrollText,
   Settings,
   StickyNote,
   Camera,
@@ -16,8 +17,9 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const items = [
-  { href: "/documents", label: "Documents", Icon: FileText },
   { href: "/agents", label: "Agents", Icon: Bot },
+  { href: "/conversations", label: "Conversations", Icon: ScrollText },
+  { href: "/documents", label: "Documents", Icon: FileText },
   { href: "/notes", label: "Notes", Icon: StickyNote },
   { href: "/graph", label: "Graph", Icon: Network },
   { href: "/chat", label: "Chat", Icon: MessageSquare },

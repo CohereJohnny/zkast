@@ -8,7 +8,7 @@ export default async function AgentDetailPage({ params }: { params: { agentId: s
   const workspace = await getCurrentWorkspace();
   return (
     <div className="flex min-h-[520px] flex-col gap-4 p-2">
-      <AgentDetailPanel workspaceId={workspace.id} agentId={params.agentId} />
+      <AgentDetailPanel key={params.agentId} workspaceId={workspace.id} agentId={params.agentId} />
     </div>
   );
 }

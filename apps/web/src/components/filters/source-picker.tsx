@@ -3,38 +3,50 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Single-select combobox over the workspace's *ready* documents.
- *
- * Replaces the free-form UUID text input previously used in the graph
- * filter bar. The user shouldn't have to know or copy a document's
- * UUID — they should pick by filename.
- *
- * Loads ``/api/v1/workspaces/{ws}/documents?source_kind=pdf`` once on mount, filters
- * client-side on the typed query. Emits ``onChange(id | "")``.
+ * Graph filter: PDF documents and North-imported conversation transcripts.
+ * Same ``document_id`` query param as before; lists ``source_kind=all`` from the API.
  */
 
-type DocumentRow = {
+type SourceRow = {
   id: string;
   original_filename: string;
   status: string;
-  page_count?: number;
+  page_count?: number | null;
   created_at?: string;
+  source_kind: string;
+  conversation_title?: string | null;
+  agent_display_name?: string | null;
 };
 
-export function DocumentPicker({
+function rowPrimaryLabel(r: SourceRow): string {
+  if (r.source_kind === "north_conversation") {
+    const t = (r.conversation_title ?? "").trim();
+    return t || r.original_filename;
+  }
+  return r.original_filename;
+}
+
+function rowSecondaryLine(r: SourceRow): string {
+  if (r.source_kind === "north_conversation") {
+    const agent = (r.agent_display_name ?? "").trim();
+    const parts = ["Conversation"];
+    if (agent) parts.push(agent);
+    parts.push(r.status);
+    return parts.join(" · ");
+  }
+  return [r.status, r.page_count ? `${r.page_count} pp` : ""].filter(Boolean).join(" · ");
+}
+
+export function SourcePicker({
   workspaceId,
   value,
   onChange,
-  label = "Document",
-  placeholder = "Search documents…",
 }: {
   workspaceId: string;
   value: string;
   onChange: (id: string) => void;
-  label?: string;
-  placeholder?: string;
 }) {
-  const [docs, setDocs] = useState<DocumentRow[] | null>(null);
+  const [rows, setRows] = useState<SourceRow[] | null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -45,22 +57,20 @@ export function DocumentPicker({
     void (async () => {
       try {
         const res = await fetch(
-          `/api/v1/workspaces/${workspaceId}/documents?source_kind=pdf`,
+          `/api/v1/workspaces/${workspaceId}/documents?source_kind=all`,
           { cache: "no-store" },
         );
         const body = (await res.json()) as {
-          items?: DocumentRow[];
+          items?: SourceRow[];
           error?: { message?: string };
         };
         if (cancelled) return;
-        // Only "ready" documents are interesting as filter values; partial
-        // ingests don't have entities to filter by yet.
         const ready = (body.items ?? []).filter(
           (d) => d.status === "ready" || d.status === "building_graph",
         );
-        setDocs(ready);
+        setRows(ready);
       } catch {
-        if (!cancelled) setDocs([]);
+        if (!cancelled) setRows([]);
       }
     })();
     return () => {
@@ -68,29 +78,24 @@ export function DocumentPicker({
     };
   }, [workspaceId]);
 
-  // Reflect parent-driven changes (e.g. URL deep-link) in the displayed
-  // selection.
-  const selected = useMemo(
-    () => (docs ?? []).find((d) => d.id === value) ?? null,
-    [docs, value],
-  );
+  const selected = useMemo(() => (rows ?? []).find((d) => d.id === value) ?? null, [rows, value]);
 
-  const inputDisplay = open
-    ? query
-    : selected
-      ? selected.original_filename
-      : query;
+  const inputDisplay = open ? query : selected ? rowPrimaryLabel(selected) : query;
 
   const filtered = useMemo(() => {
-    if (!docs) return [];
+    if (!rows) return [];
     const q = query.trim().toLowerCase();
-    if (!q) return docs.slice(0, 50);
-    return docs
-      .filter((d) => d.original_filename.toLowerCase().includes(q))
-      .slice(0, 50);
-  }, [docs, query]);
+    const match = (r: SourceRow) => {
+      if (!q) return true;
+      const primary = rowPrimaryLabel(r).toLowerCase();
+      const agent = (r.agent_display_name ?? "").toLowerCase();
+      const fn = r.original_filename.toLowerCase();
+      return primary.includes(q) || agent.includes(q) || fn.includes(q);
+    };
+    const list = q ? rows.filter(match) : rows;
+    return list.slice(0, 60);
+  }, [rows, query]);
 
-  // Close on outside click.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!wrapperRef.current) return;
@@ -104,7 +109,7 @@ export function DocumentPicker({
   }, [open]);
 
   const choose = useCallback(
-    (d: DocumentRow | null) => {
+    (d: SourceRow | null) => {
       onChange(d?.id ?? "");
       setOpen(false);
       setQuery("");
@@ -129,18 +134,18 @@ export function DocumentPicker({
     }
   };
 
-  const listboxId = `doc-listbox-${workspaceId}`;
+  const listboxId = `source-listbox-${workspaceId}`;
 
   return (
     <div ref={wrapperRef} className="text-caption text-muted">
       <label className="block">
-        {label}
+        Sources
         <div className="relative mt-1">
           <input
             type="text"
             value={inputDisplay}
-            placeholder={docs === null ? "Loading…" : placeholder}
-            disabled={docs === null}
+            placeholder={rows === null ? "Loading…" : "Search PDFs and imported conversations…"}
+            disabled={rows === null}
             onChange={(e) => {
               setQuery(e.target.value);
               setOpen(true);
@@ -157,7 +162,7 @@ export function DocumentPicker({
           {selected && !open ? (
             <button
               type="button"
-              aria-label="Clear document selection"
+              aria-label="Clear source selection"
               onClick={() => choose(null)}
               className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted transition-colors duration-150 hover:bg-surface-raised hover:text-secondary"
             >
@@ -195,10 +200,20 @@ export function DocumentPicker({
                     idx === activeIdx ? "bg-surface-raised" : ""
                   } hover:bg-surface-raised`}
                 >
-                  <span className="block truncate">{d.original_filename}</span>
-                  <span className="block text-[10px] text-muted">
-                    {d.status}
-                    {d.page_count ? ` · ${d.page_count} pp` : ""}
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+                        d.source_kind === "pdf"
+                          ? "bg-primary/15 text-primary"
+                          : "bg-amber-500/15 text-amber-100"
+                      }`}
+                    >
+                      {d.source_kind === "pdf" ? "PDF" : "Conv"}
+                    </span>
+                    <span className="block min-w-0 flex-1 truncate">{rowPrimaryLabel(d)}</span>
+                  </span>
+                  <span className="mt-0.5 block truncate pl-[3.25rem] text-[10px] text-muted">
+                    {rowSecondaryLine(d)}
                   </span>
                 </li>
               ))}
@@ -206,7 +221,7 @@ export function DocumentPicker({
           ) : null}
           {open && filtered.length === 0 ? (
             <p className="absolute z-20 mt-1 w-full rounded-md border border-border-strong bg-surface-overlay px-2 py-1.5 text-muted">
-              No matching documents.
+              No matching sources.
             </p>
           ) : null}
         </div>

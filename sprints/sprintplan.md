@@ -58,6 +58,15 @@ flowchart LR
 | 7 | [sprint_7/](sprint_7/sprint_7_tasks.md) | Chat Home/Drawer/View, citations UX, targets, persistence writer | FR-23–FR-28, US-4.x, US-8.3, US-8.5–US-8.7 |
 | 8 | [sprint_8/](sprint_8/sprint_8_tasks.md) | Cancel jobs, command palette, a11y pass, perf budgets, Docker hardening, v0.1.0 | NFR-4–NFR-11, US-7.x, [uiux.md](../specs/uiux.md) checklist |
 
+## North A-MEM sprint track
+
+| Sprint | Folder | Focus | Primary spec anchors |
+| ------ | ------ | ----- | -------------------- |
+| A | [sprint-a/](sprint-a/sprint_a_tasks.md) | North connectivity, agent registration, conversation cache, transcript import, and agent provenance foundation (**closed — tag `sprint-a`**, [report](sprint-a/sprint_a_report.md)) | [north-agents-amem.md](../specs/openspecs/north-agents-amem.md) FR-1–FR-5 |
+| B | [sprint-b/](sprint-b/sprint_b_tasks.md) | A-MEM-style note enrichment, agent-scoped note embeddings, mixed PDF/North workspace views, and agent UI | [north-agents-amem.md](../specs/openspecs/north-agents-amem.md) FR-5, FR-7, FR-9 |
+| C | [sprint-c/](sprint-c/sprint_c_tasks.md) | Dreaming jobs, memory-link isolation, re-embedding, retrieval-mode expansion, and North-history evals | [north-agents-amem.md](../specs/openspecs/north-agents-amem.md) FR-6, FR-8–FR-10 |
+| D | [sprint-d/](sprint-d/sprint_d_tasks.md) | Product polish, agent-scoped filters, review surfaces, final validation, and spec sync | [north-agents-amem.md](../specs/openspecs/north-agents-amem.md) UI requirements, edge cases, acceptance criteria |
+
 ## P0 — Phase success criteria
 
 Aligned with [prd.md](../specs/prd.md) Phase 0:

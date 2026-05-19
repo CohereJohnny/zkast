@@ -5,7 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0012_north_constraints_note_index_kinds"
+# Keep revision id <= 32 chars: ``alembic_version.version_num`` is VARCHAR(32) in this project.
+revision = "0012_north_constraints"
 down_revision = "0011_north_agents_amem"
 branch_labels = None
 depends_on = None

@@ -49,6 +49,9 @@ type Ctx = {
 const STORAGE_KEY = "zkast.workspace.activeJobs";
 const STORAGE_LIMIT = 12;
 
+/** Redis job hash statuses that mean the UI should stop treating the job as active. */
+const TERMINAL_JOB_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+
 const JobEventsContext = createContext<Ctx | null>(null);
 
 function loadFromStorage(): ActiveJob[] {
@@ -125,6 +128,39 @@ export function JobEventsProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  useEffect(() => {
+    if (jobs.length === 0) return;
+    const snapshot = [...jobs];
+    let cancelled = false;
+    void (async () => {
+      for (const j of snapshot) {
+        if (cancelled) return;
+        try {
+          const res = await fetch(
+            `/api/v1/jobs/${encodeURIComponent(j.jobId)}?workspaceId=${encodeURIComponent(j.workspaceId)}`,
+            { cache: "no-store" },
+          );
+          if (cancelled) return;
+          if (res.status === 404) {
+            unregisterActiveJob(j.jobId);
+            continue;
+          }
+          if (!res.ok) continue;
+          const body = (await res.json()) as { job?: { status?: string } };
+          const st = body.job?.status;
+          if (st && TERMINAL_JOB_STATUSES.has(st)) {
+            unregisterActiveJob(j.jobId);
+          }
+        } catch {
+          /* offline */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobs, unregisterActiveJob]);
 
   const value = useMemo<Ctx>(
     () => ({ jobs, registerActiveJob, unregisterActiveJob }),

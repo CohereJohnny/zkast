@@ -17,25 +17,24 @@ import {
 } from "@/lib/job-events";
 
 /**
- * Live, collapsible "build log" panel attached to the Documents column.
+ * Live, collapsible "build log" panel for source-ingestion telemetry.
  *
- * - Rendered as a normal block inside the Documents `<section>` by
- *   `WorkspaceMainGrid`. When the Documents column collapses to the
- *   thin rail, the parent stops mounting this component, so the log
- *   visually "collapses with" the Documents panel — matching the user's
- *   mental model that pipeline logs are an artifact of document
- *   ingestion.
+ * - Mounted by `WorkspaceMainGrid` under `/documents` (documents library column)
+ *   and `/conversations` (same docked placement): PDF and conversation imports
+ *   both enqueue pipeline jobs, so traces stay visible next to the relevant UI.
+ * - On `/documents`, when that column collapses to the thin rail, the parent
+ *   stops mounting this component, so the log collapses with the panel.
  * - Subscribes (one `EventSource` per active job) to
- *   `/api/v1/jobs/{jobId}/events`. The server replays the last ~200 events
- *   from the Redis Stream before tailing live pub/sub messages, so opening
- *   the drawer feels instant.
+ *   `/api/v1/jobs/{jobId}/events?replay=false`. Live tail only — no Redis Stream
+ *   replay — so clearing the panel or navigating away does not reload hundreds of
+ *   stale lines (the documents panel SSE keeps replay for mid-job progress).
  * - Auto-dismisses jobs from the active-jobs context on `job_completed` /
  *   `job_failed`.
  * - Cross-wires `metric` events whose name implies graph mutation
  *   (`entity_count`, `edge_count`, `note_count`) into `emitGraphInvalidated`
  *   so the canvas refetches without polling.
  * - Persists its own open/closed state via localStorage so the user
- *   can hide the log body while keeping the Documents panel expanded.
+ *   can hide the log body while keeping the library panel expanded.
  */
 
 const STORAGE_KEY = "zkast.workspace.logConsole.open";
@@ -157,11 +156,14 @@ function ConsoleIcon() {
 function useEventSource(
   jobId: string,
   workspaceId: string,
+  replayHistory: boolean,
   onEvent: (ev: ServerEvent) => void,
   onTerminal: () => void,
 ) {
   useEffect(() => {
-    const url = `/api/v1/jobs/${encodeURIComponent(jobId)}/events?workspaceId=${encodeURIComponent(workspaceId)}`;
+    const qs = new URLSearchParams({ workspaceId });
+    if (!replayHistory) qs.set("replay", "false");
+    const url = `/api/v1/jobs/${encodeURIComponent(jobId)}/events?${qs.toString()}`;
     const es = new EventSource(url);
     let closed = false;
     es.onmessage = (msg) => {
@@ -185,15 +187,18 @@ function useEventSource(
       closed = true;
       es.close();
     };
-  }, [jobId, workspaceId, onEvent, onTerminal]);
+  }, [jobId, workspaceId, replayHistory, onEvent, onTerminal]);
 }
 
 function JobSubscription({
   job,
+  replayHistory,
   onEvent,
   onTerminal,
 }: {
   job: ActiveJob;
+  /** When false, SSE skips Redis replay so clears/navigation do not refill old lines. */
+  replayHistory: boolean;
   onEvent: (jobId: string, ev: ServerEvent) => void;
   onTerminal: (jobId: string) => void;
 }) {
@@ -202,7 +207,7 @@ function JobSubscription({
     [job.jobId, onEvent],
   );
   const terminal = useCallback(() => onTerminal(job.jobId), [job.jobId, onTerminal]);
-  useEventSource(job.jobId, job.workspaceId, event, terminal);
+  useEventSource(job.jobId, job.workspaceId, replayHistory, event, terminal);
   return null;
 }
 
@@ -335,6 +340,7 @@ export function JobLogConsole() {
         <JobSubscription
           key={j.jobId}
           job={j}
+          replayHistory={false}
           onEvent={handleEvent}
           onTerminal={handleTerminal}
         />

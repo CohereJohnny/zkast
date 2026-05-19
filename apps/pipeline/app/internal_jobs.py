@@ -67,7 +67,11 @@ async def get_internal_job(job_id: str, request: Request) -> dict[str, Any]:
 
 
 @router.get("/internal/v1/jobs/{job_id}/events")
-async def get_internal_job_events(job_id: str, request: Request) -> StreamingResponse:
+async def get_internal_job_events(
+    job_id: str,
+    request: Request,
+    replay: Annotated[bool, Query(description="When false, skip Redis Stream replay (live tail only).")] = True,
+) -> StreamingResponse:
     ws = _workspace_header(request)
     redis = request.app.state.redis_async
     raw = await job_hgetall(redis, job_id)
@@ -78,7 +82,7 @@ async def get_internal_job_events(job_id: str, request: Request) -> StreamingRes
         )
 
     async def gen():
-        async for chunk in sse_job_events(redis, job_id):
+        async for chunk in sse_job_events(redis, job_id, replay_history=replay):
             yield chunk
 
     return StreamingResponse(

@@ -32,20 +32,27 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [northTestBusy, setNorthTestBusy] = useState(false);
 
   async function reload() {
-    const [kRes, pRes] = await Promise.all([
-      fetch(`/api/v1/workspaces/${workspaceId}/api-keys`),
-      fetch(`/api/v1/workspaces/${workspaceId}/settings/pipeline`),
-    ]);
-    if (kRes.ok) {
-      const kJson = (await kRes.json()) as { items: ApiKeyRow[] };
-      setKeys(kJson.items ?? []);
-    }
-    if (pRes.ok) {
-      const pJson = (await pRes.json()) as PipelineSettings;
-      setPipeline(pJson);
-      setNorthUrlDraft(pJson.north_base_url ?? "");
+    setSettingsLoading(true);
+    try {
+      const [kRes, pRes] = await Promise.all([
+        fetch(`/api/v1/workspaces/${workspaceId}/api-keys`),
+        fetch(`/api/v1/workspaces/${workspaceId}/settings/pipeline`),
+      ]);
+      if (kRes.ok) {
+        const kJson = (await kRes.json()) as { items: ApiKeyRow[] };
+        setKeys(kJson.items ?? []);
+      }
+      if (pRes.ok) {
+        const pJson = (await pRes.json()) as PipelineSettings;
+        setPipeline(pJson);
+        setNorthUrlDraft(pJson.north_base_url ?? "");
+      }
+    } finally {
+      setSettingsLoading(false);
     }
   }
 
@@ -196,7 +203,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
   async function testNorth() {
     setErr(null);
     setMsg(null);
-    setBusy(true);
+    setNorthTestBusy(true);
     try {
       const res = await fetch(`/api/v1/workspaces/${workspaceId}/providers/north/test`, {
         method: "POST",
@@ -216,7 +223,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
         setErr(body.error?.message ?? "North test failed");
       }
     } finally {
-      setBusy(false);
+      setNorthTestBusy(false);
     }
   }
 
@@ -297,6 +304,109 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
           secrets (FR-30).
         </p>
       </header>
+
+      {settingsLoading ? (
+        <p className="text-caption text-muted" role="status">
+          Loading workspace settings…
+        </p>
+      ) : null}
+
+      <section
+        className="rounded-lg border border-border-strong bg-surface p-5"
+        aria-labelledby="north-integration-title"
+      >
+        <h2 id="north-integration-title" className="text-title-3 text-primary">
+          North integration
+        </h2>
+        <p className="mt-2 text-caption text-muted">
+          Configure the North Agents API for conversation import (see <span className="font-medium text-primary">Agents</span>{" "}
+          in the sidebar). Base URL lives in pipeline settings; bearer token is encrypted like other API keys and never
+          returned on read. For <span className="font-mono text-secondary">demo.north.cohere.com</span>, the pipeline
+          adds <span className="font-mono text-secondary">/api</span> when you save only the origin (so requests hit{" "}
+          <span className="font-mono text-secondary">…/api/v1/…</span>). Use a <span className="font-medium text-secondary">North</span> API token for this host — a
+          Cohere Command/Embed production key is different. If Test North reports a login redirect, rotate the token and
+          try again.
+        </p>
+        <form className="mt-4 flex max-w-xl flex-col gap-3" onSubmit={saveNorthUrl}>
+          <label className="flex flex-col gap-1 text-caption text-secondary">
+            North API base URL
+            <input
+              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              value={northUrlDraft}
+              onChange={(ev) => setNorthUrlDraft(ev.target.value)}
+              placeholder="https://demo.north.cohere.com/api"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-fit rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+          >
+            {busy ? "Working…" : "Save North URL"}
+          </button>
+        </form>
+
+        <form className="mt-8 flex max-w-xl flex-col gap-3" onSubmit={saveNorthKey}>
+          <h3 className="text-body font-medium text-primary">
+            {northKey ? "Rotate North bearer token" : "Add North bearer token"}
+          </h3>
+          <label className="flex flex-col gap-1 text-caption text-secondary">
+            Label
+            <input
+              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-body text-primary"
+              value={northLabel}
+              onChange={(ev) => setNorthLabel(ev.target.value)}
+              required
+              maxLength={80}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-caption text-secondary">
+            Bearer token
+            <input
+              type="password"
+              autoComplete="off"
+              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              value={northSecret}
+              onChange={(ev) => setNorthSecret(ev.target.value)}
+              required={!northKey}
+              minLength={northKey ? undefined : 8}
+              placeholder={northKey ? "Leave blank to keep current token" : "…"}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              type="submit"
+              disabled={
+                busy ||
+                (!northKey && northSecret.length < 8) ||
+                (northSecret.length > 0 && northSecret.length < 8)
+              }
+              className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+            >
+              {busy ? "Working…" : northKey ? "Rotate token" : "Save token"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || northTestBusy || !northKey}
+              onClick={() => void testNorth()}
+              className="rounded-md border border-border-strong px-4 py-2 text-body text-secondary hover:bg-surface-raised disabled:opacity-50"
+            >
+              {northTestBusy ? "Testing…" : "Test North"}
+            </button>
+            {northKey ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void removeNorthKey()}
+                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-body text-[color:var(--semantic-danger)] hover:bg-surface-raised disabled:opacity-50"
+              >
+                Remove token
+              </button>
+            ) : null}
+          </div>
+        </form>
+      </section>
 
       <section className="rounded-lg border border-border-strong bg-surface p-5" aria-labelledby="api-keys-title">
         <h2 id="api-keys-title" className="text-title-3 text-primary">
@@ -379,98 +489,6 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
                 className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-body text-[color:var(--semantic-danger)] hover:bg-surface-raised disabled:opacity-50"
               >
                 Remove
-              </button>
-            ) : null}
-          </div>
-        </form>
-      </section>
-
-      <section
-        className="rounded-lg border border-border-strong bg-surface p-5"
-        aria-labelledby="north-integration-title"
-      >
-        <h2 id="north-integration-title" className="text-title-3 text-primary">
-          North integration
-        </h2>
-        <p className="mt-2 text-caption text-muted">
-          Base URL is stored in pipeline settings. Bearer token is encrypted like other API keys and never
-          returned on read.
-        </p>
-        <form className="mt-4 flex max-w-xl flex-col gap-3" onSubmit={saveNorthUrl}>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
-            North API base URL
-            <input
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
-              value={northUrlDraft}
-              onChange={(ev) => setNorthUrlDraft(ev.target.value)}
-              placeholder="https://north.example.com"
-              autoComplete="off"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-fit rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
-          >
-            {busy ? "Working…" : "Save North URL"}
-          </button>
-        </form>
-
-        <form className="mt-8 flex max-w-xl flex-col gap-3" onSubmit={saveNorthKey}>
-          <h3 className="text-body font-medium text-primary">
-            {northKey ? "Rotate North bearer token" : "Add North bearer token"}
-          </h3>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
-            Label
-            <input
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-body text-primary"
-              value={northLabel}
-              onChange={(ev) => setNorthLabel(ev.target.value)}
-              required
-              maxLength={80}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
-            Bearer token
-            <input
-              type="password"
-              autoComplete="off"
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
-              value={northSecret}
-              onChange={(ev) => setNorthSecret(ev.target.value)}
-              required={!northKey}
-              minLength={northKey ? undefined : 8}
-              placeholder={northKey ? "Leave blank to keep current token" : "…"}
-            />
-          </label>
-          <div className="flex flex-wrap gap-2 pt-2">
-            <button
-              type="submit"
-              disabled={
-                busy ||
-                (!northKey && northSecret.length < 8) ||
-                (northSecret.length > 0 && northSecret.length < 8)
-              }
-              className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
-            >
-              {busy ? "Working…" : northKey ? "Rotate token" : "Save token"}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !northKey}
-              onClick={() => void testNorth()}
-              className="rounded-md border border-border-strong px-4 py-2 text-body text-secondary hover:bg-surface-raised disabled:opacity-50"
-            >
-              Test North
-            </button>
-            {northKey ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void removeNorthKey()}
-                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-body text-[color:var(--semantic-danger)] hover:bg-surface-raised disabled:opacity-50"
-              >
-                Remove token
               </button>
             ) : null}
           </div>
