@@ -5,7 +5,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { DreamJobStatus } from "@/components/dream-job-status";
+import { useToast } from "@/components/feedback-provider";
 import { readApiErrorMessage } from "@/lib/api-error-message";
+import { useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
 
 type NorthAgent = {
@@ -16,6 +18,8 @@ type NorthAgent = {
 };
 
 export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
+  const toast = useToast();
+  const { registerActiveJob } = useJobEvents();
   const [agents, setAgents] = useState<NorthAgent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -248,11 +252,22 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
                     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
                     if (!res.ok) {
                       setError(readApiErrorMessage(body, `Dream HTTP ${res.status}`));
+                      toast({
+                        variant: "error",
+                        message: "Dream failed to queue",
+                        description: readApiErrorMessage(body, `HTTP ${res.status}`),
+                      });
                     } else {
                       const jobId = typeof body.job_id === "string" ? body.job_id : null;
                       if (jobId) {
+                        registerActiveJob(jobId, workspaceId, null, "dreaming");
                         setActiveDreamJob({ agentId: a.id, jobId });
-                        setNotice(`Dream job queued for ${a.display_name || a.external_agent_id}`);
+                        const label = a.display_name || a.external_agent_id;
+                        toast({
+                          variant: "success",
+                          message: "Dream job queued",
+                          description: `${label} — watch progress on Jobs or the build log below`,
+                        });
                       }
                     }
                   } finally {
@@ -273,6 +288,21 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
           workspaceId={workspaceId}
           agentId={activeDreamJob.agentId}
           jobId={activeDreamJob.jobId}
+          onDone={(status) => {
+            if (status === "succeeded") {
+              toast({
+                variant: "success",
+                message: "Dream job completed",
+                description: "Memory links and embeddings were updated for this agent.",
+              });
+            } else if (status === "failed") {
+              toast({
+                variant: "error",
+                message: "Dream job failed",
+                description: "See Jobs or the build log for details.",
+              });
+            }
+          }}
         />
       ) : null}
     </div>

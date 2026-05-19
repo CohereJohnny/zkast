@@ -79,6 +79,7 @@ const STAGE_LABEL: Record<string, string> = {
   generating_notes: "Notes",
   extracting_graph: "Graph",
   building_graph: "Graph",
+  dreaming: "Dream",
 };
 
 function classifyLevel(ev: ServerEvent): Level {

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   Bot,
   FileText,
   MessageSquare,
@@ -20,6 +21,7 @@ const items = [
   { href: "/agents", label: "Agents", Icon: Bot },
   { href: "/conversations", label: "Conversations", Icon: ScrollText },
   { href: "/documents", label: "Documents", Icon: FileText },
+  { href: "/jobs", label: "Jobs", Icon: Activity },
   { href: "/notes", label: "Notes", Icon: StickyNote },
   { href: "/graph", label: "Graph", Icon: Network },
   { href: "/chat", label: "Chat", Icon: MessageSquare },

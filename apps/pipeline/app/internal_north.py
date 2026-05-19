@@ -17,7 +17,7 @@ from app.documents_repo import (
     insert_document,
     insert_ingestion_run,
 )
-from app.job_redis import job_hset
+from app.job_redis import job_hset, publish_job_event
 from app.north_client import (
     NorthAuthError,
     NorthClient,
@@ -564,6 +564,17 @@ async def post_north_dream(
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
 
     job_id = insert_dream_job(db, workspace_id=ws, agent_id=aid)
+    redis = request.app.state.redis_async
+    await job_hset(
+        redis,
+        job_id,
+        workspace_id=ws,
+        agent_id=aid,
+        kind="dreaming",
+        status="queued",
+        progress='{"percent":0,"stage":"queued"}',
+    )
+    await publish_job_event(redis, job_id, "stage_started", stage="dreaming")
     pool = request.app.state.arq_pool
     await pool.enqueue_job(
         "run_dreaming_job",

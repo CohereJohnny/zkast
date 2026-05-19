@@ -91,6 +91,8 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
   const pathname = usePathname();
   const isDocumentsRoute = pathname === "/documents";
   const isConversationsRoute = pathname === "/conversations";
+  const isJobsRoute = pathname === "/jobs";
+  const dockJobLog = isConversationsRoute || isJobsRoute;
   // The main column on /graph is already a full graph view; don't render the
   // right-rail mini graph next to it.
   const showRailGraph = pathname !== "/graph";
@@ -224,16 +226,18 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
               id="main-content"
               tabIndex={-1}
               aria-label={
-                isConversationsRoute ? "Conversations" : "Main workspace panel"
+                isConversationsRoute
+                  ? "Conversations"
+                  : isJobsRoute
+                    ? "Jobs"
+                    : "Main workspace panel"
               }
               className={cn(
                 "flex min-h-0 flex-col rounded-lg border border-border-strong bg-surface outline-none",
-                isConversationsRoute
-                  ? "gap-3 overflow-hidden p-4"
-                  : "overflow-auto",
+                dockJobLog ? "gap-3 overflow-hidden p-4" : "overflow-auto",
               )}
             >
-              {isConversationsRoute ? (
+              {dockJobLog ? (
                 <>
                   {/* Same split as Documents column: scroll library; dock log below
                       so ingestion traces stay visible while browsing imports. */}

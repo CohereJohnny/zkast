@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readApiErrorMessage } from "@/lib/api-error-message";
 import { cn } from "@/lib/utils";
@@ -28,10 +28,11 @@ export function DreamJobStatus({
   workspaceId: string;
   agentId: string;
   jobId: string | null;
-  onDone?: () => void;
+  onDone?: (status: "succeeded" | "failed") => void;
 }) {
   const [detail, setDetail] = useState<DreamJobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const terminalNotified = useRef(false);
 
   const load = useCallback(async () => {
     if (!jobId) return;
@@ -89,8 +90,13 @@ export function DreamJobStatus({
 
   useEffect(() => {
     const status = detail?.job?.status;
-    if (status === "succeeded" || status === "failed") {
-      onDone?.();
+    if (terminalNotified.current) return;
+    if (status === "succeeded") {
+      terminalNotified.current = true;
+      onDone?.("succeeded");
+    } else if (status === "failed") {
+      terminalNotified.current = true;
+      onDone?.("failed");
     }
   }, [detail?.job?.status, onDone]);
 

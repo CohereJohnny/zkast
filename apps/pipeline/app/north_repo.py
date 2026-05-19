@@ -323,6 +323,28 @@ def _serialize_dream_job_row(row: dict[str, Any]) -> dict[str, Any]:
     return r
 
 
+def list_workspace_dream_jobs(
+    database_url: str,
+    *,
+    workspace_id: str,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              id, workspace_id, agent_id, status, stats, failure_reason,
+              started_at, ended_at
+            FROM dream_jobs
+            WHERE workspace_id = %s::uuid
+            ORDER BY started_at DESC
+            LIMIT %s
+            """,
+            (workspace_id, int(limit)),
+        ).fetchall()
+    return [_serialize_dream_job_row(dict(r)) for r in rows]
+
+
 def list_dream_jobs(
     database_url: str,
     *,

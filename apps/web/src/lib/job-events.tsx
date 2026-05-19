@@ -25,7 +25,8 @@ import {
 export type ActiveJobKind =
   | "document_parse"
   | "generate_atomic_notes"
-  | "extract_graph";
+  | "extract_graph"
+  | "dreaming";
 
 export type ActiveJob = {
   jobId: string;
