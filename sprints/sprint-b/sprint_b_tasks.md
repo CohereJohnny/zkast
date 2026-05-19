@@ -1,7 +1,7 @@
 # Sprint B Tasks — A-MEM Embeddings And Agent UI
 
 **Branch**: `sprints/sprint-b`
-**Status**: Complete (implementation on `sprints/sprint-b`)
+**Status**: Complete — merged to `main`, tag `sprint-b`
 **Primary spec**: [`specs/openspecs/north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md) — **FR-7**, **FR-9** (agent-scoped retrieval inputs; not FR-8 dreaming)
 **Depends on**: Sprint A ([`sprint_a_report.md`](../sprint-a/sprint_a_report.md)) — North import, `agent_id` on documents/episodes/notes
 
