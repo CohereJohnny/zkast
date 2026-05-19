@@ -41,6 +41,12 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [indexStatus, setIndexStatus] = useState<{
+    raw_chunk?: { indexed?: number; total?: number };
+    by_kind?: Record<string, number>;
+  } | null>(null);
+  const [indexBusy, setIndexBusy] = useState<string | null>(null);
+  const [indexError, setIndexError] = useState<string | null>(null);
 
   const toast = useToast();
   const confirm = useConfirm();
@@ -66,11 +72,68 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
     }
   }, [workspaceId]);
 
+  const loadIndexStatus = useCallback(async () => {
+    setIndexError(null);
+    try {
+      const res = await fetch(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/retrieval-index/status`,
+        { cache: "no-store" },
+      );
+      const body = (await res.json()) as {
+        raw_chunk?: { indexed?: number; total?: number };
+        by_kind?: Record<string, number>;
+        error?: { message?: string };
+      };
+      if (!res.ok) {
+        setIndexError(body.error?.message ?? "Failed to load index status");
+        return;
+      }
+      setIndexStatus(body);
+    } catch {
+      setIndexError("Failed to load index status");
+    }
+  }, [workspaceId]);
+
   useEffect(() => {
     void load();
-    const t = window.setInterval(() => void load(), 8000);
+    void loadIndexStatus();
+    const t = window.setInterval(() => {
+      void load();
+      void loadIndexStatus();
+    }, 8000);
     return () => window.clearInterval(t);
-  }, [load]);
+  }, [load, loadIndexStatus]);
+
+  const runBackfill = useCallback(
+    async (kinds: string[]) => {
+      setIndexBusy(kinds.join(","));
+      setIndexError(null);
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/retrieval-index/backfill`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kinds }),
+          },
+        );
+        const body = (await res.json()) as { error?: { message?: string } };
+        if (!res.ok) {
+          setIndexError(body.error?.message ?? "Backfill failed");
+          toast({ variant: "error", message: "Backfill failed" });
+          return;
+        }
+        toast({ variant: "success", message: `Backfill started: ${kinds.join(", ")}` });
+        await loadIndexStatus();
+      } catch {
+        setIndexError("Backfill request failed");
+        toast({ variant: "error", message: "Backfill request failed" });
+      } finally {
+        setIndexBusy(null);
+      }
+    },
+    [workspaceId, toast, loadIndexStatus],
+  );
 
   const cleanupHashes = useCallback(async () => {
     const ok = await confirm({
@@ -203,6 +266,53 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
                 </tbody>
               </table>
             )}
+          </section>
+
+          <section
+            aria-label="Retrieval indexes"
+            className="rounded-lg border border-border-subtle bg-surface/80 p-4"
+          >
+            <h2 className="text-title-3 text-secondary">Retrieval indexes</h2>
+            <p className="mt-1 text-caption text-muted">
+              Embedding counts for naive RAG chunks and note indexes (Zettel + A-MEM).
+            </p>
+            {indexError ? (
+              <p className="mt-2 text-caption text-red-300" role="alert">
+                {indexError}
+              </p>
+            ) : null}
+            {indexStatus ? (
+              <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted">
+                <dt>Raw chunks indexed</dt>
+                <dd className="text-secondary">
+                  {indexStatus.raw_chunk?.indexed ?? "—"} / {indexStatus.raw_chunk?.total ?? "—"}
+                </dd>
+                <dt>note_zettel</dt>
+                <dd className="text-secondary">{indexStatus.by_kind?.note_zettel ?? 0}</dd>
+                <dt>note_amem</dt>
+                <dd className="text-secondary">{indexStatus.by_kind?.note_amem ?? 0}</dd>
+              </dl>
+            ) : (
+              <p className="mt-2 text-caption text-muted">Loading index status…</p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={indexBusy !== null}
+                onClick={() => void runBackfill(["raw_chunk"])}
+                className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary hover:bg-surface-raised disabled:opacity-50"
+              >
+                {indexBusy === "raw_chunk" ? "Running…" : "Backfill raw chunks"}
+              </button>
+              <button
+                type="button"
+                disabled={indexBusy !== null}
+                onClick={() => void runBackfill(["note_zettel", "note_amem"])}
+                className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary hover:bg-surface-raised disabled:opacity-50"
+              >
+                {indexBusy === "note_zettel,note_amem" ? "Running…" : "Backfill note indexes"}
+              </button>
+            </div>
           </section>
 
           <section

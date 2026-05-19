@@ -934,6 +934,7 @@ export function GraphCanvas({
     const p = new URLSearchParams();
     p.set("view", filters.view ?? "overview");
     if (filters.document_id) p.set("document_id", filters.document_id);
+    if (filters.agent_id) p.set("agent_id", filters.agent_id);
     if (filters.valid_at) p.set("valid_at", filters.valid_at);
     if (filters.node_limit) p.set("node_limit", filters.node_limit);
     if (filters.depth) p.set("depth", filters.depth);

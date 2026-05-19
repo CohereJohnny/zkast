@@ -31,6 +31,8 @@ from app import raw_chunk_index
 from app.config import Settings
 from app.eval.runner import run_eval as _run_eval_async
 from app.graphiti_factory import resolve_cohere_api_key
+from app.note_embedding_index import backfill_note_embeddings
+from app.retrieval_embeddings_repo import count_by_kind
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["internal-eval"])
@@ -43,9 +45,16 @@ router = APIRouter(tags=["internal-eval"])
 
 class BackfillRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    # Reserved for future overrides (e.g. dimension / model). Currently
-    # we use workspace pipeline settings.
     embedding_model: str | None = None
+    kinds: list[str] | None = Field(
+        default=None,
+        description="Index kinds to backfill: raw_chunk, note_zettel, note_amem. Default raw_chunk only.",
+    )
+    agent_id: uuid.UUID | None = Field(
+        default=None,
+        description="When set, note backfills only target notes for this North agent.",
+    )
+    limit: int | None = Field(default=500, ge=1, le=5000)
 
 
 @router.get(
@@ -56,12 +65,25 @@ async def get_index_status(
     request: Request,
 ) -> JSONResponse:
     settings: Settings = request.app.state.settings
-    counts = await asyncio.to_thread(
-        raw_chunk_index.count_raw_chunks,
-        settings.database_url,
-        workspace_id=str(workspace_id),
+    ws = str(workspace_id)
+    raw_counts, by_kind = await asyncio.gather(
+        asyncio.to_thread(
+            raw_chunk_index.count_raw_chunks,
+            settings.database_url,
+            workspace_id=ws,
+        ),
+        asyncio.to_thread(
+            count_by_kind,
+            settings.database_url,
+            workspace_id=ws,
+        ),
     )
-    return JSONResponse(content={"raw_chunk": counts})
+    return JSONResponse(
+        content={
+            "raw_chunk": raw_counts,
+            "by_kind": by_kind,
+        },
+    )
 
 
 @router.post(
@@ -86,13 +108,31 @@ async def post_backfill_index(
                 }
             },
         )
-    summary = await raw_chunk_index.backfill_raw_chunks(
-        settings.database_url,
-        workspace_id=str(workspace_id),
-        api_key=api_key,
-        embedding_model=(body.embedding_model if body else None)
-        or "embed-v4.0",
-    )
+    ws = str(workspace_id)
+    embed_model = (body.embedding_model if body else None) or "embed-v4.0"
+    kinds = (body.kinds if body and body.kinds else None) or ["raw_chunk"]
+    agent_id = str(body.agent_id) if body and body.agent_id else None
+    limit = body.limit if body and body.limit else 500
+
+    summary: dict[str, Any] = {}
+    if "raw_chunk" in kinds:
+        summary["raw_chunk"] = await raw_chunk_index.backfill_raw_chunks(
+            settings.database_url,
+            workspace_id=ws,
+            api_key=api_key,
+            embedding_model=embed_model,
+        )
+    note_kinds = [k for k in kinds if k in ("note_zettel", "note_amem")]
+    if note_kinds:
+        summary["notes"] = await backfill_note_embeddings(
+            api_key=api_key,
+            database_url=settings.database_url,
+            workspace_id=ws,
+            embed_model=embed_model,
+            kinds=note_kinds,
+            agent_id=agent_id,
+            limit=limit,
+        )
     return JSONResponse(content={"summary": summary})
 
 

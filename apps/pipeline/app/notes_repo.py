@@ -387,6 +387,8 @@ def patch_note_derivations(
     memory_context: str | None = None,
     memory_keywords: list[str] | None = None,
     tags: list[str] | None = None,
+    merge_tags: bool = False,
+    mark_dreaming_touch: bool = False,
 ) -> None:
     """Update derived A-MEM / dreaming fields without marking user-edited."""
     sets: list[str] = []
@@ -398,11 +400,19 @@ def patch_note_derivations(
         sets.append("memory_keywords = %s")
         params.append(sorted({k.strip().lower() for k in memory_keywords if k and k.strip()})[:40])
     if tags is not None:
-        sets.append("tags = %s")
-        params.append(_norm_tags(tags))
+        if merge_tags:
+            row = fetch_note(database_url, workspace_id=workspace_id, note_id=note_id)
+            existing = list((row or {}).get("tags") or [])
+            merged = _norm_tags([*existing, *tags])
+            sets.append("tags = %s")
+            params.append(merged)
+        else:
+            sets.append("tags = %s")
+            params.append(_norm_tags(tags))
     if not sets:
         return
-    sets.append("dreaming_touched_at = now()")
+    if mark_dreaming_touch:
+        sets.append("dreaming_touched_at = now()")
     sets.append("updated_at = now()")
     params.extend([note_id, workspace_id])
     with psycopg.connect(database_url) as conn:

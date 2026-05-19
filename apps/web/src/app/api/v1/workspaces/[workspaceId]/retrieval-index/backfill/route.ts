@@ -11,6 +11,9 @@ const uuidParam = z.string().uuid();
 const body = z
   .object({
     embedding_model: z.string().min(1).max(80).optional(),
+    kinds: z.array(z.enum(["raw_chunk", "note_zettel", "note_amem"])).optional(),
+    agent_id: z.string().uuid().optional(),
+    limit: z.number().int().min(1).max(5000).optional(),
   })
   .optional();
 

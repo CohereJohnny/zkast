@@ -1,5 +1,7 @@
 "use client";
 
+import { AgentPicker } from "@/components/filters/agent-picker";
+
 export type NoteListItem = {
   id: string;
   title: string;
@@ -23,6 +25,7 @@ export function NotesList({
   onDocumentFilterChange,
   onAgentFilterChange,
   onNewNote,
+  workspaceId,
 }: {
   items: NoteListItem[];
   selectedId: string | null;
@@ -38,6 +41,7 @@ export function NotesList({
   onDocumentFilterChange: (v: string) => void;
   onAgentFilterChange: (v: string) => void;
   onNewNote: () => void;
+  workspaceId?: string;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 border-r border-border-subtle pr-3">
@@ -82,15 +86,25 @@ export function NotesList({
           placeholder="Optional uuid"
         />
       </label>
-      <label className="block text-caption text-muted">
-        Agent id filter
-        <input
+      {workspaceId ? (
+        <AgentPicker
+          workspaceId={workspaceId}
           value={agentFilter}
-          onChange={(e) => onAgentFilterChange(e.target.value)}
-          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
-          placeholder="Optional North agent uuid"
+          onChange={onAgentFilterChange}
+          label="North agent"
+          placeholder="All notes (PDF + North)"
         />
-      </label>
+      ) : (
+        <label className="block text-caption text-muted">
+          Agent id filter
+          <input
+            value={agentFilter}
+            onChange={(e) => onAgentFilterChange(e.target.value)}
+            className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
+            placeholder="Optional North agent uuid"
+          />
+        </label>
+      )}
 
       {error ? (
         <p className="text-caption text-red-300" role="alert">

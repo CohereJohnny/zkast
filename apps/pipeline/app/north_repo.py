@@ -99,6 +99,58 @@ def fetch_north_agent(
     return _serialize_north_agent_row(dict(row))
 
 
+def fetch_agent_stats(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    """Counts for agent detail UI (documents, notes, embeddings)."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        doc_row = conn.execute(
+            """
+            SELECT count(*)::int AS c
+            FROM documents
+            WHERE workspace_id = %s::uuid
+              AND agent_id = %s::uuid
+              AND source_kind = 'north_conversation'
+            """,
+            (workspace_id, agent_id),
+        ).fetchone()
+        note_row = conn.execute(
+            """
+            SELECT count(*)::int AS c
+            FROM atomic_notes
+            WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
+            """,
+            (workspace_id, agent_id),
+        ).fetchone()
+        cache_row = conn.execute(
+            """
+            SELECT count(*)::int AS c
+            FROM north_conversation_cache
+            WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
+            """,
+            (workspace_id, agent_id),
+        ).fetchone()
+        amem_row = conn.execute(
+            """
+            SELECT count(*)::int AS c
+            FROM retrieval_embeddings
+            WHERE workspace_id = %s::uuid
+              AND agent_id = %s::uuid
+              AND index_kind = 'note_amem'
+            """,
+            (workspace_id, agent_id),
+        ).fetchone()
+    return {
+        "imported_documents": int(doc_row["c"]) if doc_row else 0,
+        "derived_notes": int(note_row["c"]) if note_row else 0,
+        "cached_conversations": int(cache_row["c"]) if cache_row else 0,
+        "note_amem_embeddings": int(amem_row["c"]) if amem_row else 0,
+    }
+
+
 def update_agent_sync_cursor(
     database_url: str,
     *,

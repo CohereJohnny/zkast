@@ -57,6 +57,14 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
   const [listLoading, setListLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [previewById, setPreviewById] = useState<Record<string, PreviewEntry>>({});
+  const [stats, setStats] = useState<{
+    imported_documents: number;
+    derived_notes: number;
+    cached_conversations: number;
+    note_amem_embeddings: number;
+  } | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
 
   const loadPreview = useCallback(
     async (cid: string) => {
@@ -141,6 +149,40 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
   );
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setStatsLoading(true);
+      setStatsError(null);
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${workspaceId}/north/agents/${agentId}/stats`,
+          { cache: "no-store" },
+        );
+        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        if (cancelled) return;
+        if (!res.ok) {
+          setStatsError(readApiErrorMessage(body, `HTTP ${res.status}`));
+          setStats(null);
+          return;
+        }
+        setStats({
+          imported_documents: Number(body.imported_documents ?? 0),
+          derived_notes: Number(body.derived_notes ?? 0),
+          cached_conversations: Number(body.cached_conversations ?? 0),
+          note_amem_embeddings: Number(body.note_amem_embeddings ?? 0),
+        });
+      } catch {
+        if (!cancelled) setStatsError("Failed to load agent stats");
+      } finally {
+        if (!cancelled) setStatsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, agentId]);
+
+  useEffect(() => {
     const id = ++runRef.current;
     void load(false, id);
     // Do not auto-call refresh when cache is empty: North may return an unscoped list and we would
@@ -210,6 +252,44 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
           <RefreshCw className="h-4 w-4" strokeWidth={1.5} aria-hidden />
           Refresh from North
         </button>
+      </div>
+      <div className="rounded-lg border border-border-subtle bg-surface-raised/60 px-3 py-3">
+        {statsLoading ? (
+          <p className="text-caption text-muted" role="status">
+            Loading memory stats…
+          </p>
+        ) : statsError ? (
+          <p className="text-caption text-red-300" role="alert">
+            {statsError}
+          </p>
+        ) : stats ? (
+          <div className="flex flex-wrap items-center gap-3 text-caption text-secondary">
+            <span>
+              <strong className="text-primary">{stats.imported_documents}</strong> imported
+            </span>
+            <span>
+              <strong className="text-primary">{stats.derived_notes}</strong> notes
+            </span>
+            <span>
+              <strong className="text-primary">{stats.cached_conversations}</strong> cached
+            </span>
+            <span>
+              <strong className="text-primary">{stats.note_amem_embeddings}</strong> A-MEM indexed
+            </span>
+            <Link
+              href={`/notes?agentId=${encodeURIComponent(agentId)}`}
+              className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
+            >
+              View notes
+            </Link>
+            <Link
+              href={`/graph?agent_id=${encodeURIComponent(agentId)}`}
+              className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
+            >
+              View graph
+            </Link>
+          </div>
+        ) : null}
       </div>
       {error ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">

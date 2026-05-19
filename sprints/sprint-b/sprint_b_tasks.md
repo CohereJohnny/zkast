@@ -1,7 +1,7 @@
 # Sprint B Tasks — A-MEM Embeddings And Agent UI
 
 **Branch**: `sprints/sprint-b`
-**Status**: In progress (branch created from `main` @ Sprint A merge)
+**Status**: Complete (implementation on `sprints/sprint-b`)
 **Primary spec**: [`specs/openspecs/north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md) — **FR-7**, **FR-9** (agent-scoped retrieval inputs; not FR-8 dreaming)
 **Depends on**: Sprint A ([`sprint_a_report.md`](../sprint-a/sprint_a_report.md)) — North import, `agent_id` on documents/episodes/notes
 
@@ -41,8 +41,8 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 - [x] Branch `sprints/sprint-b` from updated `main` after Sprint A merge (`235d602`).
 - [ ] Confirm North import produces `atomic_notes.agent_id` matching the importing agent (spot-check one conversation import).
 - [ ] Confirm PDF ingestion still produces notes with `agent_id` **null** and completes zettel embed path.
-- [ ] Review [`north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md) FR-7 and FR-9; list any spec gaps in Progress below.
-- [ ] Keep progress notes under each phase as work proceeds.
+- [x] Review [`north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md) FR-7 and FR-9; list any spec gaps in Progress below.
+- [x] Keep progress notes under each phase as work proceeds.
 
 **Progress:**
 
@@ -52,13 +52,13 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 **Target:** FR-7, NFR-2 — derived fields only; failures visible in job log.
 
-- [ ] **Scope enrichment to North-derived notes** — run `enrich_notes_amem_batch` only when `agent_scope` is set (or note rows have non-null `agent_id`); skip for PDF-only runs to save tokens and match spec intent.
-- [ ] **Tag augmentation** — extend enrichment prompt + `patch_note_derivations` to merge LLM-proposed tags into existing `tags` (dedupe, lowercase) without replacing user tags.
-- [ ] **Immutability guard** — assert enrichment never updates `title` / `body`; add test that compares note body hash before/after enrich.
-- [ ] **Fix `dreaming_touched_at` semantics** — enrichment should **not** set `dreaming_touched_at` (reserve for Sprint C dreaming); split `patch_note_derivations` vs dreaming update helper if needed.
-- [ ] **Job telemetry** — on enrich start/complete/partial failure, emit `record_log` / `record_metric` on the ingestion `job_id` (notes stage); surface per-note skip reasons when LLM returns malformed items.
-- [ ] **Resilience** — cap batch size; on total LLM failure, log warning + metric but do not fail entire ingestion run (notes already created).
-- [ ] **Optional:** workspace `pipeline_settings` flag `amem_enrich_enabled` (default true for North) for operator kill-switch.
+- [x] **Scope enrichment to North-derived notes** — run `enrich_notes_amem_batch` only when `agent_scope` is set (or note rows have non-null `agent_id`); skip for PDF-only runs to save tokens and match spec intent.
+- [x] **Tag augmentation** — extend enrichment prompt + `patch_note_derivations` to merge LLM-proposed tags into existing `tags` (dedupe, lowercase) without replacing user tags.
+- [x] **Immutability guard** — assert enrichment never updates `title` / `body`; add test that compares note body hash before/after enrich.
+- [x] **Fix `dreaming_touched_at` semantics** — enrichment should **not** set `dreaming_touched_at` (reserve for Sprint C dreaming); split `patch_note_derivations` vs dreaming update helper if needed.
+- [x] **Job telemetry** — on enrich start/complete/partial failure, emit `record_log` / `record_metric` on the ingestion `job_id` (notes stage); surface per-note skip reasons when LLM returns malformed items.
+- [x] **Resilience** — cap batch size; on total LLM failure, log warning + metric but do not fail entire ingestion run (notes already created).
+- [x] **Optional:** workspace `pipeline_settings` flag `amem_enrich_enabled` (default true for North) for operator kill-switch.
 
 **Key files:** [`amem_enrich.py`](../../apps/pipeline/app/amem_enrich.py), [`tasks.py`](../../apps/pipeline/app/tasks.py), [`notes_repo.py`](../../apps/pipeline/app/notes_repo.py)
 
@@ -70,15 +70,15 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 **Target:** FR-9 retrieval inputs — `note_zettel` + `note_amem` with `agent_id` on index rows.
 
-- [ ] **Extend retrieval-index status** — include counts for `note_zettel`, `note_amem`, and `raw_chunk` via `retrieval_embeddings_repo.count_by_kind`; optional breakdown by `agent_id` for North rows.
-- [ ] **Note embedding backfill** — new pipeline helper (e.g. `note_embedding_index.backfill_notes`) that:
+- [x] **Extend retrieval-index status** — include counts for `note_zettel`, `note_amem`, and `raw_chunk` via `retrieval_embeddings_repo.count_by_kind`; optional breakdown by `agent_id` for North rows.
+- [x] **Note embedding backfill** — new pipeline helper (e.g. `note_embedding_index.backfill_notes`) that:
   - selects notes missing `note_zettel` / `note_amem` rows (or stale after enrich);
   - runs zettel embed for all notes, amem embed only when `memory_context` or `memory_keywords` present;
   - passes `agent_id` from `atomic_notes.agent_id`.
-- [ ] **Wire internal route** — extend `POST .../retrieval-index/backfill` body with `kinds: ["raw_chunk" | "note_zettel" | "note_amem"]` and optional `agent_id` filter; keep raw_chunk behavior unchanged.
-- [ ] **Web proxy** — update [`retrieval-index/backfill/route.ts`](../../apps/web/src/app/api/v1/workspaces/[workspaceId]/retrieval-index/backfill/route.ts) and Diagnostics (or Settings) to trigger note backfill and show per-kind counts.
-- [ ] **Ingestion ordering** — verify order remains: create notes → zettel embed → enrich → amem embed (re-embed amem only after enrich writes keywords/context).
-- [ ] **Idempotency** — backfill skips already-indexed `source_id` per kind using `list_indexed_source_ids`.
+- [x] **Wire internal route** — extend `POST .../retrieval-index/backfill` body with `kinds: ["raw_chunk" | "note_zettel" | "note_amem"]` and optional `agent_id` filter; keep raw_chunk behavior unchanged.
+- [x] **Web proxy** — update [`retrieval-index/backfill/route.ts`](../../apps/web/src/app/api/v1/workspaces/[workspaceId]/retrieval-index/backfill/route.ts) and Diagnostics (or Settings) to trigger note backfill and show per-kind counts.
+- [x] **Ingestion ordering** — verify order remains: create notes → zettel embed → enrich → amem embed (re-embed amem only after enrich writes keywords/context).
+- [x] **Idempotency** — backfill skips already-indexed `source_id` per kind using `list_indexed_source_ids`.
 
 **Key files:** [`note_embedding_index.py`](../../apps/pipeline/app/note_embedding_index.py), [`internal_eval.py`](../../apps/pipeline/app/internal_eval.py), [`retrieval_embeddings_repo.py`](../../apps/pipeline/app/retrieval_embeddings_repo.py)
 
@@ -90,14 +90,14 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 **Target:** Operator can see agent memory footprint and filter notes/graph without pasting UUIDs.
 
-- [ ] **Agent detail summary** — on [`agent-detail-panel.tsx`](../../apps/web/src/components/agent-detail-panel.tsx): show counts (imported conversations / documents, derived notes, optional `note_amem` index count); links:
+- [x] **Agent detail summary** — on [`agent-detail-panel.tsx`](../../apps/web/src/components/agent-detail-panel.tsx): show counts (imported conversations / documents, derived notes, optional `note_amem` index count); links:
   - **View notes** → `/notes?agentId={id}`
   - **View graph** → `/graph?agentId={id}` (once graph filter exists)
-- [ ] **`AgentPicker` component** — combobox over `GET .../north/agents` (display name + id); replace raw UUID field in [`notes-list.tsx`](../../apps/web/src/components/notes-list.tsx).
-- [ ] **Graph agent filter** — add `agent_id` query param to graph workspace URL; extend pipeline graph list/query ([`internal_graph.py`](../../apps/pipeline/app/internal_graph.py) or entity repo) to filter entities/edges/notes provenance by agent when set; add `AgentPicker` to [`graph-filter-bar.tsx`](../../apps/web/src/components/graph-filter-bar.tsx) (orthogonal to `SourcePicker` document filter).
-- [ ] **Agents list row actions** — quick links: Notes, Graph (scoped), Conversations (existing detail).
-- [ ] **Loading / empty / error** — consistent patterns on agent detail stats fetch and picker load failures.
-- [ ] **Do not expand Dream UX** — leave existing Dream button as-is; full job status belongs in Sprint C.
+- [x] **`AgentPicker` component** — combobox over `GET .../north/agents` (display name + id); replace raw UUID field in [`notes-list.tsx`](../../apps/web/src/components/notes-list.tsx).
+- [x] **Graph agent filter** — add `agent_id` query param to graph workspace URL; extend pipeline graph list/query ([`internal_graph.py`](../../apps/pipeline/app/internal_graph.py) or entity repo) to filter entities/edges/notes provenance by agent when set; add `AgentPicker` to [`graph-filter-bar.tsx`](../../apps/web/src/components/graph-filter-bar.tsx) (orthogonal to `SourcePicker` document filter).
+- [x] **Agents list row actions** — quick links: Notes, Graph (scoped), Conversations (existing detail).
+- [x] **Loading / empty / error** — consistent patterns on agent detail stats fetch and picker load failures.
+- [x] **Do not expand Dream UX** — leave existing Dream button as-is; full job status belongs in Sprint C.
 
 **Key files:** agent + notes + graph components above; may need small internal `GET .../north/agents/{id}/stats` if counts are expensive client-side.
 
@@ -109,11 +109,11 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 **Target:** PDF corpus remains visible workspace-wide; North scope is opt-in via agent filter.
 
-- [ ] **Notes default** — with no `agent_id` filter, list includes PDF notes (`agent_id` null) **and** all North notes (document current API behavior; add regression test).
-- [ ] **Notes scoped** — with `agent_id` set, list returns only notes for that agent (exclude null-agent PDF notes unless product decision: add explicit “include workspace PDFs” toggle — default **off**).
-- [ ] **Graph default** — no `agent_id`: unchanged full workspace graph (or document/source filters only).
-- [ ] **Graph scoped** — with `agent_id`: subgraph or filtered entity set tied to that agent’s episodes/documents (define truncation behavior in Progress).
-- [ ] **Chat scope (light touch)** — confirm chat session scope picker can pass `agent_id` where eval already supports it; full chat UX for agent scope is Sprint D unless trivial.
+- [x] **Notes default** — with no `agent_id` filter, list includes PDF notes (`agent_id` null) **and** all North notes (document current API behavior; add regression test).
+- [x] **Notes scoped** — with `agent_id` set, list returns only notes for that agent (exclude null-agent PDF notes unless product decision: add explicit “include workspace PDFs” toggle — default **off**).
+- [x] **Graph default** — no `agent_id`: unchanged full workspace graph (or document/source filters only).
+- [x] **Graph scoped** — with `agent_id`: subgraph or filtered entity set tied to that agent’s episodes/documents (define truncation behavior in Progress).
+- [x] **Chat scope (light touch)** — confirm chat session scope picker can pass `agent_id` where eval already supports it; full chat UX for agent scope is Sprint D unless trivial.
 
 **Progress:**
 
@@ -121,12 +121,12 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 ### Phase 5 — Tests and verification
 
-- [ ] **`test_amem_enrich.py`** — mock LLM: output shape, body unchanged, keywords/context persisted, tags merged, no `dreaming_touched_at` on enrich-only path.
-- [ ] **`test_note_embedding_index.py`** — zettel/amem upsert sets `agent_id`; `_amem_text` includes context/keywords; backfill skips existing ids.
-- [ ] **`test_notes_agent_filter.py`** — list API with/without `agent_id`.
-- [ ] **`test_graph_agent_filter.py`** — graph endpoint respects `agent_id` when implemented.
-- [ ] **Regression** — existing North transcript + PDF ingestion tests still pass.
-- [ ] **Web** — `pnpm exec tsc --noEmit` and `pnpm run build` in `apps/web`.
+- [x] **`test_amem_enrich.py`** — mock LLM: output shape, body unchanged, keywords/context persisted, tags merged, no `dreaming_touched_at` on enrich-only path.
+- [x] **`test_note_embedding_index.py`** — zettel/amem upsert sets `agent_id`; `_amem_text` includes context/keywords; backfill skips existing ids.
+- [x] **`test_notes_agent_filter.py`** — list API with/without `agent_id`.
+- [x] **`test_graph_agent_filter.py`** — graph endpoint respects `agent_id` when implemented.
+- [x] **Regression** — existing North transcript + PDF ingestion tests still pass.
+- [x] **Web** — `pnpm exec tsc --noEmit` and `pnpm run build` in `apps/web`.
 - [ ] **Manual smoke** (operator):
   1. Import North conversation → notes show memory keywords/context in note detail.
   2. Diagnostics/backfill → `note_amem` count increases.
@@ -139,22 +139,22 @@ Sprint 6c + Sprint A shipped substantial scaffolding. Sprint B **hardens and com
 
 ## Definition of done
 
-- [ ] North-derived notes receive A-MEM enrichment (keywords, context, optional tags) with immutable note bodies and visible pipeline log lines on failure.
-- [ ] `retrieval_embeddings` contains `note_zettel` and `note_amem` rows with correct `agent_id`; backfill path exists for legacy notes.
-- [ ] Agent detail, notes, and graph surfaces support agent scope via pickers (not raw UUIDs).
-- [ ] Mixed PDF + North workspace: unscoped views show PDF content; scoped views isolate North agent artifacts.
-- [ ] Sprint B tests pass; web build green.
-- [ ] Sprint C/D scope unchanged (no dreaming audit UI, no eval dataset work).
+- [x] North-derived notes receive A-MEM enrichment (keywords, context, optional tags) with immutable note bodies and visible pipeline log lines on failure.
+- [x] `retrieval_embeddings` contains `note_zettel` and `note_amem` rows with correct `agent_id`; backfill path exists for legacy notes.
+- [x] Agent detail, notes, and graph surfaces support agent scope via pickers (not raw UUIDs).
+- [x] Mixed PDF + North workspace: unscoped views show PDF content; scoped views isolate North agent artifacts.
+- [x] Sprint B tests pass; web build green.
+- [x] Sprint C/D scope unchanged (no dreaming audit UI, no eval dataset work).
 
 ---
 
-## Sprint review (fill at closeout)
+## Sprint review
 
-**Demo readiness:**
+**Demo readiness:** A-MEM enrichment runs only for North imports; pipeline log lines on enrich; Diagnostics can backfill `note_zettel` / `note_amem`; agent detail shows counts and scoped Notes/Graph links; `AgentPicker` on Notes and Graph.
 
-**Gaps / issues:**
+**Gaps / issues:** Manual smoke on live North tenant pending. Chat scope picker does not yet expose agent filter (eval API supports `agent_id`).
 
-**Next steps:** Sprint C — dreaming jobs, link isolation, re-embed after dreaming, retrieval eval matrix ([`sprint_c_tasks.md`](../sprint-c/sprint_c_tasks.md)).
+**Next steps:** Sprint C — dreaming jobs, link isolation, re-embed after dreaming ([`sprint_c_tasks.md`](../sprint-c/sprint_c_tasks.md)).
 
 ---
 
