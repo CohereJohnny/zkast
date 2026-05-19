@@ -135,6 +135,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
           onDocumentFilterChange={setDocumentFilter}
           onAgentFilterChange={setAgentFilter}
           onNewNote={() => void newNote()}
+          workspaceId={workspaceId}
         />
 
         <div className="min-h-[320px] rounded-lg border border-border-subtle bg-surface/30 p-4">

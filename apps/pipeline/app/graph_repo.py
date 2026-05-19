@@ -52,6 +52,7 @@ def _filter_entity_ids_sql(
     entity_types: list[str] | None,
     document_id: str | None,
     tag: str | None,
+    agent_id: str | None = None,
 ) -> tuple[str, list[Any]]:
     """Returns SQL fragment AND ... for entities e, and params."""
     parts: list[str] = []
@@ -70,6 +71,17 @@ def _filter_entity_ids_sql(
             """
         )
         params.append(document_id)
+    if agent_id:
+        parts.append(
+            """
+            EXISTS (
+              SELECT 1 FROM entity_episodes ee
+              JOIN episodes ep ON ep.id = ee.episode_id
+              WHERE ee.entity_id = e.id AND ep.agent_id = %s::uuid
+            )
+            """
+        )
+        params.append(agent_id)
     if tag:
         parts.append(
             """
@@ -140,6 +152,7 @@ def _bfs_entity_ids(
     entity_types: list[str] | None,
     document_id: str | None,
     tag: str | None,
+    agent_id: str | None,
     edge_types: list[str] | None,
     valid_at: datetime | None,
 ) -> tuple[set[str], bool]:
@@ -149,6 +162,7 @@ def _bfs_entity_ids(
         entity_types=entity_types,
         document_id=document_id,
         tag=tag,
+        agent_id=agent_id,
     )
     seeds = [s for s in seed_ids if s]
     if not seeds:
@@ -206,6 +220,7 @@ def list_graph(
     edge_types: list[str] | None = None,
     document_id: str | None = None,
     tag: str | None = None,
+    agent_id: str | None = None,
     valid_at: datetime | None = None,
     node_limit: int = 5000,
 ) -> dict[str, Any]:
@@ -218,6 +233,7 @@ def list_graph(
         entity_types=entity_types,
         document_id=document_id,
         tag=tag,
+        agent_id=agent_id,
     )
     va_sql, va_params = _valid_at_clause(valid_at)
     et_sql = ""
@@ -238,6 +254,7 @@ def list_graph(
                 entity_types=entity_types,
                 document_id=document_id,
                 tag=tag,
+                agent_id=agent_id,
                 edge_types=edge_types,
                 valid_at=valid_at,
             )

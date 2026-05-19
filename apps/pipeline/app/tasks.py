@@ -938,15 +938,55 @@ async def generate_atomic_notes(
                     agent_id=agent_scope,
                     embed_model=embed_model,
                 )
-            if created_ids:
-                await enrich_notes_amem_batch(
+            amem_enabled = bool(pipe.get("amem_enrich_enabled", True))
+            if created_ids and agent_scope and amem_enabled:
+
+                async def _amem_log(*, level: str, message: str, data: dict | None = None) -> None:
+                    await record_log(
+                        redis,
+                        job_id=job_id,
+                        level=level,  # type: ignore[arg-type]
+                        stage="generating_notes",
+                        message=message,
+                        data=data,
+                        database_url=database_url,
+                        ingestion_run_id=ingestion_run_id,
+                    )
+
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="info",
+                    stage="generating_notes",
+                    message=f"Starting A-MEM enrichment for {len(created_ids)} note(s)",
+                    data={"agent_id": agent_scope, "note_count": len(created_ids)},
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+                enrich_result = await enrich_notes_amem_batch(
                     api_key=api_key,
                     model=model,
                     database_url=database_url,
                     workspace_id=workspace_id,
                     note_ids=created_ids,
+                    on_log=_amem_log,
                 )
-            if created_ids:
+                await record_metric(
+                    redis,
+                    job_id=job_id,
+                    name="amem_enriched_count",
+                    value=enrich_result.enriched,
+                    stage="generating_notes",
+                )
+                if enrich_result.failed:
+                    await record_metric(
+                        redis,
+                        job_id=job_id,
+                        name="amem_enrich_failed_count",
+                        value=enrich_result.failed,
+                        stage="generating_notes",
+                    )
+            if created_ids and agent_scope and amem_enabled:
                 await upsert_amem_embeddings_for_notes(
                     api_key=api_key,
                     database_url=database_url,

@@ -218,6 +218,7 @@ async def run_dreaming_job(
                     note_id=target,
                     memory_context=str(nctx)[:2000] if nctx else None,
                     tags=merged_tags if merged_tags else None,
+                    mark_dreaming_touch=True,
                 )
                 append_evolution_history(
                     database_url,

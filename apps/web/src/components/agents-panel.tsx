@@ -212,12 +212,24 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
                 </p>
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               <Link
                 href={`/agents/${a.id}`}
                 className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
               >
                 Open
+              </Link>
+              <Link
+                href={`/notes?agentId=${encodeURIComponent(a.id)}`}
+                className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+              >
+                Notes
+              </Link>
+              <Link
+                href={`/graph?agent_id=${encodeURIComponent(a.id)}`}
+                className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+              >
+                Graph
               </Link>
               <button
                 type="button"

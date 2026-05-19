@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useConfirm, useToast } from "@/components/feedback-provider";
+import { AgentPicker } from "@/components/filters/agent-picker";
 import { SourcePicker } from "@/components/filters/source-picker";
 import { EntityTypeahead } from "@/components/filters/entity-typeahead";
 import { TagPicker } from "@/components/filters/tag-picker";
@@ -22,6 +23,7 @@ export function GraphFilterBar({
   const router = useRouter();
   const sp = useSearchParams();
   const [documentId, setDocumentId] = useState(sp.get("document_id") ?? "");
+  const [agentId, setAgentId] = useState(sp.get("agent_id") ?? sp.get("agentId") ?? "");
   const [tag, setTag] = useState(sp.get("tag") ?? "");
   const [entityTypes, setEntityTypes] = useState(sp.get("entity_types") ?? "");
   const [edgeTypes, setEdgeTypes] = useState(sp.get("edge_types") ?? "");
@@ -42,12 +44,13 @@ export function GraphFilterBar({
       .filter(Boolean)
       .forEach((s) => p.append("seed_entity_ids", s));
     setOrDel("document_id", documentId);
+    setOrDel("agent_id", agentId);
     setOrDel("tag", tag);
     setOrDel("entity_types", entityTypes);
     setOrDel("edge_types", edgeTypes);
     setOrDel("view", view);
     router.push(`${basePath}?${p.toString()}`);
-  }, [router, sp, basePath, documentId, tag, entityTypes, edgeTypes, view, seeds]);
+  }, [router, sp, basePath, documentId, agentId, tag, entityTypes, edgeTypes, view, seeds]);
 
   // D5 — debounce the chip-style filters (entity types, edge types, tag) so
   // typing applies after a short pause without forcing an "Apply" click.
@@ -79,6 +82,7 @@ export function GraphFilterBar({
 
   const clear = useCallback(() => {
     setDocumentId("");
+    setAgentId("");
     setTag("");
     setEntityTypes("");
     setEdgeTypes("");
@@ -142,13 +146,14 @@ export function GraphFilterBar({
   const chips = useMemo(() => {
     const out: string[] = [];
     if (documentId.trim()) out.push(`source`);
+    if (agentId.trim()) out.push(`agent`);
     if (tag.trim()) out.push(`tag`);
     if (entityTypes.trim()) out.push(`entityTypes`);
     if (edgeTypes.trim()) out.push(`edgeTypes`);
     if (view !== "overview") out.push(view);
     if (seeds.trim()) out.push("subgraph");
     return out;
-  }, [documentId, tag, entityTypes, edgeTypes, view, seeds]);
+  }, [documentId, agentId, tag, entityTypes, edgeTypes, view, seeds]);
 
   return (
     <div className="flex flex-col gap-2 border-b border-border-subtle pb-3">
@@ -183,6 +188,11 @@ export function GraphFilterBar({
           <SourcePicker workspaceId={workspaceId} value={documentId} onChange={setDocumentId} />
         ) : (
           <p className="text-caption text-muted">Sources (workspace loading…)</p>
+        )}
+        {workspaceId ? (
+          <AgentPicker workspaceId={workspaceId} value={agentId} onChange={setAgentId} />
+        ) : (
+          <p className="text-caption text-muted">Agent (workspace loading…)</p>
         )}
         {workspaceId ? (
           <TagPicker workspaceId={workspaceId} value={tag} onChange={setTag} />
@@ -244,6 +254,7 @@ export function searchParamsToGraphFilters(sp: URLSearchParams): GraphFilterValu
   return {
     view: sp.get("view") ?? "overview",
     document_id: sp.get("document_id") ?? undefined,
+    agent_id: sp.get("agent_id") ?? sp.get("agentId") ?? undefined,
     tag: sp.get("tag") ?? undefined,
     entity_types: sp.get("entity_types") ?? undefined,
     edge_types: sp.get("edge_types") ?? undefined,

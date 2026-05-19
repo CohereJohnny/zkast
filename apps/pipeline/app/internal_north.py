@@ -28,6 +28,7 @@ from app.north_client import (
     north_list_agent_external_id,
 )
 from app.north_repo import (
+    fetch_agent_stats,
     fetch_conversation_cache,
     fetch_north_agent,
     list_conversation_cache,
@@ -201,6 +202,23 @@ async def get_north_agents(
             "workspace_id": ws,
         },
     )
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/stats")
+async def get_north_agent_stats(
+    workspace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    settings: Settings = request.app.state.settings
+    db = settings.database_url
+    ws = str(workspace_id)
+    aid = str(agent_id)
+    agent = fetch_north_agent(db, workspace_id=ws, agent_id=aid)
+    if not agent:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
+    stats = fetch_agent_stats(db, workspace_id=ws, agent_id=aid)
+    return JSONResponse(content={"agent_id": aid, **stats})
 
 
 @router.get("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/conversations")

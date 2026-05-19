@@ -138,6 +138,7 @@ async def internal_get_graph(
     entity_type: Annotated[list[str] | None, Query()] = None,
     edge_type: Annotated[list[str] | None, Query()] = None,
     document_id: Annotated[uuid.UUID | None, Query()] = None,
+    agent_id: Annotated[uuid.UUID | None, Query()] = None,
     tag: Annotated[str | None, Query()] = None,
     valid_at: Annotated[str | None, Query()] = None,
     node_limit: Annotated[int, Query(ge=1, le=25000)] = 5000,
@@ -157,6 +158,7 @@ async def internal_get_graph(
             edge_types=edge_type,
             document_id=str(document_id) if document_id else None,
             tag=tag,
+            agent_id=str(agent_id) if agent_id else None,
             valid_at=va,
             node_limit=node_limit,
         )
