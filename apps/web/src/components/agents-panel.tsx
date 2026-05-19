@@ -4,6 +4,7 @@ import { Bot, CloudDownload, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { DreamJobStatus } from "@/components/dream-job-status";
 import { readApiErrorMessage } from "@/lib/api-error-message";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,9 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
   const [loading, setLoading] = useState(true);
   const [pipelineCount, setPipelineCount] = useState<number | null>(null);
   const [pipelineWorkspaceEcho, setPipelineWorkspaceEcho] = useState<string | null>(null);
+  const [activeDreamJob, setActiveDreamJob] = useState<{ agentId: string; jobId: string } | null>(
+    null,
+  );
 
   const load = useCallback(async () => {
     setError(null);
@@ -241,9 +245,15 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
                     const res = await fetch(`/api/v1/workspaces/${workspaceId}/north/agents/${a.id}/dream`, {
                       method: "POST",
                     });
-                    const body = await res.json().catch(() => ({}));
+                    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
                     if (!res.ok) {
                       setError(readApiErrorMessage(body, `Dream HTTP ${res.status}`));
+                    } else {
+                      const jobId = typeof body.job_id === "string" ? body.job_id : null;
+                      if (jobId) {
+                        setActiveDreamJob({ agentId: a.id, jobId });
+                        setNotice(`Dream job queued for ${a.display_name || a.external_agent_id}`);
+                      }
                     }
                   } finally {
                     setBusy(null);
@@ -258,6 +268,13 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
           </li>
         ))}
       </ul>
+      {activeDreamJob ? (
+        <DreamJobStatus
+          workspaceId={workspaceId}
+          agentId={activeDreamJob.agentId}
+          jobId={activeDreamJob.jobId}
+        />
+      ) : null}
     </div>
   );
 }

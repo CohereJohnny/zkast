@@ -280,3 +280,14 @@ Use this file for **non-blocking** refactors, dependency upgrades, and cleanup d
   data model both already accept the legacy `decision` field as an alias
   for `status`.
 - **Status**: Open
+
+### TD-016 — Chat scope picker: first-class North agent filter
+- **Date**: 2026-05-19
+- **Area**: web + pipeline
+- **Description**: Replace manual agent UUID text entry in `chat-scope-picker.tsx`
+  with `AgentPicker` and persist `agent_id` in session scope when navigating
+  from agent-scoped Notes/Graph links.
+- **Reason**: Sprint C audits retrieval scope via `retrieval_records` and supports
+  `agent_id` across eval modes; chat UX still expects pasted UUIDs for scoped turns.
+- **Suggested sprint**: Sprint D (product polish).
+- **Status**: Open

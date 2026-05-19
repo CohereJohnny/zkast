@@ -18,12 +18,17 @@ from app.north_repo import finalize_dream_job, insert_dream_job, insert_dream_mu
 from app.notes_repo import (
     add_note_link,
     append_evolution_history,
+    fetch_note,
     list_notes,
     patch_note_derivations,
 )
 from app.workspace_repo import fetch_pipeline_settings
 
 logger = structlog.get_logger(__name__)
+
+DREAM_JOB_STATUS_RUNNING = "running"
+DREAM_JOB_STATUS_SUCCEEDED = "succeeded"
+DREAM_JOB_STATUS_FAILED = "failed"
 
 
 def _extract_json_object(raw: str) -> dict[str, Any]:
@@ -46,11 +51,25 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _dreaming_caps(pipe: dict[str, Any]) -> tuple[int, int, int]:
+    max_notes = int(pipe.get("dreaming_max_notes") or 60)
+    neighbors = int(pipe.get("dreaming_neighbors_per_note") or 6)
+    pairs_cap = int(pipe.get("dreaming_pairs_per_run") or 360)
+    return max(2, min(max_notes, 500)), max(1, min(neighbors, 20)), max(1, pairs_cap)
+
+
+def _bodies_unchanged(before: dict[str, Any], after: dict[str, Any] | None) -> bool:
+    if not after:
+        return False
+    return before.get("title") == after.get("title") and before.get("body") == after.get("body")
+
+
 async def run_dreaming_job(
     ctx: dict[str, Any],
     *,
     workspace_id: str,
     agent_id: str,
+    job_id: str | None = None,
 ) -> None:
     """arq task: consolidate links + evolve derived fields for one agent."""
     database_url: str = ctx["database_url"]
@@ -62,12 +81,16 @@ async def run_dreaming_job(
     pipe = fetch_pipeline_settings(database_url, workspace_id)
     model = str(pipe.get("large_model") or "command-a-plus-05-2026")
     embed_model = str(pipe.get("embed_model") or "embed-v4.0")
+    max_notes, neighbors_per_note, pairs_cap = _dreaming_caps(pipe)
 
-    job_id = insert_dream_job(database_url, workspace_id=workspace_id, agent_id=agent_id)
+    job_id = job_id or insert_dream_job(database_url, workspace_id=workspace_id, agent_id=agent_id)
     stats: dict[str, Any] = {
         "pairs_considered": 0,
         "links_added": 0,
         "neighbors_updated": 0,
+        "notes_considered": 0,
+        "embeddings_refreshed": 0,
+        "immutability_violations": 0,
     }
     reindex_amem: set[str] = set()
 
@@ -76,15 +99,16 @@ async def run_dreaming_job(
             database_url,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            limit=60,
+            limit=max_notes,
             offset=0,
             sort="updated_at_desc",
         )
+        stats["notes_considered"] = len(notes)
         if len(notes) < 2:
             finalize_dream_job(
                 database_url,
                 job_id=job_id,
-                status="succeeded",
+                status=DREAM_JOB_STATUS_SUCCEEDED,
                 stats={**stats, "message": "not_enough_notes"},
             )
             return
@@ -102,6 +126,9 @@ async def run_dreaming_job(
         )
 
         for i, note in enumerate(notes):
+            if stats["pairs_considered"] >= pairs_cap:
+                stats["pairs_cap_reached"] = True
+                break
             vec_i = vectors[i] if i < len(vectors) else None
             if not vec_i:
                 continue
@@ -111,7 +138,7 @@ async def run_dreaming_job(
                     continue
                 scored.append((_cosine(list(vec_i), list(vec_j)), j))
             scored.sort(reverse=True)
-            neighbors = scored[:6]
+            neighbors = scored[:neighbors_per_note]
             if not neighbors:
                 continue
 
@@ -211,6 +238,12 @@ async def run_dreaming_job(
             tag_adds = [str(t).strip().lower() for t in (decision.get("neighbor_tag_additions") or []) if str(t).strip()]
             if nctx or tag_adds:
                 tgt_note = next((x for x in notes if str(x["id"]) == target), None)
+                if not tgt_note:
+                    continue
+                before = {
+                    "title": tgt_note.get("title"),
+                    "body": tgt_note.get("body"),
+                }
                 merged_tags = list(dict.fromkeys([*(tgt_note.get("tags") or []), *tag_adds]))[:30] if tgt_note else tag_adds
                 patch_note_derivations(
                     database_url,
@@ -220,6 +253,15 @@ async def run_dreaming_job(
                     tags=merged_tags if merged_tags else None,
                     mark_dreaming_touch=True,
                 )
+                after = fetch_note(database_url, workspace_id=workspace_id, note_id=target)
+                if not _bodies_unchanged(before, after):
+                    stats["immutability_violations"] = int(stats.get("immutability_violations", 0)) + 1
+                    logger.error(
+                        "dreaming_immutability_violation",
+                        note_id=target,
+                        job_id=job_id,
+                    )
+                    continue
                 append_evolution_history(
                     database_url,
                     workspace_id=workspace_id,
@@ -250,14 +292,20 @@ async def run_dreaming_job(
                 agent_id=agent_id,
                 embed_model=embed_model,
             )
+            stats["embeddings_refreshed"] = len(reindex_amem)
 
-        finalize_dream_job(database_url, job_id=job_id, status="succeeded", stats=stats)
+        finalize_dream_job(
+            database_url,
+            job_id=job_id,
+            status=DREAM_JOB_STATUS_SUCCEEDED,
+            stats=stats,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("dreaming_job_failed", agent_id=agent_id, error=str(exc))
         finalize_dream_job(
             database_url,
             job_id=job_id,
-            status="failed",
+            status=DREAM_JOB_STATUS_FAILED,
             stats=stats,
             failure_reason=str(exc)[:2000],
         )

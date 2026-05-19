@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import raw_chunk_index
 from app.config import Settings
-from app.eval.runner import run_eval as _run_eval_async
+from app.eval.runner import default_modes_for_dataset, run_eval as _run_eval_async
 from app.graphiti_factory import resolve_cohere_api_key
 from app.note_embedding_index import backfill_note_embeddings
 from app.retrieval_embeddings_repo import count_by_kind
@@ -268,10 +268,10 @@ async def start_eval_run(
     Responds 202 with the run id; the UI polls
     ``GET .../eval/runs/{run_id}`` until ``status='complete'``.
     """
-    modes = list(body.retrieval_modes or ["rag", "graph", "hybrid"])
+    ds_key = (body.dataset_name or "oil_gas_v1").removesuffix(".yaml")
+    modes = list(body.retrieval_modes or default_modes_for_dataset(ds_key))
     notes = body.notes
     agent_id_val = str(body.agent_id) if body.agent_id else None
-    ds_key = (body.dataset_name or "oil_gas_v1").removesuffix(".yaml")
     ds_path = Path(__file__).resolve().parent / "eval" / "datasets" / f"{ds_key}.yaml"
     dataset_path = ds_path if ds_path.is_file() else None
 

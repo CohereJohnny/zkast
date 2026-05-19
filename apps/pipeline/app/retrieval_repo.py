@@ -16,6 +16,20 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 
+def _items_with_scope(
+    retrieved_items: list[dict[str, Any]],
+    scope: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Prefix audit metadata so eval/inspector can see active scope without a migration."""
+    if not scope:
+        return retrieved_items
+    agent_id = scope.get("agent_id")
+    if not agent_id and not scope.get("document_id"):
+        return retrieved_items
+    meta: dict[str, Any] = {"kind": "scope_snapshot", "scope": dict(scope)}
+    return [meta, *retrieved_items]
+
+
 def insert_retrieval_record(
     database_url: str,
     *,
@@ -26,8 +40,10 @@ def insert_retrieval_record(
     retrieved_items: list[dict[str, Any]],
     total_candidates: int,
     truncated: bool,
+    scope: dict[str, Any] | None = None,
 ) -> str:
     rid = str(uuid4())
+    items = _items_with_scope(retrieved_items, scope)
     with psycopg.connect(database_url) as conn:
         conn.execute(
             """
@@ -46,7 +62,7 @@ def insert_retrieval_record(
                 message_id,
                 retrieval_strategy,
                 query_text,
-                Json(retrieved_items),
+                Json(items),
                 int(total_candidates),
                 bool(truncated),
             ),

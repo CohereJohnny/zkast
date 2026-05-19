@@ -235,6 +235,7 @@ async def run_chat_turn(
             retrieved_items=retrieved_items,
             total_candidates=total_candidates,
             truncated=truncated,
+            scope=dict(session.get("scope") or {}),
         )
         await publish_job_event(
             redis,

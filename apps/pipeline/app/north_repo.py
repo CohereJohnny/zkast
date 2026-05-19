@@ -306,3 +306,96 @@ def insert_dream_mutation(
             (mid, dream_job_id, note_id, mutation_type, Json(payload)),
         )
         conn.commit()
+
+
+def _serialize_dream_job_row(row: dict[str, Any]) -> dict[str, Any]:
+    r = dict(row)
+    for key in ("id", "workspace_id", "agent_id"):
+        if r.get(key) is not None:
+            r[key] = str(r[key])
+    for ts in ("started_at", "ended_at"):
+        v = r.get(ts)
+        if v is not None and hasattr(v, "isoformat"):
+            r[ts] = v.isoformat()
+    stats = r.get("stats")
+    if stats is not None and not isinstance(stats, dict):
+        r["stats"] = dict(stats)
+    return r
+
+
+def list_dream_jobs(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              id, workspace_id, agent_id, status, stats, failure_reason,
+              started_at, ended_at
+            FROM dream_jobs
+            WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
+            ORDER BY started_at DESC
+            LIMIT %s
+            """,
+            (workspace_id, agent_id, int(limit)),
+        ).fetchall()
+    return [_serialize_dream_job_row(dict(r)) for r in rows]
+
+
+def fetch_dream_job(
+    database_url: str,
+    *,
+    workspace_id: str,
+    job_id: str,
+) -> dict[str, Any] | None:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT
+              id, workspace_id, agent_id, status, stats, failure_reason,
+              started_at, ended_at
+            FROM dream_jobs
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            LIMIT 1
+            """,
+            (job_id, workspace_id),
+        ).fetchone()
+    if not row:
+        return None
+    return _serialize_dream_job_row(dict(row))
+
+
+def list_dream_job_mutations(
+    database_url: str,
+    *,
+    dream_job_id: str,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              id::text AS id,
+              dream_job_id::text AS dream_job_id,
+              note_id::text AS note_id,
+              mutation_type,
+              payload,
+              created_at
+            FROM dream_job_mutations
+            WHERE dream_job_id = %s::uuid
+            ORDER BY created_at ASC
+            """,
+            (dream_job_id,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        item = dict(r)
+        if item.get("created_at") and hasattr(item["created_at"], "isoformat"):
+            item["created_at"] = item["created_at"].isoformat()
+        if item.get("payload") is not None and not isinstance(item["payload"], dict):
+            item["payload"] = dict(item["payload"])
+        out.append(item)
+    return out

@@ -21,6 +21,10 @@ DEFAULT_PIPELINE_SETTINGS: dict[str, Any] = {
     # North Agents API base URL (optional). Bearer token is stored in
     # ``api_keys`` row kind ``north_bearer`` (encrypted), not in JSON.
     "north_base_url": None,
+    # Offline dreaming caps (per agent run).
+    "dreaming_max_notes": 60,
+    "dreaming_neighbors_per_note": 6,
+    "dreaming_pairs_per_run": 360,
 }
 
 

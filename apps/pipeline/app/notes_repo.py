@@ -451,6 +451,13 @@ def add_note_link(
     link_reason: str | None = None,
     link_strength: float = 1.0,
 ) -> dict[str, Any]:
+    """Create a directed note link.
+
+    Isolation (default, cross-agent research mode off):
+    - Rejects when both endpoints have different non-null ``agent_id``.
+    - Allows links when one or both ``agent_id`` are null (e.g. PDF note to
+      North-scoped note). Stricter one-sided rejection is not enabled.
+    """
     if source_note_id == target_note_id:
         raise ValueError("cannot link note to itself")
     if kind == "custom" and not (custom_label and custom_label.strip()):

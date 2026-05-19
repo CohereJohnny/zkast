@@ -30,8 +30,12 @@ from app.north_client import (
 from app.north_repo import (
     fetch_agent_stats,
     fetch_conversation_cache,
+    fetch_dream_job,
     fetch_north_agent,
+    insert_dream_job,
     list_conversation_cache,
+    list_dream_job_mutations,
+    list_dream_jobs,
     list_north_agents,
     update_agent_sync_cursor,
     upsert_conversation_cache,
@@ -507,6 +511,44 @@ async def post_north_conversation_import(
     )
 
 
+@router.get("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/dream-jobs")
+async def get_north_dream_jobs(
+    workspace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> JSONResponse:
+    settings: Settings = request.app.state.settings
+    ws = str(workspace_id)
+    aid = str(agent_id)
+    agent = fetch_north_agent(settings.database_url, workspace_id=ws, agent_id=aid)
+    if not agent:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
+    items = list_dream_jobs(
+        settings.database_url,
+        workspace_id=ws,
+        agent_id=aid,
+        limit=limit,
+    )
+    return JSONResponse(content={"items": items})
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/dream-jobs/{job_id}")
+async def get_dream_job_detail(
+    workspace_id: uuid.UUID,
+    job_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    settings: Settings = request.app.state.settings
+    ws = str(workspace_id)
+    jid = str(job_id)
+    job = fetch_dream_job(settings.database_url, workspace_id=ws, job_id=jid)
+    if not job:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Dream job"}})
+    mutations = list_dream_job_mutations(settings.database_url, dream_job_id=jid)
+    return JSONResponse(content={"job": job, "mutations": mutations})
+
+
 @router.post("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/dream")
 async def post_north_dream(
     workspace_id: uuid.UUID,
@@ -521,15 +563,19 @@ async def post_north_dream(
     if not agent:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
 
+    job_id = insert_dream_job(db, workspace_id=ws, agent_id=aid)
     pool = request.app.state.arq_pool
-    dj = str(uuid.uuid4())
     await pool.enqueue_job(
         "run_dreaming_job",
         workspace_id=ws,
         agent_id=aid,
-        _job_id=f"dream:{aid}:{dj}",
+        job_id=job_id,
+        _job_id=f"dream:{aid}:{job_id}",
     )
-    return JSONResponse(status_code=202, content={"enqueued": True, "client_token": dj})
+    return JSONResponse(
+        status_code=202,
+        content={"enqueued": True, "job_id": job_id, "client_token": job_id},
+    )
 
 
 @router.get("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/conversations/{conversation_id}/cache")

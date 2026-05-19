@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DreamJobStatus } from "@/components/dream-job-status";
 import { readApiErrorMessage } from "@/lib/api-error-message";
 import { useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,8 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
   } | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [dreamJobId, setDreamJobId] = useState<string | null>(null);
+  const [dreamBusy, setDreamBusy] = useState(false);
 
   const loadPreview = useCallback(
     async (cid: string) => {
@@ -288,9 +291,37 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
             >
               View graph
             </Link>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary disabled:opacity-50"
+              disabled={dreamBusy}
+              onClick={async () => {
+                setDreamBusy(true);
+                setError(null);
+                try {
+                  const res = await fetch(
+                    `/api/v1/workspaces/${workspaceId}/north/agents/${agentId}/dream`,
+                    { method: "POST" },
+                  );
+                  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+                  if (!res.ok) {
+                    setError(readApiErrorMessage(body, `Dream HTTP ${res.status}`));
+                    return;
+                  }
+                  const jid = typeof body.job_id === "string" ? body.job_id : null;
+                  if (jid) setDreamJobId(jid);
+                } finally {
+                  setDreamBusy(false);
+                }
+              }}
+            >
+              <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
+              Dream
+            </button>
           </div>
         ) : null}
       </div>
+      <DreamJobStatus workspaceId={workspaceId} agentId={agentId} jobId={dreamJobId} />
       {error ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">
           {error}
