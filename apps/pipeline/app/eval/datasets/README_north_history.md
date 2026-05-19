@@ -18,6 +18,17 @@ Exercise agent-scoped retrieval across `raw_transcript`, `zettelkasten_notes`,
 5. Optional: run **Dream** on the agent so `dreaming_touched_at` and link
    mutations exist for temporal questions.
 
+## Local tests (link isolation)
+
+Integration tests need a **real** Postgres URL, not a `...` placeholder:
+
+```bash
+export DATABASE_URL=postgresql://zkast:zkast@127.0.0.1:5432/zkast
+cd apps/pipeline && python -m pytest tests/test_note_link_isolation.py -q
+```
+
+Ensure `docker compose up postgres` (or full stack) is running and migrations are applied through `0011`.
+
 ## Run
 
 ```bash

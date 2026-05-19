@@ -2,17 +2,32 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 
 from app.notes_repo import add_note_link, delete_note, insert_note
-from tests.db_helpers import atomic_notes_table_exists
+from tests.db_helpers import atomic_notes_table_exists, get_database_url, postgres_reachable
 
 DEFAULT_WS = "00000000-0000-4000-8000-000000000002"
 
-pytestmark = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="DATABASE_URL not set")
+pytestmark = pytest.mark.skipif(
+    get_database_url() is None,
+    reason=(
+        "DATABASE_URL unset or invalid — use e.g. "
+        "postgresql://zkast:zkast@127.0.0.1:5432/zkast (not a ... placeholder)"
+    ),
+)
+
+
+def _db_or_skip() -> str:
+    db = get_database_url()
+    assert db is not None
+    if not postgres_reachable(db):
+        pytest.skip("Postgres not reachable at DATABASE_URL — start docker compose postgres")
+    if not atomic_notes_table_exists(db):
+        pytest.skip("Run Alembic migrations through 0011 for this test")
+    return db
 
 
 def _insert_manual(db: str, *, note_id: str, agent_id: str | None) -> None:
@@ -32,9 +47,7 @@ def _insert_manual(db: str, *, note_id: str, agent_id: str | None) -> None:
 
 
 def test_same_agent_link_succeeds() -> None:
-    db = os.environ["DATABASE_URL"]
-    if not atomic_notes_table_exists(db):
-        pytest.skip("Run Alembic migrations through 0011 for this test")
+    db = _db_or_skip()
     agent = str(uuid.uuid4())
     src, tgt = str(uuid.uuid4()), str(uuid.uuid4())
     _insert_manual(db, note_id=src, agent_id=agent)
@@ -58,9 +71,7 @@ def test_same_agent_link_succeeds() -> None:
 
 
 def test_cross_agent_link_forbidden() -> None:
-    db = os.environ["DATABASE_URL"]
-    if not atomic_notes_table_exists(db):
-        pytest.skip("Run Alembic migrations through 0011 for this test")
+    db = _db_or_skip()
     src, tgt = str(uuid.uuid4()), str(uuid.uuid4())
     _insert_manual(db, note_id=src, agent_id=str(uuid.uuid4()))
     _insert_manual(db, note_id=tgt, agent_id=str(uuid.uuid4()))
@@ -81,9 +92,7 @@ def test_cross_agent_link_forbidden() -> None:
 
 
 def test_self_link_rejected() -> None:
-    db = os.environ["DATABASE_URL"]
-    if not atomic_notes_table_exists(db):
-        pytest.skip("Run Alembic migrations through 0011 for this test")
+    db = _db_or_skip()
     nid = str(uuid.uuid4())
     _insert_manual(db, note_id=nid, agent_id=str(uuid.uuid4()))
     try:
@@ -103,9 +112,7 @@ def test_self_link_rejected() -> None:
 
 def test_pdf_to_agent_scoped_link_allowed() -> None:
     """One null agent_id (PDF) + one North agent — allowed when research mode is off."""
-    db = os.environ["DATABASE_URL"]
-    if not atomic_notes_table_exists(db):
-        pytest.skip("Run Alembic migrations through 0011 for this test")
+    db = _db_or_skip()
     pdf_id, north_id = str(uuid.uuid4()), str(uuid.uuid4())
     _insert_manual(db, note_id=pdf_id, agent_id=None)
     _insert_manual(db, note_id=north_id, agent_id=str(uuid.uuid4()))
