@@ -15,6 +15,16 @@ def _uuid(row: dict[str, Any], key: str) -> None:
         row[key] = str(row[key])
 
 
+def _serialize_north_agent_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy safe for ``JSONResponse`` (datetimes are not JSON-serializable by default)."""
+    r = dict(row)
+    _uuid(r, "id")
+    _uuid(r, "workspace_id")
+    for ts in ("created_at", "updated_at"):
+        v = r.get(ts)
+        if v is not None and hasattr(v, "isoformat"):
+            r[ts] = v.isoformat()
+    return r
 def upsert_north_agent(
     database_url: str,
     *,
@@ -50,10 +60,7 @@ def upsert_north_agent(
         ).fetchone()
         conn.commit()
         assert row
-        r = dict(row)
-        _uuid(r, "id")
-        _uuid(r, "workspace_id")
-        return r
+        return _serialize_north_agent_row(dict(row))
 
 
 def list_north_agents(database_url: str, *, workspace_id: str) -> list[dict[str, Any]]:
@@ -68,10 +75,7 @@ def list_north_agents(database_url: str, *, workspace_id: str) -> list[dict[str,
         ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
-        r = dict(row)
-        _uuid(r, "id")
-        _uuid(r, "workspace_id")
-        out.append(r)
+        out.append(_serialize_north_agent_row(dict(row)))
     return out
 
 
@@ -92,10 +96,7 @@ def fetch_north_agent(
         ).fetchone()
     if not row:
         return None
-    r = dict(row)
-    _uuid(r, "id")
-    _uuid(r, "workspace_id")
-    return r
+    return _serialize_north_agent_row(dict(row))
 
 
 def update_agent_sync_cursor(
@@ -145,19 +146,21 @@ def upsert_conversation_cache(
 def list_conversation_cache(
     database_url: str,
     *,
+    workspace_id: str,
     agent_id: str,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         rows = conn.execute(
             """
-            SELECT north_conversation_id, payload, fetched_at
-            FROM north_conversation_cache
-            WHERE agent_id = %s::uuid
-            ORDER BY fetched_at DESC
+            SELECT ncc.north_conversation_id, ncc.payload, ncc.fetched_at
+            FROM north_conversation_cache ncc
+            INNER JOIN north_agents na ON na.id = ncc.agent_id
+            WHERE na.workspace_id = %s::uuid AND ncc.agent_id = %s::uuid
+            ORDER BY ncc.fetched_at DESC
             LIMIT %s
             """,
-            (agent_id, limit),
+            (workspace_id, agent_id, limit),
         ).fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:

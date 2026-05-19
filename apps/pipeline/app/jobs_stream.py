@@ -46,16 +46,21 @@ async def _replay_from_stream(redis: Any, job_id: str) -> AsyncIterator[str]:
             continue
 
 
-async def sse_job_events(redis: Any, job_id: str) -> AsyncIterator[str]:
-    """SSE generator: replay last N events, then tail pub/sub for live ones.
+async def sse_job_events(
+    redis: Any,
+    job_id: str,
+    *,
+    replay_history: bool = True,
+) -> AsyncIterator[str]:
+    """SSE generator: optionally replay recent history, then tail pub/sub for live ones.
 
-    The two-phase design keeps the wire format unchanged for existing
-    consumers (``JobStreamBridge``) while making the new ``JobLogConsole``
-    drawer feel instant.
+    ``replay_history=False`` is used by the Pipeline log UI so navigations do not
+    refill the panel from Redis Stream history after the user cleared it or left
+    the page (documents panel SSE keeps replay for mid-job progress hydration).
     """
-    # Phase 1 — replay recent history.
-    async for chunk in _replay_from_stream(redis, job_id):
-        yield chunk
+    if replay_history:
+        async for chunk in _replay_from_stream(redis, job_id):
+            yield chunk
 
     # Phase 2 — live tail.
     pubsub = redis.pubsub()

@@ -22,13 +22,29 @@ export async function POST(
   const denied = await requireMatchingWorkspace(workspaceId);
   if (denied) return denied;
 
-  const res = await pipelineFetch(
-    `/internal/v1/workspaces/${encodeURIComponent(workspaceId)}/north/agents/sync`,
-    { method: "POST", throwOnError: false },
-  );
-  const text = await res.text();
-  return new NextResponse(text, {
-    status: res.status,
-    headers: { "Content-Type": res.headers.get("Content-Type") ?? "application/json" },
-  });
+  try {
+    const res = await pipelineFetch(
+      `/internal/v1/workspaces/${encodeURIComponent(workspaceId)}/north/agents/sync`,
+      { method: "POST", throwOnError: false },
+    );
+    const text = await res.text();
+    return new NextResponse(text, {
+      status: res.status,
+      headers: { "Content-Type": res.headers.get("Content-Type") ?? "application/json" },
+    });
+  } catch (err) {
+    console.error("north agents sync proxy failed", err);
+    return NextResponse.json(
+      {
+        error: {
+          code: "pipeline_unreachable",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Could not reach the pipeline service. Is it running and is PIPELINE_INTERNAL_URL set?",
+        },
+      },
+      { status: 502 },
+    );
+  }
 }

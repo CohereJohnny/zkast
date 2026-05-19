@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useConfirm, useToast } from "@/components/feedback-provider";
-import { DocumentPicker } from "@/components/filters/document-picker";
+import { SourcePicker } from "@/components/filters/source-picker";
 import { EntityTypeahead } from "@/components/filters/entity-typeahead";
 import { TagPicker } from "@/components/filters/tag-picker";
 import { TypeMultiselect } from "@/components/filters/type-multiselect";
@@ -141,7 +141,7 @@ export function GraphFilterBar({
 
   const chips = useMemo(() => {
     const out: string[] = [];
-    if (documentId.trim()) out.push(`doc`);
+    if (documentId.trim()) out.push(`source`);
     if (tag.trim()) out.push(`tag`);
     if (entityTypes.trim()) out.push(`entityTypes`);
     if (edgeTypes.trim()) out.push(`edgeTypes`);
@@ -180,13 +180,9 @@ export function GraphFilterBar({
           <p className="text-caption text-muted">Seed entities (workspace loading…)</p>
         )}
         {workspaceId ? (
-          <DocumentPicker
-            workspaceId={workspaceId}
-            value={documentId}
-            onChange={setDocumentId}
-          />
+          <SourcePicker workspaceId={workspaceId} value={documentId} onChange={setDocumentId} />
         ) : (
-          <p className="text-caption text-muted">Document (workspace loading…)</p>
+          <p className="text-caption text-muted">Sources (workspace loading…)</p>
         )}
         {workspaceId ? (
           <TagPicker workspaceId={workspaceId} value={tag} onChange={setTag} />

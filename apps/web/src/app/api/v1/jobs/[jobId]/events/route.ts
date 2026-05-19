@@ -22,7 +22,13 @@ export async function GET(req: NextRequest, { params }: { params: { jobId: strin
   const denied = await requireMatchingWorkspace(workspaceId);
   if (denied) return denied;
 
-  const res = await pipelineFetch(`/internal/v1/jobs/${encodeURIComponent(jobId)}/events`, {
+  const replayParam = req.nextUrl.searchParams.get("replay");
+  const upstreamPath =
+    replayParam !== null && replayParam !== ""
+      ? `/internal/v1/jobs/${encodeURIComponent(jobId)}/events?replay=${encodeURIComponent(replayParam)}`
+      : `/internal/v1/jobs/${encodeURIComponent(jobId)}/events`;
+
+  const res = await pipelineFetch(upstreamPath, {
     workspaceId,
     throwOnError: false,
   });

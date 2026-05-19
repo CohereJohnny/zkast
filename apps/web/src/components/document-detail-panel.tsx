@@ -357,26 +357,38 @@ export function DocumentDetailPanel({
           </div>
         </section>
 
-        <section aria-label="Re-ingest" className="mb-6">
-          <p className="text-body font-medium text-secondary">Re-ingest (new PDF)</p>
-          <p className="mt-1 text-caption text-muted">
-            Upload replaces this document id in metadata; prior episodes and notes are kept until you delete them.
-          </p>
-          <input
-            ref={reingestRef}
-            type="file"
-            accept="application/pdf,.pdf"
-            className="sr-only"
-            onChange={(e) => void onReingestPick(e)}
-          />
-          <button
-            type="button"
-            className="mt-2 rounded-md bg-accent-primary px-3 py-1.5 text-caption font-medium text-canvas"
-            onClick={() => reingestRef.current?.click()}
-          >
-            Choose replacement PDF
-          </button>
-        </section>
+        {doc ? (
+          doc.mime_type === "application/pdf" ? (
+            <section aria-label="Re-ingest" className="mb-6">
+              <p className="text-body font-medium text-secondary">Re-ingest (new PDF)</p>
+              <p className="mt-1 text-caption text-muted">
+                Upload replaces this document id in metadata; prior episodes and notes are kept until you delete them.
+              </p>
+              <input
+                ref={reingestRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                className="sr-only"
+                onChange={(e) => void onReingestPick(e)}
+              />
+              <button
+                type="button"
+                className="mt-2 rounded-md bg-accent-primary px-3 py-1.5 text-caption font-medium text-canvas"
+                onClick={() => reingestRef.current?.click()}
+              >
+                Choose replacement PDF
+              </button>
+            </section>
+          ) : (
+            <section aria-label="Re-ingest" className="mb-6">
+              <p className="text-body font-medium text-secondary">Re-ingest</p>
+              <p className="mt-1 text-caption text-muted">
+                North conversation transcripts are JSON artifacts. Use{" "}
+                <span className="text-secondary">Delete</span> and import again from Agents if you need a fresh copy.
+              </p>
+            </section>
+          )
+        ) : null}
 
         <section aria-label="Ingestion runs" className="mb-6">
           <p className="text-body font-medium text-secondary">Ingestion runs</p>

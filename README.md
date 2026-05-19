@@ -11,7 +11,7 @@ The product is **self-hostable first** (Docker Compose, BYO Cohere key) with a p
 | 4 | `sprint-4` | Atomic notes, graph extraction, notes workspace UI |
 | 5b | `sprint-5b` | Graph viz, merge with persisted undo, snapshots + review, JobLogConsole drawer, heartbeat reconciler, Diagnostics page |
 | 5c | `sprint-5c` | Typed Graphiti extraction (Pydantic taxonomy), LangExtract source-grounded evidence, picklist filter UX |
-| 6 | `sprint-6` | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; **graph-context grounding document** (BUG-013 mitigation) gives the LLM typed counts and exemplars for aggregation queries; pipeline log attached to Documents column; workspace layout overhaul |
+| 6 | `sprint-6` | Grounded chat (core): hybrid retrieval, Cohere v2 chat with documents + citations, SSE streaming with seven event types, refusal + cancel; **graph-context grounding document** (BUG-013 mitigation) gives the LLM typed counts and exemplars for aggregation queries; **pipeline log** docked under **Documents** and **Conversations** source libraries; compact documents rail only on `/documents`; workspace layout overhaul |
 | 6b | `sprints/sprint-6b` (branch) | GraphRAG-vs-Naive-RAG eval + TD-015 traversal handlers shipped. Naive RAG uses original parsed PDF chunks only; GraphRAG uses notes + entities + relationships + graph context; Hybrid composes the typed-entity / multi-hop handlers with graph supporting evidence. Side-by-side comparison built into the regular Chat surface for every user. Migration `0010_retrieval_eval_indexes` adds `retrieval_embeddings` (pgvector) and `chat_eval_*` tables. |
 
 ## Architecture
@@ -100,15 +100,11 @@ Graphiti bounds concurrent LLM, embedding, and rerank calls (`max_coroutines`). 
    docker compose up --build
    ```
 
-3. Open the UI: **http://localhost:3000** (redirects to `/documents`). Core routes: Documents (PDF upload + status), Notes, Graph, Chat, Snapshots, External Targets, Settings.
+3. Open the UI: **http://localhost:3000** (redirects to `/documents`). Core routes: **Documents** (PDF upload + ingestion status), **Conversations** (North agent conversation import + same pipeline stages), Notes, Graph, Chat, Snapshots, External Targets, Settings.
 
-### Ingestion observability (Sprint 5b)
+### Ingestion observability (Sprint 5b, refined in later UI passes)
 
-- **Pipeline log drawer**: a collapsible bottom panel on every workspace
-  route streams live worker events (parse / notes / graph stages, per-episode
-  progress, Cohere token counts) via SSE. Closed by default; click the
-  console tab to expand. The drawer subscribes to all active ingestion jobs
-  registered by the documents panel.
+- **Pipeline log (`JobLogConsole`)**: a collapsible panel docked **under the source library** on **`/documents`** and **`/conversations`** (PDFs and imported conversations both enqueue the same ingestion jobs). It streams live worker events (parse / notes / graph stages, per-episode progress, Cohere token counts) via SSE—closed by default; expand the console header to tail jobs. It opens one SSE per **active job** the workspace shell has registered (today: **`DocumentsPanel`** and related North import flows call `registerActiveJob` when a run starts). Other workspace routes use a **wider main column + graph rail** without the compact documents strip, so open **Documents** or **Conversations** when you want the log beside the source you are driving.
 - **Heartbeats + reconciler**: each pipeline task writes
   `ingestion_runs.last_heartbeat_at` every 10 seconds. A worker cron
   (`reconcile_stuck_documents`) sweeps once a minute and flips any document
@@ -179,12 +175,16 @@ successful merge:
   ids (`note:<uuid>`, `entity:<uuid>`, `relationship:<uuid>`, `episode:<uuid>`).
 - **SSE streaming** — seven event types `retrieval_started`,
   `retrieval_complete`, `token`, `citation`, `message_complete`, `job_failed`,
-  `job_cancelled` fan out through the same Redis pub/sub + Stream the
-  JobLogConsole drawer already subscribes to. So the drawer also shows
-  chat-turn activity when expanded.
+  `job_cancelled` fan out through the same Redis pub/sub + Stream pattern as
+  ingestion (`publish_job_event` / `record_log`). The **`/chat`** UI consumes
+  those events via `useChatStream`; **`JobLogConsole`** (Documents / Conversations)
+  tails **ingestion** jobs the UI registers with `registerActiveJob`, not chat
+  turns in the current wiring.
 - **Empty-stream fallback** — when Cohere's stream closes with zero content
   deltas (Sprint 5b BUG-009 pattern), `cohere_chat.chat_stream_grounded`
-  retries once non-streaming and surfaces a `warning` log into the drawer.
+  retries once non-streaming and surfaces a `warning` event on the turn's job
+  log stream (same Redis plumbing as ingestion; consumed by the **`/chat`**
+  client, not **`JobLogConsole`**, unless chat turns are registered as active jobs).
 - **Cancel** — `POST /api/v1/workspaces/{ws}/chat/turns/{turnId}/cancel`
   sets a Redis flag and relies on arq's cooperative `CancelledError`; the
   handler classifies the cancel reason via `_classify_cancel_reason("chat_turn", …)`.
@@ -284,6 +284,10 @@ Sprint 1 ships **bypass authentication** for a **single local operator**. It is 
 - Maintain a **working graph** you can explore and edit before persistence.
 - **Grounded chat** with inline citations.
 - **Optional persistence** to **Neo4j 5.26+** or **Postgres + AGE**.
+
+### Transparency (“look inside the box”)
+
+zkast is meant to be a **harness** around the digital memory stack—not only outcomes (notes, graph, chat) but **mechanisms**: pipeline stages, job logs, and diagnostics should stay discoverable next to the **sources** (documents, imported conversations) that triggered them, so operators can see how memories are created and organized instead of treating the system as a black box.
 
 ## License
 

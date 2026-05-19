@@ -15,8 +15,10 @@ function maxUploadBytes(): number {
   return Number.isFinite(n) && n > 0 ? n : 52428800;
 }
 
+const sourceKindSchema = z.enum(["pdf", "north_conversation", "all"]);
+
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { workspaceId: string } },
 ) {
   const { workspaceId } = params;
@@ -29,8 +31,143 @@ export async function GET(
   const denied = await requireMatchingWorkspace(workspaceId);
   if (denied) return denied;
 
+  const url = new URL(req.url);
+  const rawKind = url.searchParams.get("source_kind");
+  const sourceKindParsed = rawKind ? sourceKindSchema.safeParse(rawKind) : null;
+  if (rawKind && !sourceKindParsed?.success) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "validation_failed",
+          message: "source_kind must be pdf, north_conversation, or all",
+        },
+      },
+      { status: 400 },
+    );
+  }
+  const sourceKind = sourceKindParsed?.success ? sourceKindParsed.data : "pdf";
+
   try {
     const pool = getDb();
+    if (sourceKind === "all") {
+      const result = await pool.query<{
+        id: string;
+        original_filename: string;
+        mime_type: string;
+        byte_size: number;
+        page_count: number | null;
+        status: string;
+        failure_reason: string | null;
+        created_at: string;
+        updated_at: string;
+        source_kind: string;
+        conversation_title: string | null;
+        agent_display_name: string | null;
+      }>(
+        `
+        WITH combined AS (
+          SELECT d.id::text AS id,
+                 d.original_filename AS original_filename,
+                 d.mime_type AS mime_type,
+                 d.byte_size AS byte_size,
+                 d.page_count AS page_count,
+                 d.status AS status,
+                 d.failure_reason AS failure_reason,
+                 d.created_at AS created_at,
+                 d.updated_at AS updated_at,
+                 'pdf'::text AS source_kind,
+                 NULL::text AS conversation_title,
+                 NULL::text AS agent_display_name
+          FROM documents d
+          WHERE d.workspace_id = $1::uuid AND d.source_kind = 'pdf'
+          UNION ALL
+          SELECT d.id::text,
+                 d.original_filename AS original_filename,
+                 d.mime_type AS mime_type,
+                 d.byte_size AS byte_size,
+                 d.page_count AS page_count,
+                 d.status AS status,
+                 d.failure_reason AS failure_reason,
+                 d.created_at AS created_at,
+                 d.updated_at AS updated_at,
+                 'north_conversation'::text AS source_kind,
+                 COALESCE(
+                   NULLIF(TRIM(COALESCE(d.north_metadata->>'conversation_title', '')), ''),
+                   NULLIF(TRIM(COALESCE(d.original_filename, '')), ''),
+                   d.id::text
+                 ) AS conversation_title,
+                 NULLIF(TRIM(COALESCE(
+                   NULLIF(TRIM(COALESCE(na.display_name, '')), ''),
+                   NULLIF(TRIM(COALESCE(d.north_metadata->>'agent_display_name', '')), ''),
+                   ''
+                 )), '') AS agent_display_name
+          FROM documents d
+          LEFT JOIN north_agents na
+            ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
+          WHERE d.workspace_id = $1::uuid AND d.source_kind = 'north_conversation'
+        )
+        SELECT * FROM combined
+        ORDER BY created_at DESC
+        LIMIT 250
+        `,
+        [workspaceId],
+      );
+      return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
+    }
+
+    if (sourceKind === "north_conversation") {
+      const result = await pool.query<{
+        id: string;
+        original_filename: string;
+        mime_type: string;
+        byte_size: number;
+        page_count: number | null;
+        status: string;
+        failure_reason: string | null;
+        created_at: string;
+        updated_at: string;
+        agent_id: string | null;
+        agent_display_name: string;
+        conversation_title: string;
+        north_conversation_id: string | null;
+        conversation_activity_at: string | null;
+      }>(
+        `
+        SELECT d.id::text,
+               d.original_filename,
+               d.mime_type,
+               d.byte_size,
+               d.page_count,
+               d.status,
+               d.failure_reason,
+               d.created_at,
+               d.updated_at,
+               d.agent_id::text AS agent_id,
+               COALESCE(
+                 NULLIF(TRIM(COALESCE(na.display_name, '')), ''),
+                 NULLIF(TRIM(COALESCE(d.north_metadata->>'agent_display_name', '')), ''),
+                 'Unknown agent'
+               ) AS agent_display_name,
+               COALESCE(
+                 NULLIF(TRIM(COALESCE(d.north_metadata->>'conversation_title', '')), ''),
+                 NULLIF(TRIM(COALESCE(d.original_filename, '')), ''),
+                 d.id::text
+               ) AS conversation_title,
+               d.north_conversation_id,
+               NULLIF(TRIM(COALESCE(d.north_metadata->>'conversation_activity_at', '')), '')
+                 AS conversation_activity_at
+        FROM documents d
+        LEFT JOIN north_agents na
+          ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
+        WHERE d.workspace_id = $1::uuid AND d.source_kind = 'north_conversation'
+        ORDER BY agent_display_name ASC, d.created_at DESC
+        LIMIT 200
+        `,
+        [workspaceId],
+      );
+      return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
+    }
+
     const result = await pool.query<{
       id: string;
       original_filename: string;
@@ -46,11 +183,11 @@ export async function GET(
       SELECT id::text, original_filename, mime_type, byte_size, page_count,
              status, failure_reason, created_at, updated_at
       FROM documents
-      WHERE workspace_id = $1::uuid
+      WHERE workspace_id = $1::uuid AND source_kind = $2::text
       ORDER BY created_at DESC
       LIMIT 200
       `,
-      [workspaceId],
+      [workspaceId, sourceKind],
     );
     return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
   } catch (err) {

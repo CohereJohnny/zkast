@@ -3,9 +3,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
-import { DocumentsPanel } from "@/components/documents-panel";
 import { GraphWorkspacePanel } from "@/components/graph-workspace-panel";
 import { JobLogConsole } from "@/components/job-log-console";
+import { cn } from "@/lib/utils";
 
 const STORAGE_KEY_DOCS = "zkast.workspace.documentsCollapsed";
 const STORAGE_KEY_GRAPH = "zkast.workspace.graphCollapsed";
@@ -78,15 +78,19 @@ function CollapseHeaderButton({
 }
 
 /**
- * Three-column shell by default (documents peek | main | graph). On `/documents`,
- * the main column already hosts a full DocumentsPanel — hide the duplicate column.
+ * On `/documents`, the shell uses a collapsible documents/library column plus
+ * pipeline log on the left and the mini graph rail on the right. On
+ * `/conversations`, the main column mirrors that pattern (scrollable library +
+ * pipeline log); conversation imports drive the same jobs as documents.
+ * Elsewhere, layout is main workspace plus graph rail (two columns); `/graph`
+ * is main-only.
  *
- * The documents area can be collapsed to a thin rail so the graph and its
- * selection panel can use the rest of the row.
+ * The documents column can collapse to a thin rail so the graph rail can grow.
  */
 export function WorkspaceMainGrid({ workspaceId, children }: Props) {
   const pathname = usePathname();
   const isDocumentsRoute = pathname === "/documents";
+  const isConversationsRoute = pathname === "/conversations";
   // The main column on /graph is already a full graph view; don't render the
   // right-rail mini graph next to it.
   const showRailGraph = pathname !== "/graph";
@@ -137,8 +141,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
 
   let gridClass: string;
   if (isDocumentsRoute) {
-    // /documents route: main column hosts the full DocumentsPanel; the
-    // right side hosts the Graph. Both rails are collapsible.
+    // /documents: library + job log column; collapsible graph rail on the right.
     if (docsCollapsed && graphCollapsed) {
       gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)_2.25rem]`;
     } else if (docsCollapsed) {
@@ -149,23 +152,14 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
       gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]`;
     }
   } else if (!showRailGraph) {
-    // /graph route: documents peek (or rail) | main full-bleed graph.
-    // The graph IS the main column here — no separate graph rail.
-    gridClass = docsCollapsed
-      ? `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)]`
-      : `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]`;
+    // /graph: full-width graph in main — no side rails from this shell.
+    gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)]`;
   } else {
-    // Default three-column layout: docs rail | main | graph rail. The
-    // middle column grows aggressively when either rail collapses so
-    // wide views like Compare strategies reclaim the space.
-    if (docsCollapsed && graphCollapsed) {
-      gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)_2.25rem]`;
-    } else if (docsCollapsed) {
-      gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1.6fr)_minmax(0,1fr)]`;
-    } else if (graphCollapsed) {
-      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_2.25rem]`;
+    // Default: main workspace | graph rail.
+    if (graphCollapsed) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_2.25rem]`;
     } else {
-      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1fr)]`;
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]`;
     }
   }
 
@@ -210,7 +204,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                     side="left"
                   />
                 </div>
-                {/* Documents takes the bulk of the column and scrolls
+                {/* Library panel takes the bulk of the column and scrolls
                     inside; the log is bounded below — when open it
                     shares the column ~50/50, when closed it shrinks to
                     a thin header. */}
@@ -218,9 +212,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 <JobLogConsole />
               </section>
             )}
-            {/* On /documents both rails can collapse simultaneously; in
-                that edge case the middle empty cell is intentional so
-                the user can re-expand either rail. */}
+            {/* Both rails collapsed: middle cell is an expand spacer. */}
             {docsCollapsed && graphCollapsed ? (
               <div aria-hidden="true" />
             ) : null}
@@ -228,38 +220,29 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
           </>
         ) : (
           <>
-            {docsCollapsed ? (
-              <CollapseRail
-                onExpand={toggleDocs}
-                label="Documents"
-                side="left"
-              />
-            ) : (
-              <section
-                aria-label="Documents"
-                className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-border-subtle bg-surface/80 p-4"
-              >
-                <div className="flex items-center gap-2">
-                  <p className="text-caption font-medium text-secondary">Documents</p>
-                  <CollapseHeaderButton
-                    onCollapse={toggleDocs}
-                    label="Documents"
-                    side="left"
-                  />
-                </div>
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <DocumentsPanel workspaceId={workspaceId} variant="compact" />
-                </div>
-                <JobLogConsole />
-              </section>
-            )}
             <section
               id="main-content"
               tabIndex={-1}
-              aria-label="Main workspace panel"
-              className="flex min-h-0 flex-col overflow-auto rounded-lg border border-border-strong bg-surface outline-none"
+              aria-label={
+                isConversationsRoute ? "Conversations" : "Main workspace panel"
+              }
+              className={cn(
+                "flex min-h-0 flex-col rounded-lg border border-border-strong bg-surface outline-none",
+                isConversationsRoute
+                  ? "gap-3 overflow-hidden p-4"
+                  : "overflow-auto",
+              )}
             >
-              {children}
+              {isConversationsRoute ? (
+                <>
+                  {/* Same split as Documents column: scroll library; dock log below
+                      so ingestion traces stay visible while browsing imports. */}
+                  <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+                  <JobLogConsole />
+                </>
+              ) : (
+                children
+              )}
             </section>
             {renderGraphCell()}
           </>
