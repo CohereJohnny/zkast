@@ -29,6 +29,7 @@ from app.internal_ingestion import router as internal_ingestion_router
 from app.internal_jobs import router as internal_jobs_router
 from app.internal_north import router as internal_north_router
 from app.internal_notes import router as internal_notes_router
+from app.internal_wiki import router as internal_wiki_router
 from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
 logger = structlog.get_logger(__name__)
@@ -97,6 +98,7 @@ app.include_router(internal_graph_router)
 app.include_router(internal_admin_router)
 app.include_router(internal_chat_router)
 app.include_router(internal_eval_router)
+app.include_router(internal_wiki_router)
 
 
 @app.middleware("http")

@@ -26,7 +26,8 @@ export type ActiveJobKind =
   | "document_parse"
   | "generate_atomic_notes"
   | "extract_graph"
-  | "dreaming";
+  | "dreaming"
+  | "wiki_generation";
 
 export type ActiveJob = {
   jobId: string;

@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  BookOpen,
   Bot,
   FileText,
   MessageSquare,
@@ -24,6 +25,7 @@ const items = [
   { href: "/jobs", label: "Jobs", Icon: Activity },
   { href: "/notes", label: "Notes", Icon: StickyNote },
   { href: "/graph", label: "Graph", Icon: Network },
+  { href: "/wiki", label: "Wiki", Icon: BookOpen },
   { href: "/chat", label: "Chat", Icon: MessageSquare },
   { href: "/snapshots", label: "Snapshots", Icon: Camera },
   { href: "/targets", label: "External Targets", Icon: Target },
