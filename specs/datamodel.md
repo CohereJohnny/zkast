@@ -795,9 +795,110 @@ If the connected user lacks permission to create these, persistence reports the 
 - **ChatSession title**: 1–200 chars, trimmed. Auto-generated titles use the first 80 chars of the first user message; the user may override.
 - **ChatMessage content**: ≤ 20,000 chars. Empty user messages are rejected.
 
+## North Agents and A-MEM Memory (Sprint A-C)
+
+This section reflects the data shape shipped for North conversation ingestion, A-MEM-style note enrichment, and offline dreaming. The full requirements live in [openspecs/north-agents-amem.md](openspecs/north-agents-amem.md) and [dreaming.md](dreaming.md); the canonical entities below are additive to the core model above.
+
+### NorthAgent
+
+**Purpose**: Local registration of an external North agent. Acts as the memory isolation boundary for derived episodes, notes, links, retrieval embeddings, dreaming jobs, and evaluations.
+
+**Fields:**
+
+- `id` (UUID, PK): Internal agent id used as `agent_id` on other rows.
+- `workspace_id` (UUID, FK).
+- `external_agent_id` (text, required).
+- `provider` (text, default `north`).
+- `display_name` (text).
+- `import_settings` (object, JSONB): Message-class filters and segmentation defaults.
+- `sync_cursor` (text, nullable).
+- `created_at`, `updated_at` (timestamp).
+
+**Constraints:**
+
+- Unique `(workspace_id, provider, external_agent_id)`.
+
+### NorthConversationCache
+
+**Purpose**: Raw North conversation payloads for replay, dedup, and reprocessing.
+
+**Fields:**
+
+- `id`, `workspace_id`, `agent_id` (FKs).
+- `north_conversation_id` (text).
+- `payload` (object, JSONB).
+- `fetched_at` (timestamp).
+
+**Constraints:**
+
+- Unique `(agent_id, north_conversation_id)`.
+
+### Document (North extensions)
+
+In addition to the PDF fields above, North-derived documents carry:
+
+- `source_kind` (text): `pdf` | `north_conversation`.
+- `agent_id` (UUID, nullable FK): Required when `source_kind = north_conversation`.
+- `north_conversation_id` (text, nullable).
+- `north_metadata` (object): Titles, types, timestamps, filter snapshot, `ingest_content_hash` used for re-import dedup, and sync status surfaces.
+
+### Episode (North extensions)
+
+- `agent_id` (UUID, nullable FK): Copied from owning document/agent.
+- `kind` (text): Adds `north_message`, `north_turn_window`, `north_tool_event` to PDF kinds.
+- `source_content_hash` (text, nullable): Content hash for ingestible episode bodies.
+
+### AtomicNote (A-MEM extensions)
+
+- `agent_id` (UUID, nullable FK).
+- `memory_context` (text, nullable): One-sentence derived context summary.
+- `memory_keywords` (list of text): Salient concepts.
+- `evolution_history` (object, JSONB, default empty array): Append-only audit of derived-field changes.
+- `dreaming_touched_at` (timestamp, nullable): Last time dreaming updated derived memory for the note.
+
+### NoteLink (extensions)
+
+- `link_reason` (text, nullable): LLM or operator explanation.
+- `link_strength` (float, default 1.0): Relative weight for retrieval and UI.
+
+**Business Rule**: A link must not connect two notes that both have non-null `agent_id` values pointing to different agents.
+
+### DreamJob
+
+**Purpose**: Asynchronous offline memory-evolution run for one agent.
+
+**Fields:**
+
+- `id`, `workspace_id`, `agent_id` (FKs).
+- `status` (enum): `running` | `succeeded` | `failed`.
+- `stats` (object, JSONB): Summary counts (`notes_considered`, `pairs_considered`, `links_added`, `neighbors_updated`, `embeddings_refreshed`, `immutability_violations`, optional `pairs_cap_reached`).
+- `failure_reason` (text, nullable).
+- `started_at`, `ended_at` (timestamp).
+
+### DreamJobMutation
+
+**Purpose**: Audit row for each durable change made by a dreaming run.
+
+**Fields:**
+
+- `id`, `dream_job_id` (FK), `note_id` (FK).
+- `mutation_type` (enum): `link_added` | `neighbor_patch`.
+- `payload` (object, JSONB).
+- `created_at` (timestamp).
+
+### RetrievalEmbedding (North extensions)
+
+- `agent_id` (UUID, nullable): Propagated for North raw chunks and note embeddings so agent-scoped retrieval can filter without joins.
+
+### Chat retrieval modes
+
+`chat_messages.retrieval_mode` allows: `rag`, `graph`, `hybrid`, `raw_transcript`, `zettelkasten_notes`, `amem_lite`.
+
 ## Related Specifications
 
 - [prd.md](prd.md) — Functional requirements implemented by this model.
 - [apis.md](apis.md) — How these entities are exposed via APIs.
 - [techstack.md](techstack.md) — Storage technologies and their rationale.
 - [userstories.md](userstories.md) — Stories grounded in these entities.
+- [openspecs/north-agents-amem.md](openspecs/north-agents-amem.md) — North and A-MEM requirements.
+- [dreaming.md](dreaming.md) — Dreaming requirements.

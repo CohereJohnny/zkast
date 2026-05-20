@@ -133,7 +133,9 @@ export function DreamJobStatus({
           </p>
           {terminal && typeof stats === "object" ? (
             <p className="text-muted">
-              links {String(stats.links_added ?? 0)} · neighbors{" "}
+              notes {String(stats.notes_considered ?? 0)} · pairs{" "}
+              {String(stats.pairs_considered ?? 0)} · links{" "}
+              {String(stats.links_added ?? 0)} · neighbors{" "}
               {String(stats.neighbors_updated ?? 0)} · embeddings{" "}
               {String(stats.embeddings_refreshed ?? 0)}
             </p>
@@ -156,6 +158,13 @@ export function DreamJobStatus({
             >
               Show pipeline log below
             </button>
+          ) : null}
+          {job.status === "failed" ? (
+            <p className="text-muted">
+              Check the pipeline log for the failure stage. Common causes: missing
+              Cohere credentials, insufficient notes, or transient model errors —
+              retry from the agent&apos;s Dream button after addressing the root cause.
+            </p>
           ) : null}
         </div>
       ) : null}

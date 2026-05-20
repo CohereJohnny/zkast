@@ -1302,10 +1302,17 @@ Workspace-scoped routes carry the workspace UUID in the path (`/internal/v1/work
 - `POST /internal/v1/workspaces/{workspaceId}/north/agents/sync` — Upsert local `north_agents` rows from the configured North instance (`pipeline_settings.north_base_url` + encrypted `north_bearer` API key, with legacy `north_bearer_token` in pipeline JSON still honored until migrated).
 - `POST /internal/v1/workspaces/{workspaceId}/north/test-connection` — Calls North `GET /v1/agents` with workspace credentials; returns `{ ok, agent_count }` or upstream error payload.
 - `GET /internal/v1/workspaces/{workspaceId}/north/agents` — List registered agents for the workspace.
-- `GET /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations?refresh=` — When `refresh=true`, list conversations from North and upsert `north_conversation_cache`; when false, return rows from the local cache only.
+- `GET /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations?refresh=` — When `refresh=true`, list conversations from North and upsert `north_conversation_cache`; when false, return rows from the local cache only. Each row includes `sync_status` (`not_synced` | `synced` | `syncing` | `outdated`) and memory telemetry (`notes`, `amem_indexed`, `digest`).
 - `GET /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations/{conversationId}/cache` — Return cached payload for one conversation id.
-- `POST /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations/{conversationId}/import` — Create a `north_conversation` document, persist transcript JSON to storage, enqueue `parse_document` (transcript → episodes → notes → graph). Dedupes on transcript checksum.
-- `POST /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/dream` — Enqueue `run_dreaming_job` (per-agent memory evolution with audited mutations).
+- `POST /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/conversations/{conversationId}/import` — Create a `north_conversation` document, persist transcript JSON to storage, enqueue `parse_document` (transcript → episodes → notes → graph). Dedupes on transcript ingest content hash.
+
+### North Dreaming (memory evolution)
+
+- `POST /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/dream` — Create a `dream_jobs` row and enqueue `run_dreaming_job` (per-agent memory evolution with audited mutations). Returns `{ enqueued, job_id }`.
+- `GET /internal/v1/workspaces/{workspaceId}/north/agents/{agentId}/dream-jobs?limit=` — List recent dream jobs for one agent.
+- `GET /internal/v1/workspaces/{workspaceId}/dream-jobs/{jobId}` — Return one dream job plus its `dream_job_mutations`.
+
+Public web proxies expose the same shape under `/api/v1/...`. Dreaming events publish to the shared job event stream (`/api/v1/jobs/{jobId}/events`) with `stage=dreaming`.
 
 ### Administration
 

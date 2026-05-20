@@ -386,6 +386,12 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
             >
               View graph
             </Link>
+            <Link
+              href={`/chat?agent_id=${encodeURIComponent(agentId)}`}
+              className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
+            >
+              Open in chat
+            </Link>
             <button
               type="button"
               className="inline-flex items-center gap-1 rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary disabled:opacity-50"

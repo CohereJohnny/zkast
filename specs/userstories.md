@@ -647,11 +647,73 @@ Satisfies: FR-42.
 - AC-1: Quotas are configurable per pricing tier.
 - AC-2: Approaching a quota produces a UI warning; hitting one produces a clear error and a billing-aware upgrade prompt.
 
+## Epic 10 — North Agents and A-MEM Memory (Sprint A-D)
+
+### US-10.1 — Configure North connectivity (P0)
+
+**As** the workspace operator, **I want** to register a North API base URL and bearer token, **so that** zkast can list and import this team's agent conversations.
+
+**Acceptance criteria**:
+
+- AC-1: I can save the North base URL through Settings and rotate or remove the bearer token like any other credential without exposing the secret again.
+- AC-2: A connectivity test reports either OK with an agent count or a clear configuration error.
+
+### US-10.2 — Register and sync North agents (P0)
+
+**As** the operator, **I want** to sync the agents I am authorized to use, **so that** each agent becomes a memory boundary in zkast.
+
+**Acceptance criteria**:
+
+- AC-1: Syncing upserts a local row per agent with provider, display name, and external id.
+- AC-2: The Agents list shows row-level provenance and direct paths to scoped Notes, Graph, Chat, and Dream actions.
+
+### US-10.3 — Import a conversation with sync status (P0)
+
+**As** the operator, **I want** to see whether each conversation is already imported, up to date, or stale, **so that** I do not duplicate ingestion work.
+
+**Acceptance criteria**:
+
+- AC-1: Each conversation shows a sync status of not synced, synced, syncing, or outdated.
+- AC-2: Importing dedupes against an ingest content hash so unchanged content does not re-process.
+- AC-3: Each imported conversation surfaces note count, A-MEM indexed count, and a stable content digest.
+
+### US-10.4 — Operate within an agent memory boundary (P0)
+
+**As** the operator, **I want** Notes, Graph, Chat, and Eval to honor an agent scope, **so that** I do not blend memory across agents by accident.
+
+**Acceptance criteria**:
+
+- AC-1: Notes and Graph filter views by agent and let me return to workspace-wide easily.
+- AC-2: Chat uses an agent picker (not a raw UUID) and shows the active memory boundary in the header.
+- AC-3: Eval runs that are agent-scoped label the scope in result summaries.
+
+### US-10.5 — Run dreaming for one agent (P0)
+
+**As** the operator, **I want** to evolve an agent's memory offline, **so that** new connections and derived memory fields emerge from existing notes without me writing them.
+
+**Acceptance criteria**:
+
+- AC-1: I can start a Dream run from the Agents list or agent detail view.
+- AC-2: The Dream job status card shows running / succeeded / failed plus stats (notes, pairs, links, neighbors, embeddings) and mutation count.
+- AC-3: The pipeline log streams live Dream telemetry (note progress, links added, neighbor patches, A-MEM refresh, completion) for the running job.
+- AC-4: Note title and body are never modified by dreaming; only derived fields (memory context, tags, evolution history) and links change.
+- AC-5: Every durable change appears as an auditable Dream mutation row.
+
+### US-10.6 — Recover from a failed Dream run (P0)
+
+**As** the operator, **I want** to understand why a Dream run failed and how to retry, **so that** I am not stuck guessing.
+
+**Acceptance criteria**:
+
+- AC-1: The Dream status card displays the failure reason.
+- AC-2: Recovery guidance explains where to look (pipeline log) and how to retry.
+- AC-3: Retrying does not create cross-agent or duplicate state.
+
 ## Story Map Summary
 
 | Phase | Epics covered (key stories)                                                                     |
 | ----- | ----------------------------------------------------------------------------------------------- |
-| P0    | 1 (all), 2 (1–6), 3 (1–6), 4 (1–3), 5 (1–2), 7 (1–3), 8 (1–9)                                    |
+| P0    | 1 (all), 2 (1–6), 3 (1–6), 4 (1–3), 5 (1–2), 7 (1–3), 8 (1–9), 10 (1–6)                          |
 | P1    | 2.* (refinements), 3.7, 4.4, 5.3–5.4, 6 (all), 7.* (refined), 8.10–8.11                          |
 | P2    | 9 (all), all prior epics in multi-tenant form                                                   |
 

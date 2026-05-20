@@ -22,7 +22,14 @@ import { ChatPanel } from "@/components/chat-panel";
 
 type Tab = "chat" | "compare";
 
-export function ChatTabsClient({ workspaceId }: { workspaceId: string }) {
+export function ChatTabsClient({
+  workspaceId,
+  initialAgentId,
+}: {
+  workspaceId: string;
+  /** Pre-fills North agent scope when arriving from an agent-scoped surface. */
+  initialAgentId?: string | null;
+}) {
   const [tab, setTab] = useState<Tab>("chat");
 
   return (
@@ -43,7 +50,7 @@ export function ChatTabsClient({ workspaceId }: { workspaceId: string }) {
       </nav>
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === "chat" ? (
-          <ChatPanel workspaceId={workspaceId} />
+          <ChatPanel workspaceId={workspaceId} initialAgentId={initialAgentId} />
         ) : (
           <ChatComparePanel workspaceId={workspaceId} />
         )}
