@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readApiErrorMessage } from "@/lib/api-error-message";
+import { useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
 
 type DreamJob = {
@@ -30,6 +31,7 @@ export function DreamJobStatus({
   jobId: string | null;
   onDone?: (status: "succeeded" | "failed") => void;
 }) {
+  const { requestOpenLogConsole } = useJobEvents();
   const [detail, setDetail] = useState<DreamJobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const terminalNotified = useRef(false);
@@ -145,6 +147,15 @@ export function DreamJobStatus({
           ) : null}
           {detail?.mutations?.length ? (
             <p className="text-muted">{detail.mutations.length} mutation(s) recorded</p>
+          ) : null}
+          {job.status === "running" ? (
+            <button
+              type="button"
+              className="mt-1 text-left text-caption text-secondary underline hover:text-primary"
+              onClick={() => requestOpenLogConsole()}
+            >
+              Show pipeline log below
+            </button>
           ) : null}
         </div>
       ) : null}

@@ -19,9 +19,8 @@ import {
 /**
  * Live, collapsible "build log" panel for source-ingestion telemetry.
  *
- * - Mounted by `WorkspaceMainGrid` under `/documents` (documents library column)
- *   and `/conversations` (same docked placement): PDF and conversation imports
- *   both enqueue pipeline jobs, so traces stay visible next to the relevant UI.
+ * - Mounted by `WorkspaceMainGrid` under `/documents`, `/conversations`,
+ *   `/agents/[id]`, and `/jobs`: imports, Dream runs, and PDF jobs stream here.
  * - On `/documents`, when that column collapses to the thin rail, the parent
  *   stops mounting this component, so the log collapses with the panel.
  * - Subscribes (one `EventSource` per active job) to
@@ -214,7 +213,7 @@ function JobSubscription({
 
 export function JobLogConsole() {
   const jobs = useActiveJobs();
-  const { unregisterActiveJob } = useJobEvents();
+  const { unregisterActiveJob, logConsoleOpenSignal } = useJobEvents();
   const toast = useToast();
 
   const [open, setOpen] = useState(false);
@@ -243,6 +242,12 @@ export function JobLogConsole() {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    if (logConsoleOpenSignal > 0) {
+      persistOpen(true);
+    }
+  }, [logConsoleOpenSignal, persistOpen]);
 
   const handleEvent = useCallback(
     (jobId: string, ev: ServerEvent) => {
@@ -436,7 +441,7 @@ export function JobLogConsole() {
               <p className="text-muted">
                 {hasJobs
                   ? "Waiting for events…"
-                  : "No active jobs. Upload a PDF or retry from a stage to see live progress here."}
+                  : "No active jobs. Import a conversation, run Dream, or upload a PDF to see live progress here."}
               </p>
             ) : (
               filteredLines.map((l) => (

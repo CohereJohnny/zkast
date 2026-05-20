@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from app.config import get_settings
 from app.cohere_adapters import CohereEmbedder
 from app.graphiti_factory import COHERE_COMPAT_BASE, resolve_cohere_api_key
-from app.job_redis import job_hset, publish_job_event, record_log
+from app.job_redis import job_hset, publish_job_event, record_log, record_metric
 from app.note_embedding_index import upsert_amem_embeddings_for_notes
 from app.north_repo import finalize_dream_job, insert_dream_job, insert_dream_mutation
 from app.notes_repo import (
@@ -89,6 +89,63 @@ async def _dream_redis_running(
         message="Dream job started",
         data={"agent_id": agent_id},
     )
+
+
+async def _dream_log(
+    redis: Any | None,
+    *,
+    job_id: str,
+    message: str,
+    level: str = "info",
+    data: dict[str, Any] | None = None,
+) -> None:
+    if not redis:
+        return
+    await record_log(
+        redis,
+        job_id=job_id,
+        level=level,
+        stage="dreaming",
+        message=message,
+        data=data,
+    )
+
+
+async def _dream_progress(
+    redis: Any | None,
+    *,
+    job_id: str,
+    percent: int,
+    current: int,
+    total: int,
+    stats: dict[str, Any],
+) -> None:
+    if not redis:
+        return
+    pct = max(0, min(100, percent))
+    prog = {
+        "percent": pct,
+        "stage": "dreaming",
+        "current": current,
+        "total": total,
+        "pairs_considered": stats.get("pairs_considered", 0),
+        "links_added": stats.get("links_added", 0),
+        "neighbors_updated": stats.get("neighbors_updated", 0),
+    }
+    await job_hset(redis, job_id, progress=json.dumps(prog))
+    await publish_job_event(
+        redis,
+        job_id,
+        "stage_progress",
+        stage="dreaming",
+        current=current,
+        total=total,
+        percent=pct,
+    )
+
+
+def _short_id(note_id: str) -> str:
+    return note_id[:8] + "…" if len(note_id) > 8 else note_id
 
 
 async def _dream_redis_finish(
@@ -184,7 +241,27 @@ async def run_dreaming_job(
             sort="updated_at_desc",
         )
         stats["notes_considered"] = len(notes)
+        await _dream_log(
+            redis,
+            job_id=job_id,
+            message=(
+                f"Loaded {len(notes)} notes — up to {pairs_cap} pair evaluations, "
+                f"{neighbors_per_note} neighbors per note"
+            ),
+            data={
+                "notes": len(notes),
+                "pairs_cap": pairs_cap,
+                "neighbors_per_note": neighbors_per_note,
+                "model": model,
+            },
+        )
         if len(notes) < 2:
+            await _dream_log(
+                redis,
+                job_id=job_id,
+                level="warning",
+                message="Not enough notes to dream (need at least 2)",
+            )
             final_stats = {**stats, "message": "not_enough_notes"}
             finalize_dream_job(
                 database_url,
@@ -200,6 +277,20 @@ async def run_dreaming_job(
         texts = [f"{n.get('title','')}\n{n.get('body','')}"[:6000] for n in notes]
         vectors = await embedder.create_batch(texts)
         id_by_idx = [str(n["id"]) for n in notes]
+        await _dream_log(
+            redis,
+            job_id=job_id,
+            message=f"Embedded {len(vectors)} note vectors ({embed_model})",
+            data={"embed_model": embed_model, "vectors": len(vectors)},
+        )
+        await _dream_progress(
+            redis,
+            job_id=job_id,
+            percent=12,
+            current=0,
+            total=len(notes),
+            stats=stats,
+        )
 
         client = AsyncOpenAI(
             api_key=api_key,
@@ -208,10 +299,38 @@ async def run_dreaming_job(
             max_retries=1,
         )
 
+        note_count = len(notes)
         for i, note in enumerate(notes):
             if stats["pairs_considered"] >= pairs_cap:
                 stats["pairs_cap_reached"] = True
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    message=f"Pair cap reached ({pairs_cap}); stopping early",
+                    data=dict(stats),
+                )
                 break
+            if redis and (i == 0 or i % 5 == 0 or i == note_count - 1):
+                pct = 12 + int(73 * (i + 1) / max(note_count, 1))
+                await _dream_progress(
+                    redis,
+                    job_id=job_id,
+                    percent=pct,
+                    current=i + 1,
+                    total=note_count,
+                    stats=stats,
+                )
+                focus_title = str(note.get("title") or "Untitled")[:80]
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    message=(
+                        f"Note {i + 1}/{note_count}: “{focus_title}” — "
+                        f"{stats['pairs_considered']} pairs, {stats['links_added']} links"
+                    ),
+                    data={"note_id": id_by_idx[i], "index": i},
+                )
             vec_i = vectors[i] if i < len(vectors) else None
             if not vec_i:
                 continue
@@ -274,9 +393,24 @@ async def run_dreaming_job(
                 decision = _extract_json_object(raw)
             except json.JSONDecodeError:
                 logger.warning("dreaming_bad_json", note_id=id_by_idx[i])
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    message=f"LLM returned unparseable JSON for {_short_id(id_by_idx[i])}",
+                    data={"note_id": id_by_idx[i]},
+                )
                 continue
 
             stats["pairs_considered"] += 1
+            if redis and stats["pairs_considered"] % 10 == 0:
+                await record_metric(
+                    redis,
+                    job_id=job_id,
+                    name="pairs_considered",
+                    value=stats["pairs_considered"],
+                    stage="dreaming",
+                )
             if not decision.get("should_link"):
                 continue
 
@@ -305,6 +439,28 @@ async def run_dreaming_job(
                 stats["links_added"] += 1
                 reindex_amem.add(id_by_idx[i])
                 reindex_amem.add(target)
+                reason = str(decision.get("link_reason") or "")[:120]
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    message=(
+                        f"Link {kind}: {_short_id(id_by_idx[i])} → {_short_id(target)}"
+                        + (f" — {reason}" if reason else "")
+                    ),
+                    data={
+                        "source_note_id": id_by_idx[i],
+                        "target_note_id": target,
+                        "kind": kind,
+                    },
+                )
+                if redis:
+                    await record_metric(
+                        redis,
+                        job_id=job_id,
+                        name="links_added",
+                        value=stats["links_added"],
+                        stage="dreaming",
+                    )
                 insert_dream_mutation(
                     database_url,
                     dream_job_id=job_id,
@@ -358,6 +514,20 @@ async def run_dreaming_job(
                 )
                 stats["neighbors_updated"] += 1
                 reindex_amem.add(target)
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    message=f"Neighbor patch on {_short_id(target)} (from {_short_id(id_by_idx[i])})",
+                    data={"target_note_id": target, "source_note_id": id_by_idx[i]},
+                )
+                if redis:
+                    await record_metric(
+                        redis,
+                        job_id=job_id,
+                        name="neighbors_updated",
+                        value=stats["neighbors_updated"],
+                        stage="dreaming",
+                    )
                 insert_dream_mutation(
                     database_url,
                     dream_job_id=job_id,
@@ -367,6 +537,20 @@ async def run_dreaming_job(
                 )
 
         if reindex_amem and api_key:
+            await _dream_log(
+                redis,
+                job_id=job_id,
+                message=f"Refreshing A-MEM embeddings for {len(reindex_amem)} note(s)",
+                data={"note_count": len(reindex_amem)},
+            )
+            await _dream_progress(
+                redis,
+                job_id=job_id,
+                percent=92,
+                current=note_count,
+                total=note_count,
+                stats=stats,
+            )
             await upsert_amem_embeddings_for_notes(
                 api_key=api_key,
                 database_url=database_url,

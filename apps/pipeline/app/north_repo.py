@@ -151,6 +151,83 @@ def fetch_agent_stats(
     }
 
 
+def fetch_conversation_memory_stats_by_agent(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Per north_conversation_id memory counts (latest import document)."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            WITH latest_docs AS (
+              SELECT DISTINCT ON (d.north_conversation_id)
+                d.north_conversation_id,
+                d.id AS document_id,
+                d.status AS document_status,
+                d.north_metadata
+              FROM documents d
+              WHERE d.workspace_id = %s::uuid
+                AND d.agent_id = %s::uuid
+                AND d.source_kind = 'north_conversation'
+                AND d.north_conversation_id IS NOT NULL
+              ORDER BY d.north_conversation_id, d.created_at DESC
+            ),
+            note_agg AS (
+              SELECT ld.north_conversation_id, count(DISTINCT n.id)::int AS note_count
+              FROM latest_docs ld
+              LEFT JOIN episodes e ON e.document_id = ld.document_id
+              LEFT JOIN note_episodes ne ON ne.episode_id = e.id
+              LEFT JOIN atomic_notes n ON n.id = ne.note_id
+              GROUP BY ld.north_conversation_id
+            ),
+            amem_agg AS (
+              SELECT ld.north_conversation_id, count(DISTINCT re.id)::int AS amem_count
+              FROM latest_docs ld
+              LEFT JOIN episodes e ON e.document_id = ld.document_id
+              LEFT JOIN note_episodes ne ON ne.episode_id = e.id
+              LEFT JOIN atomic_notes n ON n.id = ne.note_id
+              LEFT JOIN retrieval_embeddings re
+                ON re.workspace_id = %s::uuid
+               AND re.index_kind = 'note_amem'
+               AND re.source_kind = 'atomic_note'
+               AND re.source_id = n.id::text
+              GROUP BY ld.north_conversation_id
+            )
+            SELECT
+              ld.north_conversation_id,
+              ld.document_id::text AS document_id,
+              ld.document_status,
+              ld.north_metadata,
+              coalesce(n.note_count, 0) AS note_count,
+              coalesce(a.amem_count, 0) AS amem_count
+            FROM latest_docs ld
+            LEFT JOIN note_agg n ON n.north_conversation_id = ld.north_conversation_id
+            LEFT JOIN amem_agg a ON a.north_conversation_id = ld.north_conversation_id
+            """,
+            (workspace_id, agent_id, workspace_id),
+        ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cid = str(row.get("north_conversation_id") or "").strip()
+        if not cid:
+            continue
+        meta = row.get("north_metadata")
+        ingest_hash: str | None = None
+        if isinstance(meta, dict):
+            raw = meta.get("ingest_content_hash")
+            ingest_hash = str(raw) if raw else None
+        out[cid] = {
+            "document_id": str(row.get("document_id") or ""),
+            "document_status": str(row.get("document_status") or ""),
+            "notes": int(row.get("note_count") or 0),
+            "amem_embeddings": int(row.get("amem_count") or 0),
+            "ingest_digest": ingest_hash[:12] if ingest_hash else None,
+        }
+    return out
+
+
 def update_agent_sync_cursor(
     database_url: str,
     *,

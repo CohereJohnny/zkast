@@ -116,3 +116,72 @@ async def test_run_dreaming_job_not_enough_notes() -> None:
 
     assert finalize_args["status"] == DREAM_JOB_STATUS_SUCCEEDED
     assert finalize_args["stats"].get("message") == "not_enough_notes"
+
+
+@pytest.mark.asyncio
+async def test_run_dreaming_job_emits_pipeline_logs_when_redis_present() -> None:
+    n1, n2 = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+    notes = [_note(n1), _note(n2)]
+    job_id = "job-log"
+    log_messages: list[str] = []
+
+    async def fake_embed_batch(_texts):
+        return [[1.0, 0.0], [0.0, 1.0]]
+
+    llm_response = MagicMock()
+    llm_response.choices = [
+        MagicMock(
+            message=MagicMock(
+                content=(
+                    '{"should_link": true, "link_target_note_id": "'
+                    + n2
+                    + '", "link_kind": "related", "link_reason": "similar", '
+                    '"neighbor_context_update": null, "neighbor_tag_additions": []}'
+                )
+            )
+        )
+    ]
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=llm_response)
+
+    mock_redis = MagicMock()
+    mock_redis.publish = AsyncMock()
+    mock_redis.xadd = AsyncMock()
+    mock_redis.hset = AsyncMock()
+    mock_redis.expire = AsyncMock()
+
+    async def capture_log(_redis, **kwargs):
+        log_messages.append(str(kwargs.get("message") or ""))
+
+    with (
+        patch.object(dreaming, "get_settings", return_value=SimpleNamespace()),
+        patch.object(dreaming, "resolve_cohere_api_key", return_value="key"),
+        patch.object(dreaming, "fetch_pipeline_settings", return_value={"large_model": "m", "embed_model": "e"}),
+        patch.object(dreaming, "insert_dream_job", return_value=job_id),
+        patch.object(dreaming, "finalize_dream_job"),
+        patch.object(dreaming, "list_notes", return_value=(notes, 2)),
+        patch.object(dreaming, "CohereEmbedder") as embed_cls,
+        patch.object(dreaming, "AsyncOpenAI", return_value=mock_client),
+        patch.object(dreaming, "add_note_link", return_value={"id": "link-1"}),
+        patch.object(dreaming, "insert_dream_mutation"),
+        patch.object(dreaming, "upsert_amem_embeddings_for_notes", new_callable=AsyncMock),
+        patch.object(dreaming, "record_log", side_effect=capture_log),
+        patch.object(dreaming, "record_metric", new_callable=AsyncMock),
+        patch.object(dreaming, "publish_job_event", new_callable=AsyncMock),
+        patch.object(dreaming, "job_hset", new_callable=AsyncMock),
+    ):
+        embed_cls.return_value.create_batch = AsyncMock(side_effect=fake_embed_batch)
+        await run_dreaming_job(
+            {"database_url": "postgresql://stub", "redis": mock_redis},
+            workspace_id="ws",
+            agent_id="agent",
+            job_id=job_id,
+        )
+
+    joined = "\n".join(log_messages)
+    assert "Dream job started" in joined
+    assert "Loaded 2 notes" in joined
+    assert "Embedded" in joined
+    assert "Link related" in joined
+    assert "Dream complete" in joined

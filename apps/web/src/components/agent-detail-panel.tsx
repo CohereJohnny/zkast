@@ -4,15 +4,24 @@ import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw, Sparkles } from "lucid
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  ConversationMemoryTelemetry,
+  type ConversationMemoryStats,
+} from "@/components/conversation-memory-telemetry";
 import { DreamJobStatus } from "@/components/dream-job-status";
 import { readApiErrorMessage } from "@/lib/api-error-message";
 import { useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
 
+type SyncStatus = "not_synced" | "synced" | "syncing" | "outdated";
+
 type CacheRow = {
   north_conversation_id: string;
   fetched_at: string | null;
   title?: string | null;
+  sync_status?: SyncStatus;
+  document_id?: string | null;
+  memory?: ConversationMemoryStats | null;
 };
 
 type PreviewReady = {
@@ -38,18 +47,90 @@ function normalizeConversationRow(it: unknown): CacheRow | null {
       const t = String(p.title ?? p.name ?? p.displayTitle ?? "").trim();
       title = t || null;
     }
-    return { north_conversation_id: id, fetched_at: fetched, title };
+    return {
+      north_conversation_id: id,
+      fetched_at: fetched,
+      title,
+      ...importFieldsFromApi(o),
+    };
   }
   const id = String(
     o.id ?? o.conversation_id ?? o.conversationId ?? o.thread_id ?? o.threadId ?? "",
   );
   if (!id) return null;
   const t = String(o.title ?? o.name ?? o.displayTitle ?? "").trim();
-  return { north_conversation_id: id, fetched_at: null, title: t || null };
+  const base = { north_conversation_id: id, fetched_at: null, title: t || null };
+  return { ...base, ...importFieldsFromApi(o) };
+}
+
+function importFieldsFromApi(o: Record<string, unknown>): Partial<CacheRow> {
+  const sync = o.sync_status;
+  const mem = o.memory;
+  return {
+    sync_status: typeof sync === "string" ? (sync as SyncStatus) : undefined,
+    document_id: o.document_id != null ? String(o.document_id) : null,
+    memory:
+      mem && typeof mem === "object"
+        ? {
+            notes: typeof (mem as Record<string, unknown>).notes === "number" ? Number((mem as Record<string, unknown>).notes) : undefined,
+            amem_embeddings:
+              typeof (mem as Record<string, unknown>).amem_embeddings === "number"
+                ? Number((mem as Record<string, unknown>).amem_embeddings)
+                : undefined,
+            document_status:
+              typeof (mem as Record<string, unknown>).document_status === "string"
+                ? String((mem as Record<string, unknown>).document_status)
+                : undefined,
+            ingest_digest:
+              typeof (mem as Record<string, unknown>).ingest_digest === "string"
+                ? String((mem as Record<string, unknown>).ingest_digest)
+                : null,
+            cached: (mem as Record<string, unknown>).cached === true,
+          }
+        : null,
+  };
+}
+
+function ConversationAction({
+  row,
+  agentId,
+  busy,
+  onImport,
+}: {
+  row: CacheRow;
+  agentId: string;
+  busy: boolean;
+  onImport: () => void;
+}) {
+  const status = row.sync_status ?? "not_synced";
+  if (status === "synced") {
+    return (
+      <Link
+        href={`/notes?agentId=${encodeURIComponent(agentId)}`}
+        className="shrink-0 text-caption text-muted hover:text-primary"
+      >
+        Notes
+      </Link>
+    );
+  }
+  if (status === "syncing") {
+    return <span className="shrink-0 text-caption text-muted">Importing…</span>;
+  }
+  const label = status === "outdated" ? "Re-import" : "Import";
+  return (
+    <button
+      type="button"
+      className="shrink-0 rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary disabled:opacity-50"
+      disabled={busy}
+      onClick={onImport}
+    >
+      {busy ? "…" : label}
+    </button>
+  );
 }
 
 export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string; agentId: string }) {
-  const { registerActiveJob } = useJobEvents();
+  const { registerActiveJob, requestOpenLogConsole } = useJobEvents();
   const runRef = useRef(0);
   const [rows, setRows] = useState<CacheRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +144,7 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
     derived_notes: number;
     cached_conversations: number;
     note_amem_embeddings: number;
+    import_digest?: string | null;
   } | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
@@ -173,6 +255,7 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
           derived_notes: Number(body.derived_notes ?? 0),
           cached_conversations: Number(body.cached_conversations ?? 0),
           note_amem_embeddings: Number(body.note_amem_embeddings ?? 0),
+          import_digest: typeof body.import_digest === "string" ? body.import_digest : null,
         });
       } catch {
         if (!cancelled) setStatsError("Failed to load agent stats");
@@ -218,14 +301,18 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
         return;
       }
       if (body.deduped === true) {
-        setImportNotice("This conversation is already imported (same content checksum). Open Conversations to view status.");
+        setImportNotice("Already synced — ingestible content unchanged. No re-import needed.");
+        void load(false);
         return;
       }
       const jid = body.job_id as string | null | undefined;
       const doc = body.document as { id?: string } | undefined;
       if (typeof jid === "string" && jid.length > 0) {
         registerActiveJob(jid, workspaceId, doc?.id ?? null, "document_parse");
-        setImportNotice("Import started — watch pipeline progress in the job drawer. When complete, find the transcript under Conversations.");
+        setImportNotice(
+          "Import started — watch pipeline progress in the job drawer. When complete, find the transcript under Conversations.",
+        );
+        void load(false);
       }
     } finally {
       setBusy(null);
@@ -279,6 +366,14 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
             <span>
               <strong className="text-primary">{stats.note_amem_embeddings}</strong> A-MEM indexed
             </span>
+            {stats.import_digest ? (
+              <span
+                className="font-mono text-muted"
+                title="Rollup of imported conversation checksums for this agent"
+              >
+                digest {stats.import_digest.slice(0, 12)}…
+              </span>
+            ) : null}
             <Link
               href={`/notes?agentId=${encodeURIComponent(agentId)}`}
               className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
@@ -309,7 +404,11 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                     return;
                   }
                   const jid = typeof body.job_id === "string" ? body.job_id : null;
-                  if (jid) setDreamJobId(jid);
+                  if (jid) {
+                    setDreamJobId(jid);
+                    registerActiveJob(jid, workspaceId, null, "dreaming");
+                    requestOpenLogConsole();
+                  }
                 } finally {
                   setDreamBusy(false);
                 }
@@ -364,17 +463,29 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                     {r.title ? (
                       <div className="truncate text-body text-primary">{r.title}</div>
                     ) : null}
-                    <div className="truncate font-mono text-caption text-secondary">{r.north_conversation_id}</div>
+                    <p className="truncate font-mono text-caption text-muted">{r.north_conversation_id}</p>
+                    <ConversationMemoryTelemetry
+                      memory={
+                        r.memory
+                          ? {
+                              ...r.memory,
+                              outdated: r.sync_status === "outdated",
+                            }
+                          : null
+                      }
+                      notImported={
+                        r.sync_status === "not_synced" && Boolean(r.memory?.cached || r.fetched_at)
+                      }
+                      importing={r.sync_status === "syncing"}
+                    />
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="shrink-0 rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary disabled:opacity-50"
-                  disabled={busy === r.north_conversation_id}
-                  onClick={() => void importConv(r.north_conversation_id)}
-                >
-                  Import
-                </button>
+                <ConversationAction
+                  row={r}
+                  agentId={agentId}
+                  busy={busy === r.north_conversation_id}
+                  onImport={() => void importConv(r.north_conversation_id)}
+                />
               </div>
               {open ? (
                 <div

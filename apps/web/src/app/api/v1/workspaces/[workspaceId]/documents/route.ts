@@ -131,6 +131,9 @@ export async function GET(
         conversation_title: string;
         north_conversation_id: string | null;
         conversation_activity_at: string | null;
+        memory_notes: number;
+        memory_amem_embeddings: number;
+        memory_ingest_digest: string | null;
       }>(
         `
         SELECT d.id::text,
@@ -155,17 +158,60 @@ export async function GET(
                ) AS conversation_title,
                d.north_conversation_id,
                NULLIF(TRIM(COALESCE(d.north_metadata->>'conversation_activity_at', '')), '')
-                 AS conversation_activity_at
+                 AS conversation_activity_at,
+               coalesce(note_agg.note_count, 0) AS memory_notes,
+               coalesce(amem_agg.amem_count, 0) AS memory_amem_embeddings,
+               CASE
+                 WHEN length(coalesce(d.north_metadata->>'ingest_content_hash', '')) >= 12
+                 THEN left(d.north_metadata->>'ingest_content_hash', 12)
+                 ELSE NULL
+               END AS memory_ingest_digest
         FROM documents d
         LEFT JOIN north_agents na
           ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
+        LEFT JOIN LATERAL (
+          SELECT count(DISTINCT n.id)::int AS note_count
+          FROM episodes e
+          INNER JOIN note_episodes ne ON ne.episode_id = e.id
+          INNER JOIN atomic_notes n ON n.id = ne.note_id
+          WHERE e.document_id = d.id
+        ) note_agg ON true
+        LEFT JOIN LATERAL (
+          SELECT count(DISTINCT re.id)::int AS amem_count
+          FROM episodes e
+          INNER JOIN note_episodes ne ON ne.episode_id = e.id
+          INNER JOIN atomic_notes n ON n.id = ne.note_id
+          INNER JOIN retrieval_embeddings re
+            ON re.workspace_id = d.workspace_id
+           AND re.index_kind = 'note_amem'
+           AND re.source_kind = 'atomic_note'
+           AND re.source_id = n.id::text
+          WHERE e.document_id = d.id
+        ) amem_agg ON true
         WHERE d.workspace_id = $1::uuid AND d.source_kind = 'north_conversation'
         ORDER BY agent_display_name ASC, d.created_at DESC
         LIMIT 200
         `,
         [workspaceId],
       );
-      return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
+      const items = result.rows.map((row) => {
+        const {
+          memory_notes,
+          memory_amem_embeddings,
+          memory_ingest_digest,
+          ...rest
+        } = row;
+        return {
+          ...rest,
+          memory: {
+            notes: memory_notes,
+            amem_embeddings: memory_amem_embeddings,
+            document_status: rest.status,
+            ingest_digest: memory_ingest_digest,
+          },
+        };
+      });
+      return NextResponse.json({ items, next_cursor: null as string | null });
     }
 
     const result = await pool.query<{

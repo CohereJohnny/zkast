@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any
 
 import psycopg
+
+from app.north_checksum import text_content_hash
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
@@ -38,6 +40,49 @@ def fetch_document_by_checksum(
         if row.get("replaces_document_id"):
             _uuid_str(row, "replaces_document_id")
         return row
+
+
+def fetch_latest_north_documents_by_conversation(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Latest north_conversation document per ``north_conversation_id`` for an agent."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT ON (north_conversation_id)
+              north_conversation_id,
+              id,
+              checksum,
+              status,
+              created_at,
+              north_metadata
+            FROM documents
+            WHERE workspace_id = %s::uuid
+              AND agent_id = %s::uuid
+              AND source_kind = 'north_conversation'
+              AND north_conversation_id IS NOT NULL
+            ORDER BY north_conversation_id, created_at DESC
+            """,
+            (workspace_id, agent_id),
+        ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cid = str(row.get("north_conversation_id") or "").strip()
+        if not cid:
+            continue
+        doc = dict(row)
+        if doc.get("id") is not None:
+            doc["id"] = str(doc["id"])
+        meta = doc.get("north_metadata")
+        if isinstance(meta, dict):
+            doc["north_metadata"] = meta
+        elif meta is not None:
+            doc["north_metadata"] = dict(meta)
+        out[cid] = doc
+    return out
 
 
 def fetch_document(
@@ -580,11 +625,12 @@ def insert_episodes(
                 """
                 INSERT INTO episodes (
                   id, workspace_id, document_id, ingestion_run_id,
-                  kind, text, page_start, page_end, sequence, agent_id
+                  kind, text, page_start, page_end, sequence, agent_id,
+                  source_content_hash
                 )
                 VALUES (
                   %s::uuid, %s::uuid, %s::uuid, %s::uuid,
-                  %s, %s, %s, %s, %s, %s::uuid
+                  %s, %s, %s, %s, %s, %s::uuid, %s
                 )
                 """,
                 [
@@ -599,6 +645,7 @@ def insert_episodes(
                         r[3],
                         r[4],
                         r[6],
+                        text_content_hash(str(r[1])),
                     )
                     for r in rows
                 ],

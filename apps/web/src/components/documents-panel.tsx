@@ -4,6 +4,10 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  ConversationMemoryTelemetry,
+  type ConversationMemoryStats,
+} from "@/components/conversation-memory-telemetry";
 import { DocumentDetailPanel } from "@/components/document-detail-panel";
 import { emitGraphInvalidated } from "@/lib/graph-events";
 import { useJobEvents } from "@/lib/job-events";
@@ -32,6 +36,7 @@ type DocRow = {
   conversation_title?: string;
   north_conversation_id?: string | null;
   conversation_activity_at?: string | null;
+  memory?: ConversationMemoryStats | null;
 };
 
 function formatLocalTs(iso: string | undefined | null): string {
@@ -530,10 +535,15 @@ export function DocumentsPanel({
                                 {d.page_count != null ? (
                                   <span className="text-muted">
                                     {" "}
-                                    · {d.page_count} page{d.page_count === 1 ? "" : "s"}
+                                    · {d.page_count} episode{d.page_count === 1 ? "" : "s"}
                                   </span>
                                 ) : null}
                               </p>
+                              <ConversationMemoryTelemetry
+                                memory={d.memory}
+                                documentStatus={d.status}
+                                importing={INGESTION_ACTIVE_STATUSES.has(d.status)}
+                              />
                               {d.north_conversation_id ? (
                                 <p
                                   className="truncate font-mono text-[11px] text-muted/80"

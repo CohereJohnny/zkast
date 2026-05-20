@@ -100,4 +100,6 @@
 
 **Gaps / issues:** Chat scope still uses manual agent UUID (TD-016). No dedicated eval UI panel (CLI/internal API only). Graph/hybrid agent isolation depends on Graphiti document `agent_id` at ingest time.
 
+**Closeout (final commit):** North import sync status + ingest hash dedup; A-MEM count fix; chat `amem_lite` migration; dreaming pipeline telemetry; pipeline log docked on agent detail; `specs/dreaming.md`.
+
 **Next steps:** Sprint D — product polish, chat AgentPicker, spec sync.

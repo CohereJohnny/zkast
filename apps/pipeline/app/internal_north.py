@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
 from typing import Any
@@ -13,9 +12,21 @@ from fastapi.responses import JSONResponse
 
 from app.config import Settings
 from app.documents_repo import (
+    fetch_document,
     fetch_document_by_checksum,
+    fetch_latest_north_documents_by_conversation,
     insert_document,
     insert_ingestion_run,
+)
+from app.north_checksum import (
+    north_conversation_content_checksum,
+    north_ingest_content_hash,
+    stamp_cache_payload_ingest_hash,
+)
+from app.north_import_status import (
+    agent_import_digest,
+    attach_import_status_to_conversations,
+    imported_ingest_hash,
 )
 from app.job_redis import job_hset, publish_job_event
 from app.north_client import (
@@ -33,6 +44,7 @@ from app.north_repo import (
     fetch_dream_job,
     fetch_north_agent,
     insert_dream_job,
+    fetch_conversation_memory_stats_by_agent,
     list_conversation_cache,
     list_dream_job_mutations,
     list_dream_jobs,
@@ -222,7 +234,9 @@ async def get_north_agent_stats(
     if not agent:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
     stats = fetch_agent_stats(db, workspace_id=ws, agent_id=aid)
-    return JSONResponse(content={"agent_id": aid, **stats})
+    docs_by_cid = fetch_latest_north_documents_by_conversation(db, workspace_id=ws, agent_id=aid)
+    digest = agent_import_digest(docs_by_cid)
+    return JSONResponse(content={"agent_id": aid, **stats, "import_digest": digest})
 
 
 @router.get("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/conversations")
@@ -239,9 +253,34 @@ async def get_north_conversations(
     if not agent:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
 
+    aid = str(agent_id)
+    docs_by_cid = fetch_latest_north_documents_by_conversation(db, workspace_id=ws, agent_id=aid)
+    memory_stats = fetch_conversation_memory_stats_by_agent(db, workspace_id=ws, agent_id=aid)
+
+    import_settings = dict(agent.get("import_settings") or {})
+    agent_meta = {
+        "north_external_agent_id": str(agent.get("external_agent_id")),
+        "agent_display_name": str(agent.get("display_name") or ""),
+    }
+
     if not refresh:
-        cached = list_conversation_cache(db, workspace_id=ws, agent_id=str(agent_id), limit=100)
-        return JSONResponse(content={"items": cached, "source": "cache"})
+        cached = list_conversation_cache(db, workspace_id=ws, agent_id=aid, limit=100)
+        items = attach_import_status_to_conversations(
+            cached,
+            docs_by_cid,
+            import_settings=import_settings,
+            agent_north_metadata=agent_meta,
+            memory_stats_by_conversation=memory_stats,
+        )
+        return JSONResponse(
+            content=json_safe(
+                {
+                    "items": items,
+                    "source": "cache",
+                    "import_digest": agent_import_digest(docs_by_cid),
+                },
+            ),
+        )
 
     client = _north_client_from_workspace(settings, ws)
     ext = str(agent["external_agent_id"])
@@ -301,11 +340,19 @@ async def get_north_conversations(
             detail={"error": {"code": "north_upstream_error", "message": str(exc)[:500]}},
         ) from exc
 
+    enriched = attach_import_status_to_conversations(
+        items,
+        docs_by_cid,
+        import_settings=import_settings,
+        agent_north_metadata=agent_meta,
+        memory_stats_by_conversation=memory_stats,
+    )
     return JSONResponse(
         content=json_safe(
             {
-                "items": items,
+                "items": enriched,
                 "next_cursor": last_next,
+                "import_digest": agent_import_digest(docs_by_cid),
             },
         ),
     )
@@ -395,14 +442,6 @@ async def post_north_conversation_import(
     else:
         conv_root = {"messages": []}
 
-    upsert_conversation_cache(
-        db,
-        workspace_id=ws,
-        agent_id=aid,
-        north_conversation_id=conversation_id,
-        payload=conv_root,
-    )
-
     import_settings = dict(agent.get("import_settings") or {})
     north_meta: dict[str, Any] = {
         "north_external_agent_id": str(agent.get("external_agent_id")),
@@ -413,6 +452,28 @@ async def post_north_conversation_import(
     activity_iso = north_conversation_activity_iso(conv_root)
     if activity_iso:
         north_meta["conversation_activity_at"] = activity_iso
+
+    ingest_hash = north_ingest_content_hash(
+        conv_root,
+        import_settings=import_settings,
+        north_metadata=north_meta,
+    )
+    north_meta["ingest_content_hash"] = ingest_hash
+
+    cache_payload = stamp_cache_payload_ingest_hash(
+        conv_root,
+        import_settings=import_settings,
+        north_metadata=north_meta,
+        full_transcript=True,
+    )
+    upsert_conversation_cache(
+        db,
+        workspace_id=ws,
+        agent_id=aid,
+        north_conversation_id=conversation_id,
+        payload=cache_payload,
+    )
+
     episode_count = count_north_episode_rows_from_conversation(
         conv=conv_root,
         import_settings=import_settings,
@@ -433,13 +494,32 @@ async def post_north_conversation_import(
         )
 
     raw_bytes = json.dumps(conv_root, ensure_ascii=False).encode("utf-8")
-    checksum = hashlib.sha256(raw_bytes).hexdigest()
+    checksum = north_conversation_content_checksum(conv_root)
     dup = fetch_document_by_checksum(db, workspace_id=ws, checksum=checksum)
     if dup:
         return JSONResponse(
             status_code=200,
             content=json_safe({"document": dup, "job_id": None, "deduped": True}),
         )
+
+    latest_by_cid = fetch_latest_north_documents_by_conversation(db, workspace_id=ws, agent_id=aid)
+    latest = latest_by_cid.get(conversation_id)
+    if latest and ingest_hash:
+        prior_hash = imported_ingest_hash(latest)
+        if prior_hash and prior_hash == ingest_hash:
+            existing = fetch_document(db, workspace_id=ws, document_id=str(latest["id"]))
+            if existing:
+                return JSONResponse(
+                    status_code=200,
+                    content=json_safe(
+                        {
+                            "document": existing,
+                            "job_id": None,
+                            "deduped": True,
+                            "reason": "ingest_content_unchanged",
+                        },
+                    ),
+                )
 
     doc_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
