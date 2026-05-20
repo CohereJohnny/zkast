@@ -361,6 +361,53 @@ The chat surface lets the user ask natural-language questions of the workspace's
 - **Test North** action calls the connectivity probe and surfaces success (`agent_count`) or structured failure (misconfiguration vs upstream).
 - **Configured state**: show whether URL + token are present without revealing secrets; link to Agents when North is incomplete.
 
+## Agents Surface (Sprint A-D)
+
+The **Agents** view is a primary nav surface for the North + A-MEM track. It is the canonical entry point for registering North agents, importing conversations, and triggering dreaming for one agent.
+
+### Agents view
+
+**Purpose**: Register and operate North agents; provide jumping-off points to scoped Notes, Graph, and Chat.
+
+**Display Elements:**
+
+- Workspace-level memory telemetry chips (imported / cached / notes / A-MEM indexed / digest).
+- One row per registered agent showing provider, display name, external id.
+- Per-agent actions: **Open**, **Notes**, **Graph**, **Chat**, **Dream**.
+- Sync-from-North action with success / partial / failure feedback.
+
+**Empty states:**
+
+- No North credentials configured: guidance to Settings → North integration.
+- Credentials configured but no agents registered: prompt to Sync from North.
+
+### Agent detail
+
+**Purpose**: Inspect one agent's conversations, memory rollup, and run dreaming.
+
+**Display Elements:**
+
+- Agent header: imported / cached / notes / A-MEM indexed / digest counters.
+- Conversation list with per-conversation **sync_status** (`not_synced` | `synced` | `syncing` | `outdated`) and memory telemetry (notes, A-MEM indexed, digest).
+- Quick links: **View notes**, **View graph**, **Open in chat**, **Dream**.
+- Dream job status card (current/recent job, mutation count, stats, failure reason).
+
+**Pipeline log**: Docked at the bottom of the agent detail view (same pattern as Conversations and Jobs) so Dream and import jobs stream live telemetry without leaving the page.
+
+### Scoped surfaces (Notes, Graph, Chat, Eval)
+
+When the user arrives from an agent-scoped link, the destination surface preserves the selection:
+
+- **Notes** and **Graph**: agent picker reflects the active scope; URL carries `agent_id`; a clear path back to workspace-wide view exists.
+- **Chat**: chat scope picker uses the same agent picker, not raw UUIDs. The chat header surfaces the active **memory boundary chip** (workspace-wide vs the selected North agent) so the user can see what retrieval will see before sending the first message.
+- **Eval**: when agent scope is active, run summaries label the scoping so results are not mistaken for workspace-wide comparisons.
+
+### Dream job UX
+
+- Status card shows running / succeeded / failed, terminal stats (notes, pairs, links, neighbors, embeddings), and mutation count.
+- Failed runs include recovery guidance (read the failure reason, check pipeline log, retry from the agent's Dream action).
+- Pipeline log shows the start, note-loading and embedding phase, periodic per-note progress, each link or neighbor patch as it lands, the A-MEM refresh, and the final summary.
+
 ### Workspace Settings
 
 - Name, slug, description (editable).

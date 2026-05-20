@@ -259,6 +259,10 @@ This capability supports **A-MEM–style** memories: atomic notes enriched with 
 - [ ] AC-2: Importing a North conversation produces agent-scoped episodes and notes.
 - [ ] AC-3: Dreaming never writes links between different agents.
 - [ ] AC-4: Eval runner accepts agent scope and ships a North-history YAML dataset describing categories and pattern-based scoring expectations.
+- [ ] AC-5: Conversations expose a per-row sync status (not synced / synced / syncing / outdated) and re-import dedupes on ingest content hash.
+- [ ] AC-6: Chat agent scope is selected through an agent picker, not a manual UUID entry, and the chat header surfaces the active memory boundary.
+- [ ] AC-7: Dream jobs publish progressive telemetry (start, progress, link / neighbor patch events, completion or failure) on the shared job event stream and dock the pipeline log on the agent detail view.
+- [ ] AC-8: Failed Dream jobs surface failure reason and recovery guidance in the Dream status card.
 
 ## Success Metrics
 

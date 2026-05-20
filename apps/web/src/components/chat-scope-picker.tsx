@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { AgentPicker } from "@/components/filters/agent-picker";
 import { DocumentPicker } from "@/components/filters/document-picker";
 import { EntityTypeahead } from "@/components/filters/entity-typeahead";
 import { TagPicker } from "@/components/filters/tag-picker";
@@ -92,18 +93,19 @@ export function ChatScopePicker({
         }
         label="Restrict to document"
       />
-      <label className="text-caption text-muted sm:col-span-2">
-        North agent scope (optional)
-        <input
-          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+      <div className="sm:col-span-2">
+        <AgentPicker
+          workspaceId={workspaceId}
           value={value.agent_id ?? ""}
-          onChange={(e) =>
-            patch({ agent_id: e.target.value.trim() || undefined })
-          }
-          placeholder="Agent UUID — limits retrieval to that agent's documents"
-          spellCheck={false}
+          onChange={(id) => patch({ agent_id: id || undefined })}
+          label="North agent scope (optional)"
+          placeholder="All agents — leave empty for workspace-wide retrieval"
         />
-      </label>
+        <p className="mt-1 text-caption text-muted">
+          When set, retrieval (graph, hybrid, A-MEM lite, zettel notes) restricts to this
+          agent&apos;s documents and notes only.
+        </p>
+      </div>
       <EntityTypeahead
         workspaceId={workspaceId}
         value={toCsv(value.seed_entity_ids)}

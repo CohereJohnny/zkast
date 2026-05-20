@@ -109,7 +109,14 @@ export const RETRIEVAL_MODE_LABELS: Record<
   },
 };
 
-export function ChatPanel({ workspaceId }: { workspaceId: string }) {
+export function ChatPanel({
+  workspaceId,
+  initialAgentId,
+}: {
+  workspaceId: string;
+  /** Pre-fills North agent scope from a deep link (e.g. agent detail → Chat). */
+  initialAgentId?: string | null;
+}) {
   const toast = useToast();
 
   const [session, setSession] = useState<SessionShape | null>(null);
@@ -117,8 +124,12 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
   const [input, setInput] = useState("");
   const [turnId, setTurnId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [scopeOpen, setScopeOpen] = useState(false);
-  const [scope, setScope] = useState<ChatScopeValue>({});
+  // Open the scope drawer automatically when arriving with an agent scope so
+  // the user can see the boundary before sending the first message.
+  const [scopeOpen, setScopeOpen] = useState(Boolean(initialAgentId));
+  const [scope, setScope] = useState<ChatScopeValue>(() =>
+    initialAgentId ? { agent_id: initialAgentId } : {},
+  );
   // Sprint 6b — retrieval strategy selector. Defaults to ``graph`` so
   // behaviour matches Sprint 6. The selected mode is locked in when
   // the first message of a session is sent (it persists onto
@@ -140,6 +151,39 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
     if (!node) return;
     node.scrollTop = node.scrollHeight;
   }, [messages.length, announce]);
+
+  // Resolve agent display name for the active scope so the header can label
+  // the memory boundary by name rather than UUID.
+  const [agentName, setAgentName] = useState<string | null>(null);
+  useEffect(() => {
+    const aid = scope.agent_id;
+    if (!aid) {
+      setAgentName(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${workspaceId}/north/agents`,
+          { cache: "no-store" },
+        );
+        const body = (await res.json()) as {
+          items?: { id: string; display_name: string; external_agent_id: string }[];
+        };
+        if (cancelled) return;
+        const hit = (body.items ?? []).find((a) => a.id === aid);
+        setAgentName(
+          hit ? hit.display_name || hit.external_agent_id : `${aid.slice(0, 8)}…`,
+        );
+      } catch {
+        if (!cancelled) setAgentName(`${aid.slice(0, 8)}…`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [scope.agent_id, workspaceId]);
 
   const flushAnnounce = useCallback(() => {
     setAnnounce(announceBufRef.current);
@@ -419,12 +463,14 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
     >
       <header className="flex flex-col gap-2 border-b border-border-subtle pb-2">
         <div className="flex items-center justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-body font-medium text-primary">
               {session?.title || "New chat"}
             </h1>
             <p className="text-caption text-muted">
-              Grounded answers cite notes, entities, and source pages from this workspace.
+              {scope.agent_id
+                ? "Grounded answers are restricted to the selected North agent's memory."
+                : "Grounded answers cite notes, entities, and source pages across this workspace."}
             </p>
           </div>
           <button
@@ -435,6 +481,36 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
           >
             {scopeOpen ? "Hide scope" : "Scope"}
           </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-caption">
+          <span
+            className={
+              scope.agent_id
+                ? "inline-flex items-center gap-1 rounded-full border border-accent-primary/40 bg-accent-primary/10 px-2 py-0.5 text-accent-primary"
+                : "inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface/40 px-2 py-0.5 text-muted"
+            }
+            title={
+              scope.agent_id
+                ? "Retrieval is restricted to this North agent's documents and notes."
+                : "Retrieval can use any document or note in this workspace."
+            }
+          >
+            <span aria-hidden="true">{scope.agent_id ? "●" : "○"}</span>
+            {scope.agent_id ? (
+              <>Agent scope: {agentName ?? `${scope.agent_id.slice(0, 8)}…`}</>
+            ) : (
+              <>Workspace-wide</>
+            )}
+          </span>
+          {scope.agent_id && !session ? (
+            <button
+              type="button"
+              onClick={() => setScope((s) => ({ ...s, agent_id: undefined }))}
+              className="rounded border border-border-subtle px-2 py-0.5 text-muted hover:bg-surface hover:text-primary"
+            >
+              Clear agent scope
+            </button>
+          ) : null}
         </div>
         <RetrievalModeSelector
           value={retrievalMode}
