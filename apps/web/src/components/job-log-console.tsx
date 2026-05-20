@@ -79,6 +79,7 @@ const STAGE_LABEL: Record<string, string> = {
   extracting_graph: "Graph",
   building_graph: "Graph",
   dreaming: "Dream",
+  wiki_generation: "Wiki",
 };
 
 function classifyLevel(ev: ServerEvent): Level {
