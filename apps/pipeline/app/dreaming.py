@@ -13,17 +13,23 @@ from openai import AsyncOpenAI
 from app.config import get_settings
 from app.cohere_adapters import CohereEmbedder
 from app.graphiti_factory import COHERE_COMPAT_BASE, resolve_cohere_api_key
+from app.job_redis import job_hset, publish_job_event, record_log, record_metric
 from app.note_embedding_index import upsert_amem_embeddings_for_notes
 from app.north_repo import finalize_dream_job, insert_dream_job, insert_dream_mutation
 from app.notes_repo import (
     add_note_link,
     append_evolution_history,
+    fetch_note,
     list_notes,
     patch_note_derivations,
 )
 from app.workspace_repo import fetch_pipeline_settings
 
 logger = structlog.get_logger(__name__)
+
+DREAM_JOB_STATUS_RUNNING = "running"
+DREAM_JOB_STATUS_SUCCEEDED = "succeeded"
+DREAM_JOB_STATUS_FAILED = "failed"
 
 
 def _extract_json_object(raw: str) -> dict[str, Any]:
@@ -46,11 +52,155 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _dreaming_caps(pipe: dict[str, Any]) -> tuple[int, int, int]:
+    max_notes = int(pipe.get("dreaming_max_notes") or 60)
+    neighbors = int(pipe.get("dreaming_neighbors_per_note") or 6)
+    pairs_cap = int(pipe.get("dreaming_pairs_per_run") or 360)
+    return max(2, min(max_notes, 500)), max(1, min(neighbors, 20)), max(1, pairs_cap)
+
+
+def _bodies_unchanged(before: dict[str, Any], after: dict[str, Any] | None) -> bool:
+    if not after:
+        return False
+    return before.get("title") == after.get("title") and before.get("body") == after.get("body")
+
+
+async def _dream_redis_running(
+    redis: Any,
+    *,
+    job_id: str,
+    workspace_id: str,
+    agent_id: str,
+) -> None:
+    await job_hset(
+        redis,
+        job_id,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        kind="dreaming",
+        status="running",
+        progress='{"percent":5,"stage":"dreaming"}',
+    )
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="dreaming",
+        message="Dream job started",
+        data={"agent_id": agent_id},
+    )
+
+
+async def _dream_log(
+    redis: Any | None,
+    *,
+    job_id: str,
+    message: str,
+    level: str = "info",
+    data: dict[str, Any] | None = None,
+) -> None:
+    if not redis:
+        return
+    await record_log(
+        redis,
+        job_id=job_id,
+        level=level,
+        stage="dreaming",
+        message=message,
+        data=data,
+    )
+
+
+async def _dream_progress(
+    redis: Any | None,
+    *,
+    job_id: str,
+    percent: int,
+    current: int,
+    total: int,
+    stats: dict[str, Any],
+) -> None:
+    if not redis:
+        return
+    pct = max(0, min(100, percent))
+    prog = {
+        "percent": pct,
+        "stage": "dreaming",
+        "current": current,
+        "total": total,
+        "pairs_considered": stats.get("pairs_considered", 0),
+        "links_added": stats.get("links_added", 0),
+        "neighbors_updated": stats.get("neighbors_updated", 0),
+    }
+    await job_hset(redis, job_id, progress=json.dumps(prog))
+    await publish_job_event(
+        redis,
+        job_id,
+        "stage_progress",
+        stage="dreaming",
+        current=current,
+        total=total,
+        percent=pct,
+    )
+
+
+def _short_id(note_id: str) -> str:
+    return note_id[:8] + "…" if len(note_id) > 8 else note_id
+
+
+async def _dream_redis_finish(
+    redis: Any,
+    *,
+    job_id: str,
+    status: str,
+    stats: dict[str, Any],
+    failure_reason: str | None = None,
+) -> None:
+    pct = 100 if status == DREAM_JOB_STATUS_SUCCEEDED else 0
+    await job_hset(
+        redis,
+        job_id,
+        status=status,
+        progress=json.dumps({"percent": pct, "stage": "dreaming", "stats": stats}),
+        failure_reason=failure_reason,
+    )
+    if status == DREAM_JOB_STATUS_FAILED:
+        await publish_job_event(
+            redis,
+            job_id,
+            "job_failed",
+            reason=failure_reason or "dreaming_failed",
+            stage="dreaming",
+        )
+        await record_log(
+            redis,
+            job_id=job_id,
+            level="error",
+            stage="dreaming",
+            message=failure_reason or "Dream job failed",
+        )
+    else:
+        await publish_job_event(redis, job_id, "job_completed", stage="dreaming")
+        await record_log(
+            redis,
+            job_id=job_id,
+            level="info",
+            stage="dreaming",
+            message=(
+                f"Dream complete — links {stats.get('links_added', 0)}, "
+                f"neighbors {stats.get('neighbors_updated', 0)}, "
+                f"embeddings {stats.get('embeddings_refreshed', 0)}"
+            ),
+            data=stats,
+        )
+
+
 async def run_dreaming_job(
     ctx: dict[str, Any],
     *,
     workspace_id: str,
     agent_id: str,
+    job_id: str | None = None,
 ) -> None:
     """arq task: consolidate links + evolve derived fields for one agent."""
     database_url: str = ctx["database_url"]
@@ -62,37 +212,85 @@ async def run_dreaming_job(
     pipe = fetch_pipeline_settings(database_url, workspace_id)
     model = str(pipe.get("large_model") or "command-a-plus-05-2026")
     embed_model = str(pipe.get("embed_model") or "embed-v4.0")
+    max_notes, neighbors_per_note, pairs_cap = _dreaming_caps(pipe)
 
-    job_id = insert_dream_job(database_url, workspace_id=workspace_id, agent_id=agent_id)
+    job_id = job_id or insert_dream_job(database_url, workspace_id=workspace_id, agent_id=agent_id)
+    redis = ctx.get("redis")
     stats: dict[str, Any] = {
         "pairs_considered": 0,
         "links_added": 0,
         "neighbors_updated": 0,
+        "notes_considered": 0,
+        "embeddings_refreshed": 0,
+        "immutability_violations": 0,
     }
     reindex_amem: set[str] = set()
+
+    if redis:
+        await _dream_redis_running(
+            redis, job_id=job_id, workspace_id=workspace_id, agent_id=agent_id
+        )
 
     try:
         notes, _total = list_notes(
             database_url,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            limit=60,
+            limit=max_notes,
             offset=0,
             sort="updated_at_desc",
         )
+        stats["notes_considered"] = len(notes)
+        await _dream_log(
+            redis,
+            job_id=job_id,
+            message=(
+                f"Loaded {len(notes)} notes — up to {pairs_cap} pair evaluations, "
+                f"{neighbors_per_note} neighbors per note"
+            ),
+            data={
+                "notes": len(notes),
+                "pairs_cap": pairs_cap,
+                "neighbors_per_note": neighbors_per_note,
+                "model": model,
+            },
+        )
         if len(notes) < 2:
+            await _dream_log(
+                redis,
+                job_id=job_id,
+                level="warning",
+                message="Not enough notes to dream (need at least 2)",
+            )
+            final_stats = {**stats, "message": "not_enough_notes"}
             finalize_dream_job(
                 database_url,
                 job_id=job_id,
-                status="succeeded",
-                stats={**stats, "message": "not_enough_notes"},
+                status=DREAM_JOB_STATUS_SUCCEEDED,
+                stats=final_stats,
             )
+            if redis:
+                await _dream_redis_finish(redis, job_id=job_id, status=DREAM_JOB_STATUS_SUCCEEDED, stats=final_stats)
             return
 
         embedder = CohereEmbedder(api_key=api_key, model=embed_model, embedding_dim=1536)
         texts = [f"{n.get('title','')}\n{n.get('body','')}"[:6000] for n in notes]
         vectors = await embedder.create_batch(texts)
         id_by_idx = [str(n["id"]) for n in notes]
+        await _dream_log(
+            redis,
+            job_id=job_id,
+            message=f"Embedded {len(vectors)} note vectors ({embed_model})",
+            data={"embed_model": embed_model, "vectors": len(vectors)},
+        )
+        await _dream_progress(
+            redis,
+            job_id=job_id,
+            percent=12,
+            current=0,
+            total=len(notes),
+            stats=stats,
+        )
 
         client = AsyncOpenAI(
             api_key=api_key,
@@ -101,7 +299,38 @@ async def run_dreaming_job(
             max_retries=1,
         )
 
+        note_count = len(notes)
         for i, note in enumerate(notes):
+            if stats["pairs_considered"] >= pairs_cap:
+                stats["pairs_cap_reached"] = True
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    message=f"Pair cap reached ({pairs_cap}); stopping early",
+                    data=dict(stats),
+                )
+                break
+            if redis and (i == 0 or i % 5 == 0 or i == note_count - 1):
+                pct = 12 + int(73 * (i + 1) / max(note_count, 1))
+                await _dream_progress(
+                    redis,
+                    job_id=job_id,
+                    percent=pct,
+                    current=i + 1,
+                    total=note_count,
+                    stats=stats,
+                )
+                focus_title = str(note.get("title") or "Untitled")[:80]
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    message=(
+                        f"Note {i + 1}/{note_count}: “{focus_title}” — "
+                        f"{stats['pairs_considered']} pairs, {stats['links_added']} links"
+                    ),
+                    data={"note_id": id_by_idx[i], "index": i},
+                )
             vec_i = vectors[i] if i < len(vectors) else None
             if not vec_i:
                 continue
@@ -111,7 +340,7 @@ async def run_dreaming_job(
                     continue
                 scored.append((_cosine(list(vec_i), list(vec_j)), j))
             scored.sort(reverse=True)
-            neighbors = scored[:6]
+            neighbors = scored[:neighbors_per_note]
             if not neighbors:
                 continue
 
@@ -164,9 +393,24 @@ async def run_dreaming_job(
                 decision = _extract_json_object(raw)
             except json.JSONDecodeError:
                 logger.warning("dreaming_bad_json", note_id=id_by_idx[i])
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    level="warning",
+                    message=f"LLM returned unparseable JSON for {_short_id(id_by_idx[i])}",
+                    data={"note_id": id_by_idx[i]},
+                )
                 continue
 
             stats["pairs_considered"] += 1
+            if redis and stats["pairs_considered"] % 10 == 0:
+                await record_metric(
+                    redis,
+                    job_id=job_id,
+                    name="pairs_considered",
+                    value=stats["pairs_considered"],
+                    stage="dreaming",
+                )
             if not decision.get("should_link"):
                 continue
 
@@ -195,6 +439,28 @@ async def run_dreaming_job(
                 stats["links_added"] += 1
                 reindex_amem.add(id_by_idx[i])
                 reindex_amem.add(target)
+                reason = str(decision.get("link_reason") or "")[:120]
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    message=(
+                        f"Link {kind}: {_short_id(id_by_idx[i])} → {_short_id(target)}"
+                        + (f" — {reason}" if reason else "")
+                    ),
+                    data={
+                        "source_note_id": id_by_idx[i],
+                        "target_note_id": target,
+                        "kind": kind,
+                    },
+                )
+                if redis:
+                    await record_metric(
+                        redis,
+                        job_id=job_id,
+                        name="links_added",
+                        value=stats["links_added"],
+                        stage="dreaming",
+                    )
                 insert_dream_mutation(
                     database_url,
                     dream_job_id=job_id,
@@ -211,6 +477,12 @@ async def run_dreaming_job(
             tag_adds = [str(t).strip().lower() for t in (decision.get("neighbor_tag_additions") or []) if str(t).strip()]
             if nctx or tag_adds:
                 tgt_note = next((x for x in notes if str(x["id"]) == target), None)
+                if not tgt_note:
+                    continue
+                before = {
+                    "title": tgt_note.get("title"),
+                    "body": tgt_note.get("body"),
+                }
                 merged_tags = list(dict.fromkeys([*(tgt_note.get("tags") or []), *tag_adds]))[:30] if tgt_note else tag_adds
                 patch_note_derivations(
                     database_url,
@@ -220,6 +492,15 @@ async def run_dreaming_job(
                     tags=merged_tags if merged_tags else None,
                     mark_dreaming_touch=True,
                 )
+                after = fetch_note(database_url, workspace_id=workspace_id, note_id=target)
+                if not _bodies_unchanged(before, after):
+                    stats["immutability_violations"] = int(stats.get("immutability_violations", 0)) + 1
+                    logger.error(
+                        "dreaming_immutability_violation",
+                        note_id=target,
+                        job_id=job_id,
+                    )
+                    continue
                 append_evolution_history(
                     database_url,
                     workspace_id=workspace_id,
@@ -233,6 +514,20 @@ async def run_dreaming_job(
                 )
                 stats["neighbors_updated"] += 1
                 reindex_amem.add(target)
+                await _dream_log(
+                    redis,
+                    job_id=job_id,
+                    message=f"Neighbor patch on {_short_id(target)} (from {_short_id(id_by_idx[i])})",
+                    data={"target_note_id": target, "source_note_id": id_by_idx[i]},
+                )
+                if redis:
+                    await record_metric(
+                        redis,
+                        job_id=job_id,
+                        name="neighbors_updated",
+                        value=stats["neighbors_updated"],
+                        stage="dreaming",
+                    )
                 insert_dream_mutation(
                     database_url,
                     dream_job_id=job_id,
@@ -242,6 +537,20 @@ async def run_dreaming_job(
                 )
 
         if reindex_amem and api_key:
+            await _dream_log(
+                redis,
+                job_id=job_id,
+                message=f"Refreshing A-MEM embeddings for {len(reindex_amem)} note(s)",
+                data={"note_count": len(reindex_amem)},
+            )
+            await _dream_progress(
+                redis,
+                job_id=job_id,
+                percent=92,
+                current=note_count,
+                total=note_count,
+                stats=stats,
+            )
             await upsert_amem_embeddings_for_notes(
                 api_key=api_key,
                 database_url=database_url,
@@ -250,15 +559,34 @@ async def run_dreaming_job(
                 agent_id=agent_id,
                 embed_model=embed_model,
             )
+            stats["embeddings_refreshed"] = len(reindex_amem)
 
-        finalize_dream_job(database_url, job_id=job_id, status="succeeded", stats=stats)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("dreaming_job_failed", agent_id=agent_id, error=str(exc))
         finalize_dream_job(
             database_url,
             job_id=job_id,
-            status="failed",
+            status=DREAM_JOB_STATUS_SUCCEEDED,
             stats=stats,
-            failure_reason=str(exc)[:2000],
         )
+        if redis:
+            await _dream_redis_finish(
+                redis, job_id=job_id, status=DREAM_JOB_STATUS_SUCCEEDED, stats=stats
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("dreaming_job_failed", agent_id=agent_id, error=str(exc))
+        reason = str(exc)[:2000]
+        finalize_dream_job(
+            database_url,
+            job_id=job_id,
+            status=DREAM_JOB_STATUS_FAILED,
+            stats=stats,
+            failure_reason=reason,
+        )
+        if redis:
+            await _dream_redis_finish(
+                redis,
+                job_id=job_id,
+                status=DREAM_JOB_STATUS_FAILED,
+                stats=stats,
+                failure_reason=reason,
+            )
         raise

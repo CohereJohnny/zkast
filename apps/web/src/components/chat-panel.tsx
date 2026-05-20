@@ -349,10 +349,13 @@ export function ChatPanel({ workspaceId }: { workspaceId: string }) {
             message: "Submit failed",
             description: body.error?.message ?? `HTTP ${res.status}`,
           });
+          const failMsg =
+            body.error?.message ??
+            "Could not start this chat turn. Run database migrations if you use A-MEM lite or other new retrieval modes.";
           setMessages((prev) =>
             prev.map((m) =>
               m.id === tmpAssistantId
-                ? { ...m, status: "failed" }
+                ? { ...m, status: "failed", content: failMsg }
                 : m,
             ),
           );
@@ -543,7 +546,7 @@ function MessageBubble({
     return (
       <li>
         <div className="rounded-md border border-semantic-danger/40 bg-semantic-danger/10 px-3 py-2 text-caption text-red-200">
-          Turn failed.
+          {message.content?.trim() || "Turn failed."}
         </div>
       </li>
     );

@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 
-from app.notes_repo import insert_note, list_notes
+from app.notes_repo import delete_note, insert_note, list_notes
+from tests.db_helpers import delete_test_north_agent, ensure_test_north_agent, get_database_url
 
 DEFAULT_WS = "00000000-0000-4000-8000-000000000002"
 
-pytestmark = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="DATABASE_URL not set")
+pytestmark = pytest.mark.skipif(get_database_url() is None, reason="DATABASE_URL not set")
 
 
 def test_list_notes_without_agent_includes_null_agent() -> None:
-    db = os.environ["DATABASE_URL"]
+    db = get_database_url()
+    assert db
     pdf_id = str(uuid.uuid4())
     agent_id = str(uuid.uuid4())
+    ensure_test_north_agent(db, workspace_id=DEFAULT_WS, agent_id=agent_id)
     insert_note(
         db,
         note_id=pdf_id,
@@ -49,14 +51,20 @@ def test_list_notes_without_agent_includes_null_agent() -> None:
     ids = {r["id"] for r in rows}
     assert pdf_id in ids
     assert north_id in ids
+    delete_note(db, workspace_id=DEFAULT_WS, note_id=pdf_id)
+    delete_note(db, workspace_id=DEFAULT_WS, note_id=north_id)
+    delete_test_north_agent(db, workspace_id=DEFAULT_WS, agent_id=agent_id)
 
 
 def test_list_notes_agent_scope_excludes_other_agents() -> None:
-    db = os.environ["DATABASE_URL"]
+    db = get_database_url()
+    assert db
     agent_a = str(uuid.uuid4())
     agent_b = str(uuid.uuid4())
     note_a = str(uuid.uuid4())
     note_b = str(uuid.uuid4())
+    ensure_test_north_agent(db, workspace_id=DEFAULT_WS, agent_id=agent_a)
+    ensure_test_north_agent(db, workspace_id=DEFAULT_WS, agent_id=agent_b)
     for nid, aid in ((note_a, agent_a), (note_b, agent_b)):
         insert_note(
             db,
@@ -76,3 +84,7 @@ def test_list_notes_agent_scope_excludes_other_agents() -> None:
     assert note_a in ids
     assert note_b not in ids
     assert all(r.get("agent_id") == agent_a for r in rows if r.get("agent_id"))
+    delete_note(db, workspace_id=DEFAULT_WS, note_id=note_a)
+    delete_note(db, workspace_id=DEFAULT_WS, note_id=note_b)
+    delete_test_north_agent(db, workspace_id=DEFAULT_WS, agent_id=agent_a)
+    delete_test_north_agent(db, workspace_id=DEFAULT_WS, agent_id=agent_b)

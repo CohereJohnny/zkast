@@ -156,6 +156,64 @@ async def record_log(
             pass
 
 
+def decode_job_hash(raw: dict[str, str]) -> dict[str, Any]:
+    """Normalize a Redis job hash for JSON APIs."""
+    out: dict[str, Any] = dict(raw)
+    prog = out.get("progress")
+    if isinstance(prog, str):
+        try:
+            out["progress"] = json.loads(prog)
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
+async def list_workspace_jobs(
+    redis: Any,
+    *,
+    workspace_id: str,
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    """Return recent ``zkast:job:*`` hashes for one workspace (newest first)."""
+    items: list[dict[str, Any]] = []
+    cursor = 0
+    scanned = 0
+    max_scan = 3000
+    while True:
+        cursor, keys = await redis.scan(cursor=cursor, match=f"{JOB_HASH_PREFIX}*", count=200)
+        for k in keys:
+            if isinstance(k, bytes):
+                k = k.decode()
+            scanned += 1
+            if scanned > max_scan:
+                break
+            raw = await redis.hgetall(k)
+            if not raw:
+                continue
+            if isinstance(raw, dict) and any(isinstance(v, bytes) for v in raw.values()):
+                raw = {str(kk): (vv.decode() if isinstance(vv, bytes) else vv) for kk, vv in raw.items()}
+            if raw.get("workspace_id") != workspace_id:
+                continue
+            job_id = k.removeprefix(JOB_HASH_PREFIX)
+            row = decode_job_hash(raw)
+            row["job_id"] = job_id
+            items.append(row)
+        if cursor == 0 or scanned > max_scan or len(items) >= limit * 3:
+            break
+
+    # Prefer running/queued first, then by job_id (proxy for recency when no timestamp field).
+    status_order = {"running": 0, "queued": 1, "failed": 2, "succeeded": 3, "cancelled": 4}
+
+    items.sort(
+        key=lambda r: (
+            status_order.get(str(r.get("status") or ""), 9),
+            str(r.get("job_id") or ""),
+        ),
+        reverse=True,
+    )
+    return items[:limit]
+
+
 async def record_metric(
     redis: Any,
     *,

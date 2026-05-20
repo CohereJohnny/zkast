@@ -1,78 +1,105 @@
 # Sprint C Tasks — Dreaming, Eval Modes, And Isolation
 
 **Branch**: `sprints/sprint-c`
-**Status**: Planning
-**Primary spec**: [`specs/openspecs/north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md)
+**Status**: Implementation complete
+**Primary spec**: [`specs/openspecs/north-agents-amem.md`](../../specs/openspecs/north-agents-amem.md) — **FR-6**, **FR-8**, **FR-9**, **FR-10**
+**Depends on**: Sprint B ([`sprint_b_report.md`](../archive/sprint-b/sprint_b_report.md))
 
 ## Goals
 
-- Add agent-scoped dreaming jobs that evolve derived memory fields without mutating source text.
-- Enforce strict agent isolation across links, retrieval, citations, and evals.
-- Expand retrieval comparisons for North history across raw transcript, zettelkasten notes, A-MEM-lite, graph, and hybrid modes.
-- Provide enough auditability to inspect every dreaming mutation.
+- Run **agent-scoped dreaming** jobs that evolve derived memory fields without mutating immutable source text.
+- Enforce **strict agent isolation** across note links, retrieval hits, citations, and eval runs.
+- Verify and harden **retrieval mode** comparisons under optional `agent_id` scope.
+- Provide **auditable** dreaming mutations at job and per-note levels.
+
+---
 
 ## Tasks
 
-### Phase 0 — Sprint Setup
+### Phase 0 — Sprint setup
 
-- [ ] Branch `sprints/sprint-c` from updated `main` after Sprint B closes.
-- [ ] Review Sprint B output and confirm North-derived notes have `agent_id` and embeddings.
-- [ ] Review `specs/openspecs/north-agents-amem.md` for dreaming, retrieval, and eval acceptance criteria.
-- [ ] Keep progress notes in this file as work proceeds.
+- [x] Branch `sprints/sprint-c` from updated `main` after Sprint B merge.
+- [x] Sprint B dependencies documented (A-MEM fields, indexes, AgentPicker).
+- [x] FR-6, FR-8, FR-9, FR-10 reviewed against implementation.
 
-### Phase 1 — Memory Links And Isolation
+**Progress:** Branch + plan on `68bbfe2`; implementation commit follows.
 
-- [ ] Add link reason and link strength metadata for note links.
-- [ ] Enforce that note links do not connect different non-null agent scopes.
-- [ ] Add tests for same-agent links, legacy null-agent links, and cross-agent rejection.
-- [ ] Ensure link reasons are inspectable in retrieval or review surfaces where useful.
+---
 
-### Phase 2 — Dreaming Jobs
+### Phase 1 — Memory links and isolation
 
-- [ ] Add agent-scoped dreaming job records with status, timing, stats, and failure reason.
-- [ ] For each dreaming job, retrieve nearest neighbor notes only within the selected agent.
-- [ ] Apply allowed mutations only to derived fields and link metadata.
-- [ ] Append evolution history for changed notes.
-- [ ] Persist per-note mutation audit rows.
-- [ ] Mark jobs complete or failed with inspectable stats.
+- [x] Schema confirmed (`link_reason`, `link_strength` on `note_links`; `fetch_note_detail` returns both).
+- [x] `add_note_link` documented: cross-agent forbidden only when both `agent_id` non-null and differ; PDF↔North allowed.
+- [x] Regression tests: `test_note_link_isolation.py`.
 
-### Phase 3 — Re-Embedding And Reindexing
+**Progress:** One-sided null `agent_id` links allowed (not stricter rejection).
 
-- [ ] Re-embed notes when dreaming changes derived fields that affect retrieval.
-- [ ] Keep immutable source text separate from derived retrieval text.
-- [ ] Add job stats for notes considered, notes changed, links added, neighbors updated, and embeddings refreshed.
-- [ ] Add tests for idempotent reindexing after dreaming.
+---
 
-### Phase 4 — Retrieval Mode Expansion
+### Phase 2 — Dreaming jobs (productionize)
 
-- [ ] Add or verify retrieval modes for `raw_transcript`, `zettelkasten_notes`, `amem_lite`, graph, and hybrid comparisons.
-- [ ] Filter retrieval by selected agent when an agent scope is active.
-- [ ] Prevent Naive-RAG, graph, and hybrid modes from mixing artifacts across agents.
-- [ ] Add tests that retrieval records and citations respect agent scope.
+- [x] `GET .../north/agents/{agent_id}/dream-jobs` and `GET .../dream-jobs/{job_id}` (+ web proxies).
+- [x] `POST .../dream` creates `dream_jobs` row first, returns `job_id`, passes to worker.
+- [x] Pipeline caps: `dreaming_max_notes`, `dreaming_neighbors_per_note`, `dreaming_pairs_per_run`.
+- [x] Immutability guard after `patch_note_derivations`.
+- [x] Status vocabulary: `running` / `succeeded` / `failed`.
+- [x] Minimal UI: `DreamJobStatus` on Agents list + agent detail Dream button.
 
-### Phase 5 — North-History Eval Dataset
+**Progress:** Stats in `dream_jobs.stats`; arq `_job_id` prefix `dream:{agent_id}:{job_id}`.
 
-- [ ] Add a North-history eval dataset with single-hop, multi-hop, temporal, tool-provenance, and unanswerable categories.
-- [ ] Let the eval runner accept an optional agent scope.
-- [ ] Persist mode, category, score, answer, citation, and refusal results for review.
-- [ ] Include refusal expectations for questions outside the selected agent's memory.
+---
 
-### Phase 6 — Tests And Closeout
+### Phase 3 — Re-embedding and reindexing
 
-- [ ] Add focused tests for dreaming audit records and mutation constraints.
-- [ ] Add focused tests for cross-agent retrieval and link isolation.
-- [ ] Run pipeline tests covering retrieval, eval scoring, and dreaming.
-- [ ] Document accepted limitations or follow-ups in `sprints/tech_debt.md`.
+- [x] Post-dream `upsert_amem_embeddings_for_notes` with `embeddings_refreshed` stat.
+- [x] Idempotent upsert test in `test_note_embedding_index.py`.
+- [x] Zettel unchanged by design (dreaming never mutates `title`/`body`).
 
-## Definition Of Done
+---
 
-- [ ] Dreaming can run for one agent without mutating source text.
-- [ ] Dreaming mutations are auditable at job and per-note levels.
-- [ ] Retrieval and citations respect active agent scope across all supported modes.
-- [ ] Cross-agent note links are rejected unless explicitly allowed by a future spec.
-- [ ] North-history eval dataset exists and can compare planned retrieval modes.
-- [ ] Sprint C tests pass.
+### Phase 4 — Retrieval mode expansion and agent scope
 
-## Notes
+- [x] Agent filter verified for `raw_transcript`, `zettelkasten_notes`, `amem_lite` (`test_retrieval_agent_scope.py`).
+- [x] Graph/hybrid already pass `scope.agent_id` (Sprint B).
+- [x] `retrieval_records` prefix `scope_snapshot` item when scope has `agent_id`.
+- [x] Chat scope picker agent UX deferred → TD-016 (Sprint D).
 
-- Sprint C depends on Sprint B's enriched, embedded, agent-scoped notes. Product-facing polish belongs in Sprint D unless needed to validate isolation or dreaming behavior.
+---
+
+### Phase 5 — North-history eval dataset
+
+- [x] Expanded `north_history_v1.yaml` (8 questions, all categories).
+- [x] `NORTH_HISTORY_MODES` + `default_modes_for_dataset()`; internal eval + CLI use north modes for that dataset.
+- [x] `README_north_history.md` seed/run instructions.
+- [x] `StartEvalBody.agent_id` already wired.
+
+---
+
+### Phase 6 — Tests and closeout
+
+- [x] `test_dreaming_job.py`, `test_note_link_isolation.py`, `test_retrieval_agent_scope.py`, `test_eval_north_modes.py`.
+- [x] Web `tsc --noEmit` green.
+- [x] TD-016 logged for chat scope picker polish.
+
+---
+
+## Definition of done
+
+- [x] Dreaming runs for one agent without mutating note `body`.
+- [x] Dreaming mutations auditable (`dream_jobs`, `dream_job_mutations`, `evolution_history`).
+- [x] Retrieval/eval respect `agent_id` across supported modes.
+- [x] Cross-agent note links rejected (two non-null different agents).
+- [x] North-history eval dataset + modes defined; CLI/API support `agent_id`.
+- [x] Sprint C unit tests pass; web typecheck green.
+
+---
+
+## Sprint review
+
+**Demo readiness:** Dream from Agents or agent detail → poll job status (links/neighbors/embeddings counts). Note detail shows link reasons. Scoped Notes/Graph via AgentPicker (Sprint B). Eval: `north_history_v1` + `--agent-id` with five retrieval modes.
+
+**Gaps / issues:** Chat scope still uses manual agent UUID (TD-016). No dedicated eval UI panel (CLI/internal API only). Graph/hybrid agent isolation depends on Graphiti document `agent_id` at ingest time.
+
+**Closeout (final commit):** North import sync status + ingest hash dedup; A-MEM count fix; chat `amem_lite` migration; dreaming pipeline telemetry; pipeline log docked on agent detail; `specs/dreaming.md`.
+
+**Next steps:** Sprint D — product polish, chat AgentPicker, spec sync.

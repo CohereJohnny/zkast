@@ -15,8 +15,9 @@ from app.ingestion_logs_repo import (
     list_logs_for_document,
     list_logs_for_run,
 )
-from app.job_redis import job_hgetall
+from app.job_redis import job_hgetall, list_workspace_jobs
 from app.jobs_stream import sse_job_events
+from app.north_repo import list_workspace_dream_jobs
 
 router = APIRouter(tags=["internal-jobs"])
 
@@ -46,6 +47,40 @@ def _decode_job_hash(raw: dict[str, str]) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
     return out
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/jobs/overview")
+async def get_workspace_jobs_overview(
+    workspace_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    """Workspace job dashboard: arq queue, Redis-tracked pipeline jobs, dream_jobs."""
+    settings: Settings = request.app.state.settings
+    ws = str(workspace_id)
+    redis = request.app.state.redis_async
+
+    try:
+        queue_depth = await redis.llen("arq:queue")
+    except Exception:  # noqa: BLE001
+        queue_depth = None
+
+    try:
+        in_progress = await redis.zrange("arq:in_progress", 0, -1)
+        if in_progress and isinstance(in_progress[0], bytes):
+            in_progress = [v.decode() for v in in_progress]
+    except Exception:  # noqa: BLE001
+        in_progress = []
+
+    pipeline_jobs = await list_workspace_jobs(redis, workspace_id=ws, limit=40)
+    dream_jobs = list_workspace_dream_jobs(settings.database_url, workspace_id=ws, limit=30)
+
+    return JSONResponse(
+        content={
+            "arq": {"queue_depth": queue_depth, "in_progress": in_progress},
+            "pipeline_jobs": pipeline_jobs,
+            "dream_jobs": dream_jobs,
+        }
+    )
 
 
 @router.get("/internal/v1/jobs/{job_id}")

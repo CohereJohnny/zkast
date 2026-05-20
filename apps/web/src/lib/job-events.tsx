@@ -25,7 +25,8 @@ import {
 export type ActiveJobKind =
   | "document_parse"
   | "generate_atomic_notes"
-  | "extract_graph";
+  | "extract_graph"
+  | "dreaming";
 
 export type ActiveJob = {
   jobId: string;
@@ -44,6 +45,9 @@ type Ctx = {
     kind?: ActiveJobKind | null,
   ) => void;
   unregisterActiveJob: (jobId: string) => void;
+  /** Increments when a feature asks the docked pipeline log to expand. */
+  logConsoleOpenSignal: number;
+  requestOpenLogConsole: () => void;
 };
 
 const STORAGE_KEY = "zkast.workspace.activeJobs";
@@ -89,6 +93,7 @@ function saveToStorage(jobs: ActiveJob[]): void {
 
 export function JobEventsProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<ActiveJob[]>([]);
+  const [logConsoleOpenSignal, setLogConsoleOpenSignal] = useState(0);
   const initialised = useRef(false);
 
   useEffect(() => {
@@ -129,6 +134,10 @@ export function JobEventsProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const requestOpenLogConsole = useCallback(() => {
+    setLogConsoleOpenSignal((n) => n + 1);
+  }, []);
+
   useEffect(() => {
     if (jobs.length === 0) return;
     const snapshot = [...jobs];
@@ -163,8 +172,14 @@ export function JobEventsProvider({ children }: { children: ReactNode }) {
   }, [jobs, unregisterActiveJob]);
 
   const value = useMemo<Ctx>(
-    () => ({ jobs, registerActiveJob, unregisterActiveJob }),
-    [jobs, registerActiveJob, unregisterActiveJob],
+    () => ({
+      jobs,
+      registerActiveJob,
+      unregisterActiveJob,
+      logConsoleOpenSignal,
+      requestOpenLogConsole,
+    }),
+    [jobs, registerActiveJob, unregisterActiveJob, logConsoleOpenSignal, requestOpenLogConsole],
   );
 
   return (
@@ -179,6 +194,8 @@ export function useJobEvents(): Ctx {
       jobs: [],
       registerActiveJob: () => undefined,
       unregisterActiveJob: () => undefined,
+      logConsoleOpenSignal: 0,
+      requestOpenLogConsole: () => undefined,
     };
   }
   return ctx;

@@ -51,3 +51,34 @@ questions:
     expected_entity_ids: []
     expected_source_ids: []
     refusal_expected: true
+
+  - key: nh_single_hop_2
+    category: single_hop
+    question_text: What does A-MEM stand for in the North memory track?
+    expected_answer_patterns:
+      - agentic memory
+      - a-mem
+      - amem
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false
+    notes: Answer may come from imported notes or transcript mentioning agentic memory.
+
+  - key: nh_multi_hop_2
+    category: multi_hop
+    question_text: Which retrieval index kind stores Zettel-style note embeddings separate from A-MEM?
+    expected_answer_patterns:
+      - note_zettel
+      - zettel
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false
+
+  - key: nh_temporal_2
+    category: temporal
+    question_text: When a dream job finishes successfully, what status value is stored on the dream_jobs row?
+    expected_answer_patterns:
+      - succeeded
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: false

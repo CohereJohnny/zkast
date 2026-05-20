@@ -167,7 +167,7 @@ async def run_chat_turn(
         # default for backwards compatibility with Sprint 6.
         retrieval_mode = (
             (model_settings.get("retrieval_mode") or "").strip().lower()
-            or (user_msg.get("retrieval_mode") if False else None)
+            or (str(user_msg.get("retrieval_mode") or "").strip().lower() or None)
             or "graph"
         )
         if retrieval_mode not in {
@@ -235,6 +235,7 @@ async def run_chat_turn(
             retrieved_items=retrieved_items,
             total_candidates=total_candidates,
             truncated=truncated,
+            scope=dict(session.get("scope") or {}),
         )
         await publish_job_event(
             redis,

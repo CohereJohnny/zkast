@@ -4,7 +4,10 @@ import { Bot, CloudDownload, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { DreamJobStatus } from "@/components/dream-job-status";
+import { useToast } from "@/components/feedback-provider";
 import { readApiErrorMessage } from "@/lib/api-error-message";
+import { useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
 
 type NorthAgent = {
@@ -15,6 +18,8 @@ type NorthAgent = {
 };
 
 export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
+  const toast = useToast();
+  const { registerActiveJob } = useJobEvents();
   const [agents, setAgents] = useState<NorthAgent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -22,6 +27,9 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
   const [loading, setLoading] = useState(true);
   const [pipelineCount, setPipelineCount] = useState<number | null>(null);
   const [pipelineWorkspaceEcho, setPipelineWorkspaceEcho] = useState<string | null>(null);
+  const [activeDreamJob, setActiveDreamJob] = useState<{ agentId: string; jobId: string } | null>(
+    null,
+  );
 
   const load = useCallback(async () => {
     setError(null);
@@ -241,9 +249,26 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
                     const res = await fetch(`/api/v1/workspaces/${workspaceId}/north/agents/${a.id}/dream`, {
                       method: "POST",
                     });
-                    const body = await res.json().catch(() => ({}));
+                    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
                     if (!res.ok) {
                       setError(readApiErrorMessage(body, `Dream HTTP ${res.status}`));
+                      toast({
+                        variant: "error",
+                        message: "Dream failed to queue",
+                        description: readApiErrorMessage(body, `HTTP ${res.status}`),
+                      });
+                    } else {
+                      const jobId = typeof body.job_id === "string" ? body.job_id : null;
+                      if (jobId) {
+                        registerActiveJob(jobId, workspaceId, null, "dreaming");
+                        setActiveDreamJob({ agentId: a.id, jobId });
+                        const label = a.display_name || a.external_agent_id;
+                        toast({
+                          variant: "success",
+                          message: "Dream job queued",
+                          description: `${label} — watch progress on Jobs or the build log below`,
+                        });
+                      }
                     }
                   } finally {
                     setBusy(null);
@@ -258,6 +283,28 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
           </li>
         ))}
       </ul>
+      {activeDreamJob ? (
+        <DreamJobStatus
+          workspaceId={workspaceId}
+          agentId={activeDreamJob.agentId}
+          jobId={activeDreamJob.jobId}
+          onDone={(status) => {
+            if (status === "succeeded") {
+              toast({
+                variant: "success",
+                message: "Dream job completed",
+                description: "Memory links and embeddings were updated for this agent.",
+              });
+            } else if (status === "failed") {
+              toast({
+                variant: "error",
+                message: "Dream job failed",
+                description: "See Jobs or the build log for details.",
+              });
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }

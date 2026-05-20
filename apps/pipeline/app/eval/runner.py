@@ -65,6 +65,22 @@ DEFAULT_DATASET = (
 
 DEFAULT_MODES: list[str] = ["rag", "graph", "hybrid"]
 
+# North-history eval compares transcript + note indexes + graph paths.
+NORTH_HISTORY_MODES: list[str] = [
+    "raw_transcript",
+    "zettelkasten_notes",
+    "amem_lite",
+    "graph",
+    "hybrid",
+]
+
+
+def default_modes_for_dataset(dataset_name: str | None) -> list[str]:
+    name = (dataset_name or "").strip().lower()
+    if name in ("north_history_v1", "north_history"):
+        return list(NORTH_HISTORY_MODES)
+    return list(DEFAULT_MODES)
+
 
 def _retrieval_module(mode: str) -> Any:
     m = (mode or "").strip().lower()
@@ -482,7 +498,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     dataset_path = Path(args.dataset) if args.dataset else None
+    if dataset_path and not dataset_path.is_absolute():
+        candidate = Path(__file__).parent / "datasets" / dataset_path.name
+        if candidate.is_file():
+            dataset_path = candidate
     modes = [m.strip() for m in (args.modes or "").split(",") if m.strip()]
+    if args.modes == "rag,graph,hybrid" and dataset_path:
+        modes = default_modes_for_dataset(dataset_path.stem)
     summary = asyncio.run(
         run_eval(
             workspace_id=args.workspace_id,
