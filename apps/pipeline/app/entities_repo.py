@@ -39,6 +39,7 @@ def upsert_entity_from_graphiti(
     attributes: dict[str, Any],
     episode_id: str | None,
     note_id: str | None,
+    agent_id: str | None = None,
 ) -> str:
     """Returns zkast entity UUID string."""
     etype = entity_type_from_labels(labels)
@@ -64,23 +65,35 @@ def upsert_entity_from_graphiti(
             conn.commit()
             return eid
 
-        row = conn.execute(
-            """
-            SELECT id FROM entities
-            WHERE workspace_id = %s::uuid AND type = %s AND lower(canonical_name) = lower(%s)
-            LIMIT 1
-            """,
-            (workspace_id, etype, canonical),
-        ).fetchone()
+        if agent_id:
+            row = conn.execute(
+                """
+                SELECT id FROM entities
+                WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
+                  AND type = %s AND lower(canonical_name) = lower(%s)
+                LIMIT 1
+                """,
+                (workspace_id, agent_id, etype, canonical),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id FROM entities
+                WHERE workspace_id = %s::uuid AND agent_id IS NULL
+                  AND type = %s AND lower(canonical_name) = lower(%s)
+                LIMIT 1
+                """,
+                (workspace_id, etype, canonical),
+            ).fetchone()
         if row:
             eid = str(row["id"])
             conn.execute(
                 """
-                INSERT INTO graphiti_entity_map (graphiti_uuid, entity_id, workspace_id)
-                VALUES (%s, %s::uuid, %s::uuid)
+                INSERT INTO graphiti_entity_map (graphiti_uuid, entity_id, workspace_id, agent_id)
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid)
                 ON CONFLICT (graphiti_uuid) DO NOTHING
                 """,
-                (graphiti_uuid, eid, workspace_id),
+                (graphiti_uuid, eid, workspace_id, agent_id),
             )
             conn.execute(
                 """
@@ -98,13 +111,14 @@ def upsert_entity_from_graphiti(
         conn.execute(
             """
             INSERT INTO entities (
-              id, workspace_id, type, canonical_name, aliases, summary, properties, is_user_edited
+              id, workspace_id, agent_id, type, canonical_name, aliases, summary, properties, is_user_edited
             )
-            VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, false)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, false)
             """,
             (
                 eid,
                 workspace_id,
+                agent_id,
                 etype,
                 canonical,
                 [],
@@ -114,10 +128,10 @@ def upsert_entity_from_graphiti(
         )
         conn.execute(
             """
-            INSERT INTO graphiti_entity_map (graphiti_uuid, entity_id, workspace_id)
-            VALUES (%s, %s::uuid, %s::uuid)
+            INSERT INTO graphiti_entity_map (graphiti_uuid, entity_id, workspace_id, agent_id)
+            VALUES (%s, %s::uuid, %s::uuid, %s::uuid)
             """,
-            (graphiti_uuid, eid, workspace_id),
+            (graphiti_uuid, eid, workspace_id, agent_id),
         )
         _add_provenance(conn, entity_id=eid, episode_id=episode_id, note_id=note_id)
         conn.commit()

@@ -6,6 +6,7 @@ import {
   BookOpen,
   Bot,
   FileText,
+  LayoutDashboard,
   MessageSquare,
   Network,
   ScrollText,
@@ -20,6 +21,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const items = [
+  { href: "/dashboard", label: "Dashboard", Icon: LayoutDashboard },
   { href: "/agents", label: "Agents", Icon: Bot },
   { href: "/conversations", label: "Conversations", Icon: ScrollText },
   { href: "/documents", label: "Documents", Icon: FileText },

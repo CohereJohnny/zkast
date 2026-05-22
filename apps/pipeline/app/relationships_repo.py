@@ -24,6 +24,7 @@ def insert_relationship_from_graphiti(
     valid_to: datetime | None,
     episode_id: str | None,
     note_id: str | None,
+    agent_id: str | None = None,
 ) -> str:
     fact = (fact or "")[:500]
     rel_type = (rel_type or "RELATED_TO")[:120]
@@ -43,17 +44,18 @@ def insert_relationship_from_graphiti(
         conn.execute(
             """
             INSERT INTO relationships (
-              id, workspace_id, source_entity_id, target_entity_id,
+              id, workspace_id, agent_id, source_entity_id, target_entity_id,
               type, fact, valid_from, valid_to, confidence, origin, is_user_edited
             )
             VALUES (
-              %s::uuid, %s::uuid, %s::uuid, %s::uuid,
+              %s::uuid, %s::uuid, %s::uuid, %s::uuid, %s::uuid,
               %s, %s, %s, %s, %s, 'generated', false
             )
             """,
             (
                 rid,
                 workspace_id,
+                agent_id,
                 source_entity_id,
                 target_entity_id,
                 rel_type,
@@ -65,10 +67,10 @@ def insert_relationship_from_graphiti(
         )
         conn.execute(
             """
-            INSERT INTO graphiti_edge_map (graphiti_uuid, relationship_id, workspace_id)
-            VALUES (%s, %s::uuid, %s::uuid)
+            INSERT INTO graphiti_edge_map (graphiti_uuid, relationship_id, workspace_id, agent_id)
+            VALUES (%s, %s::uuid, %s::uuid, %s::uuid)
             """,
-            (graphiti_edge_uuid, rid, workspace_id),
+            (graphiti_edge_uuid, rid, workspace_id, agent_id),
         )
         _prov(conn, rid, episode_id, note_id)
         conn.commit()

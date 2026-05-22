@@ -408,6 +408,25 @@ async def run_chat_turn(
             tokens_out=result.tokens_out,
             completed_now=True,
         )
+        scope_agent = str((session.get("scope") or {}).get("agent_id") or "").strip() or None
+        if result.tokens_in or result.tokens_out:
+            from app.usage_events_repo import insert_usage_event
+
+            await asyncio.to_thread(
+                insert_usage_event,
+                database_url,
+                workspace_id=workspace_id,
+                usage_source="chat",
+                tokens_in=result.tokens_in or 0,
+                tokens_out=result.tokens_out or 0,
+                agent_id=scope_agent,
+                stage="chat_turn",
+                model=chat_model,
+                metadata={
+                    "session_id": session_id,
+                    "message_id": assistant_message_id,
+                },
+            )
         await asyncio.to_thread(
             patch_session,
             database_url,

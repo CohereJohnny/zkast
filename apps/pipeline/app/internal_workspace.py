@@ -114,6 +114,7 @@ async def post_workspace_reset(
                 falkordb_host=settings.falkordb_host,
                 falkordb_port=settings.falkordb_port,
                 workspace_id=ws,
+                database_url=settings.database_url,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("workspace_reset_graphiti", workspace_id=ws, err=str(exc))
