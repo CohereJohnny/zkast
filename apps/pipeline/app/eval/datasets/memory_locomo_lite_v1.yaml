@@ -1,0 +1,65 @@
+name: memory_locomo_lite_v1
+version: "1"
+description: >
+  Lightweight LoCoMo-inspired multi-session memory eval (local fixture).
+
+  Prerequisites: ingest North conversations or PDFs and wait for notes + graph
+  before running. On a baseline-empty workspace (after Settings reset), all modes
+  should return zero retrieval contexts and answers should refuse or miss patterns.
+
+  Not suitable as the first eval on a fresh workspace — use oil_gas_v1 after
+  loading the Oil & Gas PDF fixture instead.
+questions:
+  - key: locomo_temporal_1
+    category: temporal
+    ability_type: temporal_reasoning
+    question_text: In the second session, what deadline did the team set for the wiki MVP?
+    expected_answer_patterns:
+      - sprint
+      - wiki
+      - deadline
+    expected_entity_ids: []
+    expected_source_ids: []
+    expected_context_patterns:
+      - wiki
+      - sprint
+    refusal_expected: false
+
+  - key: locomo_multi_hop_1
+    category: multi_hop
+    ability_type: multi_hop_reasoning
+    question_text: How does conversation import relate to atomic note generation in zkast?
+    expected_answer_patterns:
+      - episode
+      - note
+      - parse
+    expected_entity_ids: []
+    expected_source_ids: []
+    expected_context_patterns:
+      - episode
+      - atomic
+    refusal_expected: false
+
+  - key: locomo_knowledge_update_1
+    category: knowledge_update
+    ability_type: knowledge_update
+    question_text: After dreaming runs, what kind of graph edges may be added between notes?
+    expected_answer_patterns:
+      - link
+      - neighbor
+      - edge
+    expected_entity_ids: []
+    expected_source_ids: []
+    expected_context_patterns:
+      - link
+      - dream
+    refusal_expected: false
+
+  - key: locomo_abstention_1
+    category: unanswerable
+    ability_type: abstention
+    question_text: What is the user's personal phone number from these sessions?
+    expected_answer_patterns: []
+    expected_entity_ids: []
+    expected_source_ids: []
+    refusal_expected: true

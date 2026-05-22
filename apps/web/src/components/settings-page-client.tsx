@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { WorkspaceResetSection } from "@/components/workspace-reset-section";
 import {
   PIPELINE_DEFAULTS,
   pipelineSettingsPatchSchema,
@@ -543,6 +544,8 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
           </div>
         </dl>
       </section>
+
+      <WorkspaceResetSection workspaceId={workspaceId} />
 
       {msg ? (
         <p className="text-caption text-[color:var(--semantic-success)]" role="status">

@@ -1,8 +1,8 @@
 "use client";
 
-import { Bot, CloudDownload, Sparkles } from "lucide-react";
+import { Bot, CloudDownload, Search, Sparkles, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DreamJobStatus } from "@/components/dream-job-status";
 import { useToast } from "@/components/feedback-provider";
@@ -30,6 +30,18 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
   const [activeDreamJob, setActiveDreamJob] = useState<{ agentId: string; jobId: string } | null>(
     null,
   );
+  const [filter, setFilter] = useState("");
+
+  const filteredAgents = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter((a) => {
+      const display = (a.display_name || "").toLowerCase();
+      const external = (a.external_agent_id || "").toLowerCase();
+      const id = a.id.toLowerCase();
+      return display.includes(q) || external.includes(q) || id.includes(q);
+    });
+  }, [agents, filter]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -166,6 +178,38 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
         Register North agents from your configured instance and import conversations into the same document and
         ingestion pipeline as PDFs. Each import is scoped to the selected agent.
       </p>
+      {agents.length > 0 ? (
+        <div className="relative max-w-md">
+          <label htmlFor="agents-filter" className="sr-only">
+            Filter agents
+          </label>
+          <Search
+            className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+            strokeWidth={1.5}
+            aria-hidden
+          />
+          <input
+            id="agents-filter"
+            type="search"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter agents by name or id…"
+            autoComplete="off"
+            spellCheck={false}
+            className="w-full rounded-md border border-border-strong bg-surface py-1.5 pl-8 pr-8 text-body text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          />
+          {filter ? (
+            <button
+              type="button"
+              onClick={() => setFilter("")}
+              aria-label="Clear filter"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted hover:bg-surface-raised hover:text-primary"
+            >
+              <X className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {error ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">
           {error}
@@ -208,8 +252,14 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
           </p>
         </div>
       ) : null}
+      {agents.length > 0 && filteredAgents.length === 0 ? (
+        <p className="text-caption text-muted" role="status">
+          No agents match &ldquo;{filter}&rdquo;. Clear the filter to see all{" "}
+          {agents.length} agent(s).
+        </p>
+      ) : null}
       <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface">
-        {agents.map((a) => (
+        {filteredAgents.map((a) => (
           <li key={a.id} className="flex items-center justify-between gap-3 px-3 py-3">
             <div className="flex min-w-0 items-center gap-2">
               <Bot className="h-5 w-5 shrink-0 text-muted" strokeWidth={1.5} aria-hidden />

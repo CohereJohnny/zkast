@@ -1,27 +1,4 @@
-"""Sprint 6b — headless eval runner.
-
-The runner exercises the production retrieval modules
-(``chat_retrieval_raw``, ``chat_retrieval_graph``,
-``chat_retrieval_hybrid``) and Cohere chat directly. It bypasses arq /
-SSE because (a) the eval is run offline by humans, (b) the arq scheduler
-adds 5–8 s of layout time per turn for nothing, and (c) the production
-chat tests already cover the arq pipeline.
-
-Public API:
-
-- ``run_eval(workspace_id, dataset_path, modes, notes)`` — load the
-  dataset, run every (question, mode) pair, persist eval rows, return
-  the run id + aggregate summary.
-
-For each question the runner:
-
-1. Calls the matching ``chat_retrieval_*.retrieve``.
-2. Calls ``cohere_chat.chat_stream_grounded`` with the retrieved
-   documents — same path as the live chat turn.
-3. Captures answer text, citations, retrieval-record snapshot, token
-   counts, latency.
-4. Scores the result via ``eval.scoring`` and persists the row.
-"""
+"""Memory eval runner — retrieval mode comparisons with top-k cutoffs."""
 
 from __future__ import annotations
 
@@ -38,34 +15,19 @@ import yaml
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from types import SimpleNamespace
-
-from app import (
-    chat_retrieval_graph,
-    chat_retrieval_hybrid,
-    chat_retrieval_raw,
-)
-from app.chat_retrieval_notes_vector import retrieve_amem, retrieve_zettel
-from app.cohere_chat import (
-    ChatDocument,
-    CitationSpan,
-    chat_stream_grounded,
-)
+from app.cohere_chat import CitationSpan, chat_stream_grounded
 from app.config import get_settings
+from app.eval.adapters import memory_system_for_mode, normalize_mode, retrieval_module
 from app.eval.scoring import aggregate_scores, score_answer
 from app.graphiti_factory import resolve_cohere_api_key
 from app.workspace_repo import fetch_pipeline_settings
 
 logger = logging.getLogger(__name__)
 
-
-DEFAULT_DATASET = (
-    Path(__file__).parent / "datasets" / "oil_gas_v1.yaml"
-)
-
+DEFAULT_DATASET = Path(__file__).parent / "datasets" / "oil_gas_v1.yaml"
 DEFAULT_MODES: list[str] = ["rag", "graph", "hybrid"]
+DEFAULT_TOP_K_CUTOFFS: list[int] = [10, 30]
 
-# North-history eval compares transcript + note indexes + graph paths.
 NORTH_HISTORY_MODES: list[str] = [
     "raw_transcript",
     "zettelkasten_notes",
@@ -73,6 +35,8 @@ NORTH_HISTORY_MODES: list[str] = [
     "graph",
     "hybrid",
 ]
+
+RUN_MODES = frozenset({"full", "retrieve_only", "answer_only", "score_only"})
 
 
 def default_modes_for_dataset(dataset_name: str | None) -> list[str]:
@@ -82,27 +46,40 @@ def default_modes_for_dataset(dataset_name: str | None) -> list[str]:
     return list(DEFAULT_MODES)
 
 
-def _retrieval_module(mode: str) -> Any:
-    m = (mode or "").strip().lower()
-    if m in ("rag", "raw_transcript"):
-        return chat_retrieval_raw
-    if m == "graph":
-        return chat_retrieval_graph
-    if m == "hybrid":
-        return chat_retrieval_hybrid
-    if m in ("zettelkasten_notes", "zettelkasten"):
-        return SimpleNamespace(retrieve=retrieve_zettel)
-    if m in ("amem_lite", "amem"):
-        return SimpleNamespace(retrieve=retrieve_amem)
-    raise ValueError(f"unknown retrieval mode: {mode!r}")
-
-
 def _load_dataset(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 
 
-def _create_run(
+def _serialize_retrieved_items(items: list[Any] | None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            sid = item.get("source_id") or item.get("doc_id") or item.get("id")
+            out.append(
+                {
+                    "source_id": sid,
+                    "source_kind": item.get("source_kind") or item.get("kind"),
+                    "score": item.get("score"),
+                    "excerpt": (item.get("excerpt") or item.get("text") or "")[:500],
+                }
+            )
+            continue
+        out.append(
+            {
+                "source_id": getattr(item, "source_id", None) or getattr(item, "id", None),
+                "source_kind": getattr(item, "source_kind", None)
+                or getattr(item, "kind", None),
+                "score": getattr(item, "score", None),
+                "excerpt": (getattr(item, "excerpt", None) or getattr(item, "text", "") or "")[
+                    :500
+                ],
+            }
+        )
+    return out
+
+
+def create_eval_run(
     database_url: str,
     *,
     workspace_id: str,
@@ -110,18 +87,25 @@ def _create_run(
     dataset_version: str,
     modes: list[str],
     notes: str | None,
+    eval_kind: str = "memory_system",
+    agent_id: str | None = None,
+    top_k_cutoffs: list[int] | None = None,
+    run_config: dict[str, Any] | None = None,
 ) -> str:
     run_id = str(uuid4())
+    cutoffs = list(top_k_cutoffs or DEFAULT_TOP_K_CUTOFFS)
     with psycopg.connect(database_url) as conn:
         conn.execute(
             """
             INSERT INTO chat_eval_runs (
                 id, workspace_id, dataset_name, dataset_version,
-                retrieval_modes, notes, status
+                retrieval_modes, notes, status, eval_kind, agent_id,
+                top_k_cutoffs, run_config
             )
             VALUES (
                 %s::uuid, %s::uuid, %s, %s,
-                %s, %s, 'running'
+                %s, %s, 'running', %s, %s::uuid,
+                %s, %s
             )
             """,
             (
@@ -129,8 +113,12 @@ def _create_run(
                 workspace_id,
                 dataset_name,
                 dataset_version,
-                Json(list(modes)),
+                Json([normalize_mode(m) for m in modes]),
                 notes,
+                eval_kind,
+                agent_id,
+                Json(cutoffs),
+                Json(run_config or {}),
             ),
         )
         conn.commit()
@@ -144,16 +132,19 @@ def _insert_question(
     q: dict[str, Any],
 ) -> str:
     qid = str(uuid4())
+    ability = q.get("ability_type") or q.get("category")
     conn.execute(
         """
         INSERT INTO chat_eval_questions (
             id, run_id, question_key, category, question_text,
             expected_answer_patterns, expected_entity_ids,
-            expected_source_ids, refusal_expected, notes
+            expected_source_ids, refusal_expected, notes,
+            ability_type, expected_context_patterns
         )
         VALUES (
             %s::uuid, %s::uuid, %s, %s, %s,
-            %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s,
+            %s, %s
         )
         """,
         (
@@ -167,6 +158,8 @@ def _insert_question(
             Json(list(q.get("expected_source_ids") or [])),
             bool(q.get("refusal_expected")),
             str(q.get("notes") or ""),
+            str(ability) if ability else None,
+            Json(list(q.get("expected_context_patterns") or [])),
         ),
     )
     return qid
@@ -178,50 +171,117 @@ def _insert_result(
     run_id: str,
     question_id: str,
     mode: str,
+    memory_system: str,
+    top_k_cutoff: int,
     answer_text: str,
     refused: bool,
     score_summary: dict[str, Any],
     latency_ms: int | None,
     tokens_in: int | None,
     tokens_out: int | None,
+    retrieval_items: list[dict[str, Any]] | None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO chat_eval_results (
-            id, run_id, question_id, retrieval_mode,
-            answer_text, refused, scores, latency_ms, tokens_in, tokens_out
+            id, run_id, question_id, retrieval_mode, memory_system,
+            top_k_cutoff, answer_text, refused, scores, latency_ms,
+            tokens_in, tokens_out, retrieval_items
         )
         VALUES (
-            %s::uuid, %s::uuid, %s::uuid, %s,
-            %s, %s, %s, %s, %s, %s
+            %s::uuid, %s::uuid, %s::uuid, %s, %s,
+            %s, %s, %s, %s, %s,
+            %s, %s, %s
         )
         """,
         (
             str(uuid4()),
             run_id,
             question_id,
-            mode,
+            normalize_mode(mode),
+            memory_system,
+            top_k_cutoff,
             answer_text[:20_000],
             bool(refused),
             Json(score_summary),
             latency_ms,
             tokens_in,
             tokens_out,
+            Json(retrieval_items) if retrieval_items is not None else None,
         ),
     )
 
 
-def _finalize_run(database_url: str, run_id: str, status: str) -> None:
+def _finalize_run(
+    database_url: str,
+    run_id: str,
+    status: str,
+    summary: dict[str, Any] | None = None,
+) -> None:
     with psycopg.connect(database_url) as conn:
         conn.execute(
             """
             UPDATE chat_eval_runs
-            SET status = %s, completed_at = now()
+            SET status = %s, completed_at = now(), summary = %s
             WHERE id = %s::uuid
             """,
-            (status, run_id),
+            (status, Json(summary) if summary else None, run_id),
         )
         conn.commit()
+
+
+async def _retrieve_only(
+    *,
+    settings: Any,
+    database_url: str,
+    workspace_id: str,
+    query_text: str,
+    mode: str,
+    top_k: int,
+    doc_token_budget: int,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    impl = retrieval_module(mode)
+    started = time.perf_counter()
+    scope: dict[str, Any] = {}
+    if agent_id:
+        scope["agent_id"] = agent_id
+
+    (
+        retrieved_items,
+        documents,
+        _total,
+        _truncated,
+        _strategy,
+    ) = await impl.retrieve(
+        settings,
+        database_url,
+        workspace_id=workspace_id,
+        query_text=query_text,
+        scope=scope,
+        top_k=top_k,
+        doc_token_budget=doc_token_budget,
+    )
+    snapshot = _serialize_retrieved_items(retrieved_items)
+    refused = not documents
+    answer_text = (
+        "Refused: workspace lacks grounding context for this question."
+        if refused
+        else "[retrieve_only] contexts captured without answer generation."
+    )
+    return {
+        "answer_text": answer_text,
+        "refused": refused,
+        "citations": [],
+        "cited_source_kinds": [],
+        "cited_source_ids": [],
+        "cited_excerpts": [],
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
+        "retrieved_items": retrieved_items,
+        "retrieval_snapshot": snapshot,
+    }
 
 
 async def _answer_one(
@@ -237,10 +297,7 @@ async def _answer_one(
     doc_token_budget: int,
     agent_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run retrieval + Cohere for one (question, mode). Returns a dict
-    with ``answer_text``, ``refused``, ``citations``, ``tokens_in``,
-    ``tokens_out``, ``latency_ms``."""
-    impl = _retrieval_module(mode)
+    impl = retrieval_module(mode)
     started = time.perf_counter()
 
     scope: dict[str, Any] = {}
@@ -262,6 +319,7 @@ async def _answer_one(
         top_k=top_k,
         doc_token_budget=doc_token_budget,
     )
+    snapshot = _serialize_retrieved_items(retrieved_items)
 
     if not documents:
         return {
@@ -270,10 +328,14 @@ async def _answer_one(
             ),
             "refused": True,
             "citations": [],
+            "cited_source_kinds": [],
+            "cited_source_ids": [],
+            "cited_excerpts": [],
             "tokens_in": 0,
             "tokens_out": 0,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "retrieved_items": retrieved_items,
+            "retrieval_snapshot": snapshot,
         }
 
     accumulated_text: list[str] = []
@@ -303,10 +365,14 @@ async def _answer_one(
             "answer_text": f"[eval-error] {type(exc).__name__}: {exc}",
             "refused": False,
             "citations": [],
+            "cited_source_kinds": [],
+            "cited_source_ids": [],
+            "cited_excerpts": [],
             "tokens_in": 0,
             "tokens_out": 0,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "retrieved_items": retrieved_items,
+            "retrieval_snapshot": snapshot,
             "error": True,
         }
 
@@ -344,6 +410,7 @@ async def _answer_one(
         "tokens_out": result.tokens_out or 0,
         "latency_ms": int((time.perf_counter() - started) * 1000),
         "retrieved_items": retrieved_items,
+        "retrieval_snapshot": snapshot,
     }
 
 
@@ -354,40 +421,59 @@ async def run_eval(
     modes: list[str] | None = None,
     notes: str | None = None,
     agent_id: str | None = None,
+    run_id: str | None = None,
+    top_k_cutoffs: list[int] | None = None,
+    run_mode: str = "full",
+    eval_kind: str = "memory_system",
+    run_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Drive the canned eval and return ``{run_id, summary, results}``.
-
-    Persists to ``chat_eval_runs`` / ``chat_eval_questions`` /
-    ``chat_eval_results`` and prints a one-line summary per question
-    so a CLI invocation gives live feedback.
-    """
+    """Drive the eval dataset and return ``{run_id, summary, results}``."""
     settings = get_settings()
     database_url = settings.database_url
     ds_path = dataset_path or DEFAULT_DATASET
-    modes = list(modes or DEFAULT_MODES)
+    modes = [normalize_mode(m) for m in (modes or DEFAULT_MODES)]
+    cutoffs = sorted({int(k) for k in (top_k_cutoffs or DEFAULT_TOP_K_CUTOFFS)})
+    mode_key = (run_mode or "full").strip().lower()
+    if mode_key not in RUN_MODES:
+        raise ValueError(f"unknown run_mode: {run_mode!r}")
+
     dataset = _load_dataset(ds_path)
     questions = list(dataset.get("questions") or [])
     if not questions:
         raise RuntimeError(f"dataset has no questions: {ds_path}")
 
     api_key = resolve_cohere_api_key(settings, workspace_id)
-    if not api_key:
+    if mode_key != "retrieve_only" and not api_key:
         raise RuntimeError("no Cohere API key configured for workspace")
 
     pipeline_settings = fetch_pipeline_settings(database_url, workspace_id)
-    chat_model = (
-        pipeline_settings.get("large_model")
-        or "command-a-plus-05-2026"
-    )
+    chat_model = pipeline_settings.get("large_model") or "command-a-plus-05-2026"
 
-    run_id = _create_run(
-        database_url,
-        workspace_id=workspace_id,
-        dataset_name=str(dataset.get("name") or ds_path.stem),
-        dataset_version="1",
-        modes=modes,
-        notes=notes,
-    )
+    cfg = dict(run_config or {})
+    cfg.setdefault("run_mode", mode_key)
+    cfg.setdefault("top_k_cutoffs", cutoffs)
+
+    if run_id is None:
+        run_id = create_eval_run(
+            database_url,
+            workspace_id=workspace_id,
+            dataset_name=str(dataset.get("name") or ds_path.stem),
+            dataset_version=str(dataset.get("version") or "1"),
+            modes=modes,
+            notes=notes,
+            eval_kind=eval_kind,
+            agent_id=agent_id,
+            top_k_cutoffs=cutoffs,
+            run_config=cfg,
+        )
+    else:
+        with psycopg.connect(database_url) as conn:
+            conn.execute(
+                "UPDATE chat_eval_runs SET status = 'running' WHERE id = %s::uuid",
+                (run_id,),
+            )
+            conn.commit()
+
     rollup_rows: list[dict[str, Any]] = []
 
     try:
@@ -395,106 +481,128 @@ async def run_eval(
             for q in questions:
                 qid = _insert_question(conn, run_id=run_id, q=q)
                 conn.commit()
+                ability = q.get("ability_type") or q.get("category")
                 for mode in modes:
-                    res = await _answer_one(
-                        settings=settings,
-                        database_url=database_url,
-                        workspace_id=workspace_id,
-                        api_key=api_key,
-                        chat_model=chat_model,
-                        query_text=str(q.get("question_text")),
-                        mode=mode,
-                        top_k=30,
-                        doc_token_budget=6000,
-                        agent_id=agent_id,
-                    )
-                    sc = score_answer(
-                        answer_text=res["answer_text"],
-                        refused=res["refused"],
-                        expected_answer_patterns=list(
-                            q.get("expected_answer_patterns") or []
-                        ),
-                        expected_entity_names=list(
-                            q.get("expected_entity_ids") or []
-                        ),
-                        cited_source_kinds=res.get("cited_source_kinds", []),
-                        cited_source_ids=res.get("cited_source_ids", []),
-                        cited_excerpts=res.get("cited_excerpts", []),
-                        refusal_expected=bool(q.get("refusal_expected")),
-                    )
-                    _insert_result(
-                        conn,
-                        run_id=run_id,
-                        question_id=qid,
-                        mode=mode,
-                        answer_text=res["answer_text"],
-                        refused=res["refused"],
-                        score_summary=sc.summary,
-                        latency_ms=res.get("latency_ms"),
-                        tokens_in=res.get("tokens_in"),
-                        tokens_out=res.get("tokens_out"),
-                    )
-                    conn.commit()
-                    rollup_rows.append(
-                        {
-                            "mode": mode,
-                            "category": q.get("category"),
-                            "question_key": q.get("key"),
-                            "pattern_match": sc.pattern_match,
-                            "citation_recall": sc.citation_recall,
-                            "refusal_correct": sc.refusal_correct,
-                            "latency_ms": res.get("latency_ms"),
-                            "tokens_in": res.get("tokens_in"),
-                            "tokens_out": res.get("tokens_out"),
-                            "refused": res["refused"],
-                        }
-                    )
-                    print(
-                        f"[eval {run_id[:8]}] {q.get('category')}/{q.get('key')} "
-                        f"mode={mode} pattern_match={sc.pattern_match} "
-                        f"recall={sc.citation_recall:.2f} "
-                        f"refusal_correct={sc.refusal_correct} "
-                        f"latency_ms={res.get('latency_ms')}"
-                    )
+                    mem_sys = memory_system_for_mode(mode)
+                    for top_k in cutoffs:
+                        if mode_key == "retrieve_only":
+                            res = await _retrieve_only(
+                                settings=settings,
+                                database_url=database_url,
+                                workspace_id=workspace_id,
+                                query_text=str(q.get("question_text")),
+                                mode=mode,
+                                top_k=top_k,
+                                doc_token_budget=6000,
+                                agent_id=agent_id,
+                            )
+                        elif mode_key == "score_only":
+                            raise NotImplementedError(
+                                "score_only requires a prior run with stored results"
+                            )
+                        else:
+                            res = await _answer_one(
+                                settings=settings,
+                                database_url=database_url,
+                                workspace_id=workspace_id,
+                                api_key=api_key or "",
+                                chat_model=chat_model,
+                                query_text=str(q.get("question_text")),
+                                mode=mode,
+                                top_k=top_k,
+                                doc_token_budget=6000,
+                                agent_id=agent_id,
+                            )
+
+                        sc = score_answer(
+                            answer_text=res["answer_text"],
+                            refused=res["refused"],
+                            expected_answer_patterns=list(
+                                q.get("expected_answer_patterns") or []
+                            ),
+                            expected_entity_names=list(
+                                q.get("expected_entity_ids") or []
+                            ),
+                            cited_source_kinds=res.get("cited_source_kinds", []),
+                            cited_source_ids=res.get("cited_source_ids", []),
+                            cited_excerpts=res.get("cited_excerpts", []),
+                            refusal_expected=bool(q.get("refusal_expected")),
+                            expected_source_ids=list(q.get("expected_source_ids") or []),
+                            expected_context_patterns=list(
+                                q.get("expected_context_patterns") or []
+                            ),
+                            retrieved_items=res.get("retrieved_items"),
+                        )
+                        _insert_result(
+                            conn,
+                            run_id=run_id,
+                            question_id=qid,
+                            mode=mode,
+                            memory_system=mem_sys,
+                            top_k_cutoff=top_k,
+                            answer_text=res["answer_text"],
+                            refused=res["refused"],
+                            score_summary=sc.summary,
+                            latency_ms=res.get("latency_ms"),
+                            tokens_in=res.get("tokens_in"),
+                            tokens_out=res.get("tokens_out"),
+                            retrieval_items=res.get("retrieval_snapshot"),
+                        )
+                        conn.commit()
+                        rollup_rows.append(
+                            {
+                                "mode": mode,
+                                "memory_system": mem_sys,
+                                "category": q.get("category"),
+                                "ability_type": ability,
+                                "question_key": q.get("key"),
+                                "top_k_cutoff": top_k,
+                                "pattern_match": sc.pattern_match,
+                                "citation_recall": sc.citation_recall,
+                                "context_recall": sc.context_recall,
+                                "refusal_correct": sc.refusal_correct,
+                                "latency_ms": res.get("latency_ms"),
+                                "tokens_in": res.get("tokens_in"),
+                                "tokens_out": res.get("tokens_out"),
+                                "refused": res["refused"],
+                            }
+                        )
+                        print(
+                            f"[eval {run_id[:8]}] {ability}/{q.get('key')} "
+                            f"mode={mode} k={top_k} pattern={sc.pattern_match} "
+                            f"ctx={sc.context_recall:.2f} recall={sc.citation_recall:.2f}"
+                        )
     except Exception:
         _finalize_run(database_url, run_id, "failed")
         raise
 
-    _finalize_run(database_url, run_id, "complete")
     summary = aggregate_scores(rollup_rows)
+    _finalize_run(database_url, run_id, "complete", summary=summary)
     return {"run_id": run_id, "summary": summary, "results": rollup_rows}
 
 
+# Backward-compatible alias used by internal_eval imports.
+_retrieval_module = retrieval_module
+
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry: ``python -m app.eval.runner --workspace-id <uuid>``."""
     import argparse
 
     parser = argparse.ArgumentParser(
         prog="zkast-eval",
-        description="Run the Sprint 6b GraphRAG vs Naive RAG eval suite.",
+        description="Run the memory-system eval suite.",
     )
+    parser.add_argument("--workspace-id", required=True)
+    parser.add_argument("--dataset", default=None)
+    parser.add_argument("--modes", default="rag,graph,hybrid")
+    parser.add_argument("--notes", default=None)
+    parser.add_argument("--agent-id", default=None)
+    parser.add_argument("--top-k", default="10,30", help="Comma-separated top-k cutoffs.")
     parser.add_argument(
-        "--workspace-id", required=True, help="UUID of the workspace to eval against."
+        "--run-mode",
+        default="full",
+        choices=sorted(RUN_MODES),
     )
-    parser.add_argument(
-        "--dataset",
-        default=None,
-        help="YAML dataset path. Defaults to oil_gas_v1.yaml.",
-    )
-    parser.add_argument(
-        "--modes",
-        default="rag,graph,hybrid",
-        help="Comma-separated retrieval modes to evaluate.",
-    )
-    parser.add_argument(
-        "--notes", default=None, help="Free-form notes attached to the run."
-    )
-    parser.add_argument(
-        "--agent-id",
-        default=None,
-        help="Optional North agent UUID to scope Naive-RAG raw retrieval.",
-    )
-
     args = parser.parse_args(argv)
 
     dataset_path = Path(args.dataset) if args.dataset else None
@@ -505,6 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     modes = [m.strip() for m in (args.modes or "").split(",") if m.strip()]
     if args.modes == "rag,graph,hybrid" and dataset_path:
         modes = default_modes_for_dataset(dataset_path.stem)
+    cutoffs = [int(x) for x in args.top_k.split(",") if x.strip()]
     summary = asyncio.run(
         run_eval(
             workspace_id=args.workspace_id,
@@ -512,6 +621,8 @@ def main(argv: list[str] | None = None) -> int:
             modes=modes,
             notes=args.notes,
             agent_id=args.agent_id,
+            top_k_cutoffs=cutoffs,
+            run_mode=args.run_mode,
         )
     )
     print(json.dumps(summary, indent=2, default=str))

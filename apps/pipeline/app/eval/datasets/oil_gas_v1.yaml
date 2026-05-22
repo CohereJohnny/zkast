@@ -1,4 +1,5 @@
 name: oil_gas_v1
+version: "1"
 description: |
   Sprint 6b canned eval dataset for the Oil & Gas Industry Overview
   fixture. Designed to surface the GraphRAG vs Naive RAG vs Hybrid
@@ -31,6 +32,7 @@ questions:
   # --- Aggregation -----------------------------------------------------
   - key: agg_location_count
     category: aggregation
+    ability_type: summarization
     question_text: "How many Locations are in this workspace's graph?"
     expected_answer_patterns:
       - "\\b6\\b"
@@ -85,6 +87,7 @@ questions:
   # --- Multi-hop -------------------------------------------------------
   - key: hop_deloitte_psa
     category: multi_hop
+    ability_type: multi_hop_reasoning
     question_text: "How is Deloitte related to Probabilistic Safety Assessment?"
     expected_answer_patterns:
       - "deloitte"
@@ -141,6 +144,7 @@ questions:
   # --- Vector-friendly -------------------------------------------------
   - key: vec_deloitte_predictive
     category: vector
+    ability_type: single_hop_fact
     question_text: "What does Deloitte say about predictive algorithms preventing downtime?"
     expected_answer_patterns:
       - "deloitte"
@@ -190,6 +194,7 @@ questions:
   # --- Refusal ---------------------------------------------------------
   - key: refuse_iphone
     category: refusal
+    ability_type: abstention
     question_text: "When was the iPhone first released according to this paper?"
     expected_answer_patterns:
       - "(no|not|cannot|insufficient)"

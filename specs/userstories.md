@@ -709,6 +709,30 @@ Satisfies: FR-42.
 - AC-2: Recovery guidance explains where to look (pipeline log) and how to retry.
 - AC-3: Retrying does not create cross-agent or duplicate state.
 
+## Epic 11 — Memory Evals and Baseline Reset
+
+### US-11.1 — Reset workspace to a clean baseline (P0)
+
+**As** Dev (P-2), **I want** to wipe all ingested sources, derived memory, jobs, and indexes while keeping API keys and pipeline settings, **so that** I can run controlled end-to-end evals from a known empty state.
+
+**Acceptance criteria**:
+
+- AC-1: Settings exposes a danger-zone control that previews row counts and requires typing `RESET` plus confirmation.
+- AC-2: Reset deletes Postgres content (documents, notes, graph, chat, evals, wiki, dream jobs, North cache), workspace storage files, Redis job telemetry for the workspace, and the FalkorDB graph named after the workspace id.
+- AC-3: After reset, Graph/Notes/Documents surfaces are empty and retrieval modes do not return stale Graphiti-only contexts.
+- AC-4: Active ingestion or dream/wiki jobs block reset unless the operator forces cancel-first.
+
+### US-11.2 — Run memory-system evals on a prepared workspace (P0)
+
+**As** Dev (P-2), **I want** to compare retrieval modes (raw, zettel, A-MEM, graph, hybrid) on canned datasets with per-question inspection, **so that** I can see whether each memory system retrieves the right context before trusting aggregate scores.
+
+**Acceptance criteria**:
+
+- AC-1: Evals surface lists runs, starts runs with dataset + modes + top-k cutoffs, and polls until complete.
+- AC-2: Run detail shows mode-level summary and a question inspector with answer, scores, and retrieved-context snapshots.
+- AC-3: Dataset YAML documents prerequisites (e.g. LoCoMo-lite needs ingested North/PDF content; oil_gas_v1 needs the Oil & Gas fixture).
+- AC-4: On an empty post-reset workspace, eval runs complete with empty retrieval for all modes and abstention questions score as correct refusals.
+
 ## Story Map Summary
 
 | Phase | Epics covered (key stories)                                                                     |
