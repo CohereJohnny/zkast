@@ -66,21 +66,21 @@ function variantClasses(variant: ToastVariant): {
     case "success":
       return {
         container:
-          "border-emerald-400/40 bg-emerald-500/12 text-emerald-100 shadow-modal",
+          "border-success/40 bg-success/12 text-success-foreground shadow-lg",
         iconPath:
           "M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
       };
     case "error":
       return {
         container:
-          "border-red-400/40 bg-red-500/12 text-red-100 shadow-modal",
+          "border-destructive/40 bg-destructive/12 text-destructive-foreground shadow-lg",
         iconPath:
           "M12 9v3.75m0 3.75h.008v.008H12V16.5Zm9.75-4.5a9.75 9.75 0 1 1-19.5 0 9.75 9.75 0 0 1 19.5 0Z",
       };
     case "warning":
       return {
         container:
-          "border-amber-400/40 bg-amber-500/12 text-amber-100 shadow-modal",
+          "border-caution/40 bg-caution/12 text-caution-foreground shadow-lg",
         iconPath:
           "M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z",
       };
@@ -88,7 +88,7 @@ function variantClasses(variant: ToastVariant): {
     default:
       return {
         container:
-          "border-sky-400/40 bg-sky-500/12 text-sky-100 shadow-modal",
+          "border-border bg-secondary text-foreground shadow-lg",
         iconPath:
           "M11.25 11.25 12 12m0 0 .75.75M12 12V8.25m0 7.5h.008v.008H12v-.008ZM21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
       };
@@ -217,8 +217,8 @@ function ConfirmDialog({
 
   const confirmClasses =
     variant === "danger"
-      ? "bg-danger text-white hover:opacity-90 focus-visible:ring-danger"
-      : "bg-accent-primary text-canvas hover:bg-accent-primary-hover focus-visible:ring-accent-primary";
+      ? "bg-destructive text-white hover:opacity-90 focus-visible:ring-destructive"
+      : "bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring";
 
   return (
     <div
@@ -229,14 +229,14 @@ function ConfirmDialog({
       className="fixed inset-0 z-[70] flex items-end justify-center bg-black/50 p-4 sm:items-center"
     >
       <div
-        className="w-full max-w-md rounded-lg border border-border-strong bg-surface-overlay p-5 shadow-modal"
+        className="w-full max-w-md rounded-lg border border-input bg-popover/90 p-5 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 id="confirm-title" className="text-title-3 text-primary">
+        <h2 id="confirm-title" className="text-h5 text-foreground">
           {state.title}
         </h2>
         {state.description ? (
-          <p id="confirm-desc" className="mt-2 text-caption leading-relaxed text-secondary">
+          <p id="confirm-desc" className="mt-2 text-caption leading-relaxed text-muted-foreground">
             {state.description}
           </p>
         ) : null}
@@ -245,7 +245,7 @@ function ConfirmDialog({
             ref={cancelRef}
             type="button"
             onClick={() => onResolve(false)}
-            className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
+            className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             {state.cancelLabel ?? "Cancel"}
           </button>
@@ -253,7 +253,7 @@ function ConfirmDialog({
             ref={confirmRef}
             type="button"
             onClick={() => onResolve(true)}
-            className={`rounded-md px-3 py-1.5 text-caption font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas ${confirmClasses}`}
+            className={`rounded-md px-3 py-1.5 text-caption font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background ${confirmClasses}`}
           >
             {state.confirmLabel ?? "Confirm"}
           </button>
@@ -306,15 +306,15 @@ function PromptDialog({
           e.preventDefault();
           submit();
         }}
-        className="w-full max-w-md rounded-lg border border-border-strong bg-surface-overlay p-5 shadow-modal"
+        className="w-full max-w-md rounded-lg border border-input bg-popover/90 p-5 shadow-lg"
       >
-        <h2 id="prompt-title" className="text-title-3 text-primary">
+        <h2 id="prompt-title" className="text-h5 text-foreground">
           {state.title}
         </h2>
         {state.description ? (
-          <p className="mt-1 text-caption leading-relaxed text-secondary">{state.description}</p>
+          <p className="mt-1 text-caption leading-relaxed text-muted-foreground">{state.description}</p>
         ) : null}
-        <label className="mt-4 block text-caption text-secondary">
+        <label className="mt-4 block text-caption text-muted-foreground">
           {state.label ?? "Value"}
           <input
             ref={inputRef}
@@ -323,21 +323,21 @@ function PromptDialog({
             onChange={(e) => setValue(e.target.value)}
             placeholder={state.placeholder}
             maxLength={state.maxLength}
-            className="mt-1 w-full rounded-md border border-border-strong bg-canvas px-2.5 py-1.5 text-body text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
+            className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-p text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </label>
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
             onClick={() => onResolve(null)}
-            className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
+            className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             {state.cancelLabel ?? "Cancel"}
           </button>
           <button
             type="submit"
             disabled={state.required && !value.trim()}
-            className="rounded-md bg-accent-primary px-3 py-1.5 text-caption font-medium text-canvas transition-colors duration-150 hover:bg-accent-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-50"
+            className="rounded-md bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
           >
             {state.confirmLabel ?? "OK"}
           </button>

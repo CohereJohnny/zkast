@@ -75,7 +75,7 @@ export function TagPicker({
   const inputDisplay = open ? query : value || query;
 
   return (
-    <div ref={wrapperRef} className="text-caption text-muted">
+    <div ref={wrapperRef} className="text-caption text-muted-foreground">
       <label className="block">
         {label}
         <div className="relative mt-1">
@@ -121,7 +121,7 @@ export function TagPicker({
             aria-controls={listboxId}
             aria-expanded={open}
             aria-autocomplete="list"
-            className="w-full cursor-pointer rounded border border-border-strong bg-surface px-2 py-1 text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50"
+            className="w-full cursor-pointer rounded border border-input bg-card px-2 py-1 text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           />
           {value && !open ? (
             <button
@@ -131,7 +131,7 @@ export function TagPicker({
                 onChange("");
                 setQuery("");
               }}
-              className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted hover:bg-surface-raised hover:text-secondary"
+              className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-muted-foreground"
             >
               <svg
                 aria-hidden="true"
@@ -151,7 +151,7 @@ export function TagPicker({
             <ul
               role="listbox"
               id={listboxId}
-              className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-border-strong bg-surface-overlay shadow-modal backdrop-blur"
+              className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-input bg-popover/90 shadow-lg backdrop-blur"
             >
               {filtered.map((t, idx) => (
                 <li
@@ -165,12 +165,12 @@ export function TagPicker({
                     setQuery("");
                   }}
                   onMouseEnter={() => setActiveIdx(idx)}
-                  className={`flex cursor-pointer items-center justify-between px-2 py-1.5 text-secondary ${
-                    idx === activeIdx ? "bg-surface-raised" : ""
-                  } hover:bg-surface-raised`}
+                  className={`flex cursor-pointer items-center justify-between px-2 py-1.5 text-muted-foreground ${
+                    idx === activeIdx ? "bg-secondary" : ""
+                  } hover:bg-secondary`}
                 >
                   <span className="truncate">{t.name}</span>
-                  <span className="ml-2 text-[10px] text-muted">{t.count}</span>
+                  <span className="ml-2 text-[10px] text-muted-foreground">{t.count}</span>
                 </li>
               ))}
             </ul>

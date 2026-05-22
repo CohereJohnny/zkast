@@ -16,7 +16,7 @@ export async function WorkspaceShell({
 }) {
   return (
     <JobEventsProvider>
-      <div className="min-h-screen bg-canvas">
+      <div className="min-h-screen bg-background">
         <LeftRail workspaceName={workspaceName} />
         <div className="pl-[calc(13rem+2rem)] pr-14 pt-4 pb-4">
           <WorkspaceMainGrid workspaceId={workspaceId}>{children}</WorkspaceMainGrid>

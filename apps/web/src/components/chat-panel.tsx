@@ -461,13 +461,13 @@ export function ChatPanel({
       aria-label="Grounded chat"
       className="mx-auto flex h-full w-full max-w-3xl flex-col"
     >
-      <header className="flex flex-col gap-2 border-b border-border-subtle pb-2">
+      <header className="flex flex-col gap-2 border-b border-border pb-2">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h1 className="text-body font-medium text-primary">
+            <h1 className="text-p font-medium text-foreground">
               {session?.title || "New chat"}
             </h1>
-            <p className="text-caption text-muted">
+            <p className="text-caption text-muted-foreground">
               {scope.agent_id
                 ? "Grounded answers are restricted to the selected North agent's memory."
                 : "Grounded answers cite notes, entities, and source pages across this workspace."}
@@ -477,7 +477,7 @@ export function ChatPanel({
             type="button"
             onClick={() => setScopeOpen((o) => !o)}
             aria-expanded={scopeOpen}
-            className="cursor-pointer rounded border border-border-strong px-2 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+            className="cursor-pointer rounded border border-input px-2 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {scopeOpen ? "Hide scope" : "Scope"}
           </button>
@@ -486,8 +486,8 @@ export function ChatPanel({
           <span
             className={
               scope.agent_id
-                ? "inline-flex items-center gap-1 rounded-full border border-accent-primary/40 bg-accent-primary/10 px-2 py-0.5 text-accent-primary"
-                : "inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface/40 px-2 py-0.5 text-muted"
+                ? "inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-foreground"
+                : "inline-flex items-center gap-1 rounded-full border border-border bg-card/40 px-2 py-0.5 text-muted-foreground"
             }
             title={
               scope.agent_id
@@ -506,7 +506,7 @@ export function ChatPanel({
             <button
               type="button"
               onClick={() => setScope((s) => ({ ...s, agent_id: undefined }))}
-              className="rounded border border-border-subtle px-2 py-0.5 text-muted hover:bg-surface hover:text-primary"
+              className="rounded border border-border px-2 py-0.5 text-muted-foreground hover:bg-card hover:text-foreground"
             >
               Clear agent scope
             </button>
@@ -520,13 +520,13 @@ export function ChatPanel({
       </header>
 
       {scopeOpen && !session ? (
-        <div className="mt-3 rounded-md border border-border-subtle bg-surface/40 p-3">
+        <div className="mt-3 rounded-md border border-border bg-card/40 p-3">
           <ChatScopePicker
             workspaceId={workspaceId}
             value={scope}
             onChange={setScope}
           />
-          <p className="mt-2 text-caption text-muted">
+          <p className="mt-2 text-caption text-muted-foreground">
             Scope is locked in when the first message is sent.
           </p>
         </div>
@@ -534,10 +534,10 @@ export function ChatPanel({
 
       <div
         ref={bodyRef}
-        className="mt-3 flex-1 overflow-y-auto rounded-md border border-border-subtle bg-canvas px-3 py-3"
+        className="mt-3 flex-1 overflow-y-auto rounded-md border border-border bg-background px-3 py-3"
       >
         {!hasMessages ? (
-          <p className="py-12 text-center text-caption text-muted">
+          <p className="py-12 text-center text-caption text-muted-foreground">
             Ask a question about anything in this workspace. Answers cite notes and source pages.
           </p>
         ) : (
@@ -555,7 +555,7 @@ export function ChatPanel({
 
       <form
         onSubmit={submit}
-        className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3"
+        className="mt-3 flex flex-col gap-2 border-t border-border pt-3"
       >
         <textarea
           value={input}
@@ -570,10 +570,10 @@ export function ChatPanel({
           aria-label="Chat message"
           rows={2}
           disabled={submitting}
-          className="w-full resize-y rounded border border-border-strong bg-surface px-2 py-2 text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50"
+          className="w-full resize-y rounded border border-input bg-card px-2 py-2 text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         />
         <div className="flex items-center justify-between">
-          <span className="text-caption text-muted">
+          <span className="text-caption text-muted-foreground">
             {input.length}/{MAX_INPUT_LEN} · Cmd-Enter to send
           </span>
           {submitting && turnId ? (
@@ -588,7 +588,7 @@ export function ChatPanel({
             <button
               type="submit"
               disabled={!input.trim() || submitting}
-              className="cursor-pointer rounded-md bg-accent-primary px-3 py-1 text-caption font-medium text-canvas transition-colors duration-150 hover:bg-accent-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded-md bg-primary px-3 py-1 text-caption font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               Send
             </button>
@@ -633,8 +633,8 @@ function MessageBubble({
       <div
         className={
           isUser
-            ? "max-w-[85%] rounded-md bg-surface-raised px-3 py-2 text-body text-primary"
-            : "max-w-[95%] rounded-md border border-border-subtle bg-surface/40 px-3 py-3 text-body text-primary"
+            ? "max-w-[85%] rounded-md bg-secondary px-3 py-2 text-p text-foreground"
+            : "max-w-[95%] rounded-md border border-border bg-card/40 px-3 py-3 text-p text-foreground"
         }
       >
         <AssistantContent
@@ -643,7 +643,7 @@ function MessageBubble({
           isUser={isUser}
         />
         {message.status === "streaming" && !isUser ? (
-          <span className="ml-1 inline-block h-3 w-1 animate-pulse bg-accent-primary align-middle" />
+          <span className="ml-1 inline-block h-3 w-1 animate-pulse bg-primary align-middle" />
         ) : null}
       </div>
     </li>
@@ -750,10 +750,10 @@ function RetrievalModeSelector({
   const meta = RETRIEVAL_MODE_LABELS[value];
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-caption text-muted">
+      <label className="text-caption text-muted-foreground">
         Retrieval strategy
         <select
-          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1.5 text-body text-primary"
+          className="mt-1 w-full rounded-md border border-input bg-card px-2 py-1.5 text-p text-foreground"
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value as RetrievalMode)}
@@ -765,7 +765,7 @@ function RetrievalModeSelector({
           ))}
         </select>
       </label>
-      <p className="text-caption text-muted">
+      <p className="text-caption text-muted-foreground">
         {meta.helper}
         {disabled ? " — locked for this session; start a new chat to switch." : ""}
       </p>

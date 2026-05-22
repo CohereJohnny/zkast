@@ -90,19 +90,19 @@ export function WikiJobStatus({
   return (
     <div
       className={cn(
-        "rounded-lg border border-border-subtle bg-surface-raised px-3 py-2 text-caption",
+        "rounded-lg border border-border bg-secondary px-3 py-2 text-caption",
         job?.status === "failed" && "border-destructive/40",
       )}
     >
       {error ? <p className="text-destructive">{error}</p> : null}
       {job ? (
         <div className="space-y-1">
-          <p className="text-secondary">
+          <p className="text-muted-foreground">
             Wiki job{" "}
-            <span className="font-mono text-primary">{job.id.slice(0, 8)}…</span> ·{" "}
+            <span className="font-mono text-foreground">{job.id.slice(0, 8)}…</span> ·{" "}
             <span
               className={cn(
-                job.status === "running" && "text-primary",
+                job.status === "running" && "text-foreground",
                 job.status === "succeeded" && "text-green-600 dark:text-green-400",
                 job.status === "failed" && "text-destructive",
               )}
@@ -111,7 +111,7 @@ export function WikiJobStatus({
             </span>
           </p>
           {terminal && typeof stats === "object" ? (
-            <p className="text-muted">
+            <p className="text-muted-foreground">
               notes {String(stats.notes_considered ?? 0)} · created{" "}
               {String(stats.pages_created ?? 0)} · updated{" "}
               {String(stats.pages_updated ?? 0)} · citations{" "}
@@ -119,7 +119,7 @@ export function WikiJobStatus({
               {String(stats.links_added ?? 0)}
             </p>
           ) : !terminal ? (
-            <p className="text-muted" role="status">
+            <p className="text-muted-foreground" role="status">
               Compiling pages…
             </p>
           ) : null}
@@ -127,21 +127,21 @@ export function WikiJobStatus({
             <p className="text-destructive">{job.failure_reason}</p>
           ) : null}
           {detail?.mutations?.length ? (
-            <p className="text-muted">
+            <p className="text-muted-foreground">
               {detail.mutations.length} page mutation(s) recorded
             </p>
           ) : null}
           {job.status === "running" ? (
             <button
               type="button"
-              className="mt-1 text-left text-caption text-secondary underline hover:text-primary"
+              className="mt-1 text-left text-caption text-muted-foreground underline hover:text-foreground"
               onClick={() => requestOpenLogConsole()}
             >
               Show pipeline log below
             </button>
           ) : null}
           {job.status === "failed" ? (
-            <p className="text-muted">
+            <p className="text-muted-foreground">
               Check the pipeline log for the failure stage. Common causes:
               missing model credentials, no atomic notes in scope, or a transient
               database error — retry from the Generate button after addressing

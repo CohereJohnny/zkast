@@ -125,8 +125,8 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4">
       <header>
-        <h1 className="text-title-2 text-secondary">Snapshots</h1>
-        <p className="mt-1 text-body text-muted">
+        <h1 className="text-h4 text-muted-foreground">Snapshots</h1>
+        <p className="mt-1 text-p text-muted-foreground">
           Freeze the working graph for a named checkpoint. Snapshots are immutable; the live graph keeps changing.
         </p>
       </header>
@@ -137,7 +137,7 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
       ) : null}
       <button
         type="button"
-        className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-canvas"
+        className="rounded-md bg-primary px-4 py-2 text-p font-medium text-primary-foreground"
         onClick={() => setOpen(true)}
       >
         Create snapshot
@@ -149,21 +149,21 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
           aria-modal="true"
           aria-label="Create snapshot"
         >
-          <div className="w-full max-w-md rounded-lg border border-border-strong bg-surface p-4 shadow-xl">
-            <p className="text-body font-medium text-secondary">New snapshot</p>
-            <label className="mt-3 block text-caption text-muted">
+          <div className="w-full max-w-md rounded-lg border border-input bg-card p-4 shadow-xl">
+            <p className="text-p font-medium text-muted-foreground">New snapshot</p>
+            <label className="mt-3 block text-caption text-muted-foreground">
               Name (unique per workspace)
               <input
-                className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1 text-secondary"
+                className="mt-1 w-full rounded border border-input bg-background px-2 py-1 text-muted-foreground"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 maxLength={120}
               />
             </label>
-            <label className="mt-2 block text-caption text-muted">
+            <label className="mt-2 block text-caption text-muted-foreground">
               Description (optional)
               <textarea
-                className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1 text-secondary"
+                className="mt-1 w-full rounded border border-input bg-background px-2 py-1 text-muted-foreground"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
@@ -173,7 +173,7 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                className="rounded border border-border-strong px-3 py-1 text-caption text-secondary"
+                className="rounded border border-input px-3 py-1 text-caption text-muted-foreground"
                 onClick={() => setOpen(false)}
               >
                 Cancel
@@ -181,7 +181,7 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
               <button
                 type="button"
                 disabled={busy || !name.trim()}
-                className="rounded bg-accent-primary px-3 py-1 text-caption font-medium text-canvas disabled:opacity-50"
+                className="rounded bg-primary px-3 py-1 text-caption font-medium text-primary-foreground disabled:opacity-50"
                 onClick={() => void create()}
               >
                 {busy ? "…" : "Create"}
@@ -192,39 +192,39 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
       ) : null}
       <section aria-label="Snapshot list">
         {loading ? (
-          <p className="text-caption text-muted">Loading…</p>
+          <p className="text-caption text-muted-foreground">Loading…</p>
         ) : items.length === 0 ? (
-          <p className="text-caption text-muted">No snapshots yet.</p>
+          <p className="text-caption text-muted-foreground">No snapshots yet.</p>
         ) : (
-          <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle">
+          <ul className="divide-y divide-border-subtle rounded-lg border border-border">
             {items.map((s) => (
               <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-body font-medium text-secondary">{s.name}</p>
-                  <p className="text-caption text-muted">
+                  <p className="text-p font-medium text-muted-foreground">{s.name}</p>
+                  <p className="text-caption text-muted-foreground">
                     {new Date(s.created_at).toLocaleString()} · entities {s.stats?.entity_count ?? 0} · rels{" "}
                     {s.stats?.relationship_count ?? 0} · notes {s.stats?.note_count ?? 0}
                   </p>
-                  {s.description ? <p className="mt-1 text-caption text-secondary">{s.description}</p> : null}
+                  {s.description ? <p className="mt-1 text-caption text-muted-foreground">{s.description}</p> : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className="rounded-md border border-border-strong px-2 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised"
+                    className="rounded-md border border-input px-2 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary"
                     onClick={() => void review(s.id, "approved")}
                   >
                     Approve
                   </button>
                   <button
                     type="button"
-                    className="rounded-md border border-border-strong px-2 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised"
+                    className="rounded-md border border-input px-2 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary"
                     onClick={() => void review(s.id, "rejected")}
                   >
                     Reject
                   </button>
                   <button
                     type="button"
-                    className="rounded text-caption text-danger underline transition-colors duration-150 hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+                    className="rounded text-caption text-destructive underline transition-colors duration-150 hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive"
                     onClick={() => void remove(s.id, s.name)}
                   >
                     Delete
@@ -234,7 +234,7 @@ export function SnapshotsPageClient({ workspaceId }: { workspaceId: string }) {
             ))}
           </ul>
         )}
-        {!loading ? <p className="mt-2 text-caption text-muted">Total: {total}</p> : null}
+        {!loading ? <p className="mt-2 text-caption text-muted-foreground">Total: {total}</p> : null}
       </section>
     </div>
   );

@@ -183,30 +183,30 @@ export function EntityMergeDialog({
       aria-modal="true"
       aria-label="Merge entities"
     >
-      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border-strong bg-canvas p-4 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-input bg-background p-4 shadow-xl">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <p className="text-title-3 text-secondary">Merge entities</p>
-            <p className="mt-1 text-caption text-muted">
-              Survivor: <span className="font-mono text-secondary">{survivorEntityId}</span>
+            <p className="text-h5 text-muted-foreground">Merge entities</p>
+            <p className="mt-1 text-caption text-muted-foreground">
+              Survivor: <span className="font-mono text-muted-foreground">{survivorEntityId}</span>
             </p>
           </div>
-          <button type="button" className="text-caption text-muted hover:text-secondary" onClick={onClose}>
+          <button type="button" className="text-caption text-muted-foreground hover:text-muted-foreground" onClick={onClose}>
             Close
           </button>
         </div>
 
         {showUndo ? (
-          <div className="mt-4 space-y-3 text-caption text-secondary">
+          <div className="mt-4 space-y-3 text-caption text-muted-foreground">
             <p>
               Merge completed. The other entity row was removed from the working graph. Choose either:
             </p>
-            <ul className="ml-4 list-disc space-y-1 text-muted">
+            <ul className="ml-4 list-disc space-y-1 text-muted-foreground">
               <li>
-                <strong className="text-secondary">Full undo</strong> — restore the merged entity row and re-attach its provenance.
+                <strong className="text-muted-foreground">Full undo</strong> — restore the merged entity row and re-attach its provenance.
               </li>
               <li>
-                <strong className="text-secondary">Revert survivor fields</strong> — keep the merge but roll back this entity&rsquo;s field
+                <strong className="text-muted-foreground">Revert survivor fields</strong> — keep the merge but roll back this entity&rsquo;s field
                 values (name, type, summary, aliases, properties).
               </li>
             </ul>
@@ -214,7 +214,7 @@ export function EntityMergeDialog({
               <button
                 type="button"
                 disabled={busy}
-                className="rounded-md bg-danger px-3 py-1.5 font-medium text-white transition-colors duration-150 hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-50"
+                className="rounded-md bg-destructive px-3 py-1.5 font-medium text-white transition-colors duration-150 hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
                 onClick={() => void fullUndo()}
               >
                 {busy ? "…" : "Full undo"}
@@ -222,14 +222,14 @@ export function EntityMergeDialog({
               <button
                 type="button"
                 disabled={busy || !survivorBefore}
-                className="rounded-md border border-border-strong px-3 py-1.5 text-secondary transition-colors duration-150 hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-input px-3 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:opacity-50"
                 onClick={() => void revertSurvivorFields()}
               >
                 {busy ? "…" : "Revert survivor fields"}
               </button>
               <button
                 type="button"
-                className="rounded-md bg-accent-primary px-3 py-1.5 font-medium text-canvas"
+                className="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground"
                 onClick={onClose}
               >
                 Done
@@ -238,17 +238,17 @@ export function EntityMergeDialog({
           </div>
         ) : (
           <>
-            <label className="mt-4 block text-caption text-secondary">
+            <label className="mt-4 block text-caption text-muted-foreground">
               Other entity id (uuid)
               <input
-                className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
+                className="mt-1 w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-caption text-muted-foreground"
                 value={otherId}
                 onChange={(e) => setOtherId(e.target.value)}
                 placeholder="Victim entity id (merged into survivor)"
               />
             </label>
 
-            <fieldset className="mt-4 space-y-2 text-caption text-secondary">
+            <fieldset className="mt-4 space-y-2 text-caption text-muted-foreground">
               <legend className="font-medium">Keep field from</legend>
               {(
                 [
@@ -260,7 +260,7 @@ export function EntityMergeDialog({
                 ] as const
               ).map(([label, val, set]) => (
                 <div key={label} className="flex flex-wrap gap-3">
-                  <span className="min-w-[6rem] text-muted">{label}</span>
+                  <span className="min-w-[6rem] text-muted-foreground">{label}</span>
                   <label className="flex items-center gap-1">
                     <input type="radio" name={`pick-${label}`} checked={val === "survivor"} onChange={() => set("survivor")} />
                     Survivor
@@ -285,7 +285,7 @@ export function EntityMergeDialog({
           <div className="mt-4 flex justify-end gap-2">
             <button
               type="button"
-              className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary"
+              className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground"
               onClick={onClose}
             >
               Cancel
@@ -293,7 +293,7 @@ export function EntityMergeDialog({
             <button
               type="button"
               disabled={busy || !otherId.trim()}
-              className="rounded-md bg-accent-primary px-3 py-1.5 text-caption font-medium text-canvas disabled:opacity-50"
+              className="rounded-md bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground disabled:opacity-50"
               onClick={() => void submit()}
             >
               {busy ? "Merging…" : "Merge"}

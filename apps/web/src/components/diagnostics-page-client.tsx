@@ -172,14 +172,14 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
     <div className="mx-auto max-w-4xl space-y-6 p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-title-2 text-secondary">Diagnostics</h1>
-          <p className="mt-1 text-body text-muted">
+          <h1 className="text-h4 text-muted-foreground">Diagnostics</h1>
+          <p className="mt-1 text-p text-muted-foreground">
             Pipeline health snapshot. Refreshes every 8 seconds.
           </p>
         </div>
         <Link
           href="/settings"
-          className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised"
+          className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary"
         >
           Back to settings
         </Link>
@@ -190,20 +190,20 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
           {error}
         </p>
       ) : null}
-      {loading && !data ? <p className="text-caption text-muted">Loading…</p> : null}
+      {loading && !data ? <p className="text-caption text-muted-foreground">Loading…</p> : null}
 
       {data ? (
         <>
           <section
             aria-label="arq queue"
-            className="rounded-lg border border-border-subtle bg-surface/80 p-4"
+            className="rounded-lg border border-border bg-card/80 p-4"
           >
-            <h2 className="text-title-3 text-secondary">arq queue</h2>
-            <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted">
+            <h2 className="text-h5 text-muted-foreground">arq queue</h2>
+            <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted-foreground">
               <dt>Queue depth</dt>
-              <dd className="text-secondary">{data.arq.queue_depth ?? "n/a"}</dd>
+              <dd className="text-muted-foreground">{data.arq.queue_depth ?? "n/a"}</dd>
               <dt>In-progress</dt>
-              <dd className="text-secondary">
+              <dd className="text-muted-foreground">
                 {data.arq.in_progress.length === 0
                   ? "—"
                   : data.arq.in_progress.map((s) => s.slice(0, 24)).join(", ")}
@@ -213,21 +213,21 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
 
           <section
             aria-label="Stalled documents"
-            className="rounded-lg border border-border-subtle bg-surface/80 p-4"
+            className="rounded-lg border border-border bg-card/80 p-4"
           >
-            <h2 className="text-title-3 text-secondary">Stalled documents</h2>
-            <p className="mt-1 text-caption text-muted">
+            <h2 className="text-h5 text-muted-foreground">Stalled documents</h2>
+            <p className="mt-1 text-caption text-muted-foreground">
               Documents in an active status whose ingestion heartbeat is older than 90s.
               The worker reconciler will mark these failed within ~1 minute.
             </p>
             {data.stalled_documents.length === 0 ? (
-              <p className="mt-3 text-caption text-secondary">None.</p>
+              <p className="mt-3 text-caption text-muted-foreground">None.</p>
             ) : (
               <ul className="mt-3 divide-y divide-border-subtle text-caption">
                 {data.stalled_documents.map((d) => (
                   <li key={d.document_id} className="py-2">
-                    <p className="font-mono text-secondary">{d.document_id}</p>
-                    <p className="text-muted">
+                    <p className="font-mono text-muted-foreground">{d.document_id}</p>
+                    <p className="text-muted-foreground">
                       status={d.status} · run={d.ingestion_run_id ?? "—"} · heartbeat=
                       {d.last_heartbeat_at ?? "never"}
                     </p>
@@ -239,14 +239,14 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
 
           <section
             aria-label="Stage latency"
-            className="rounded-lg border border-border-subtle bg-surface/80 p-4"
+            className="rounded-lg border border-border bg-card/80 p-4"
           >
-            <h2 className="text-title-3 text-secondary">Stage latency (24h)</h2>
+            <h2 className="text-h5 text-muted-foreground">Stage latency (24h)</h2>
             {data.stage_latency.length === 0 ? (
-              <p className="mt-2 text-caption text-muted">No completed runs in the last 24h.</p>
+              <p className="mt-2 text-caption text-muted-foreground">No completed runs in the last 24h.</p>
             ) : (
               <table className="mt-2 w-full text-caption">
-                <thead className="text-muted">
+                <thead className="text-muted-foreground">
                   <tr>
                     <th className="text-left">Status</th>
                     <th className="text-right">P50</th>
@@ -254,7 +254,7 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
                     <th className="text-right">N</th>
                   </tr>
                 </thead>
-                <tbody className="text-secondary">
+                <tbody className="text-muted-foreground">
                   {data.stage_latency.map((row) => (
                     <tr key={row.status}>
                       <td>{row.status}</td>
@@ -270,10 +270,10 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
 
           <section
             aria-label="Retrieval indexes"
-            className="rounded-lg border border-border-subtle bg-surface/80 p-4"
+            className="rounded-lg border border-border bg-card/80 p-4"
           >
-            <h2 className="text-title-3 text-secondary">Retrieval indexes</h2>
-            <p className="mt-1 text-caption text-muted">
+            <h2 className="text-h5 text-muted-foreground">Retrieval indexes</h2>
+            <p className="mt-1 text-caption text-muted-foreground">
               Embedding counts for naive RAG chunks and note indexes (Zettel + A-MEM).
             </p>
             {indexError ? (
@@ -282,25 +282,25 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
               </p>
             ) : null}
             {indexStatus ? (
-              <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted">
+              <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted-foreground">
                 <dt>Raw chunks indexed</dt>
-                <dd className="text-secondary">
+                <dd className="text-muted-foreground">
                   {indexStatus.raw_chunk?.indexed ?? "—"} / {indexStatus.raw_chunk?.total ?? "—"}
                 </dd>
                 <dt>note_zettel</dt>
-                <dd className="text-secondary">{indexStatus.by_kind?.note_zettel ?? 0}</dd>
+                <dd className="text-muted-foreground">{indexStatus.by_kind?.note_zettel ?? 0}</dd>
                 <dt>note_amem</dt>
-                <dd className="text-secondary">{indexStatus.by_kind?.note_amem ?? 0}</dd>
+                <dd className="text-muted-foreground">{indexStatus.by_kind?.note_amem ?? 0}</dd>
               </dl>
             ) : (
-              <p className="mt-2 text-caption text-muted">Loading index status…</p>
+              <p className="mt-2 text-caption text-muted-foreground">Loading index status…</p>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 disabled={indexBusy !== null}
                 onClick={() => void runBackfill(["raw_chunk"])}
-                className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground hover:bg-secondary disabled:opacity-50"
               >
                 {indexBusy === "raw_chunk" ? "Running…" : "Backfill raw chunks"}
               </button>
@@ -308,7 +308,7 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
                 type="button"
                 disabled={indexBusy !== null}
                 onClick={() => void runBackfill(["note_zettel", "note_amem"])}
-                className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground hover:bg-secondary disabled:opacity-50"
               >
                 {indexBusy === "note_zettel,note_amem" ? "Running…" : "Backfill note indexes"}
               </button>
@@ -317,21 +317,21 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
 
           <section
             aria-label="Job hash hygiene"
-            className="rounded-lg border border-border-subtle bg-surface/80 p-4"
+            className="rounded-lg border border-border bg-card/80 p-4"
           >
-            <h2 className="text-title-3 text-secondary">Job hash hygiene</h2>
-            <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted">
+            <h2 className="text-h5 text-muted-foreground">Job hash hygiene</h2>
+            <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted-foreground">
               <dt>Terminal hashes (cleanable)</dt>
-              <dd className="text-secondary">{data.job_hashes.terminal}</dd>
+              <dd className="text-muted-foreground">{data.job_hashes.terminal}</dd>
               <dt>Active hashes</dt>
-              <dd className="text-secondary">{data.job_hashes.active}</dd>
+              <dd className="text-muted-foreground">{data.job_hashes.active}</dd>
             </dl>
             <div className="mt-3 flex justify-end">
               <button
                 type="button"
                 disabled={cleanupBusy || data.job_hashes.terminal === 0}
                 onClick={() => void cleanupHashes()}
-                className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:opacity-50"
               >
                 {cleanupBusy ? "Cleaning…" : "Clean terminal hashes"}
               </button>

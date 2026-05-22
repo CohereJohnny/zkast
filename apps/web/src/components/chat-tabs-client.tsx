@@ -36,7 +36,7 @@ export function ChatTabsClient({
     <div className="flex h-full flex-col gap-3">
       <nav
         aria-label="Chat views"
-        className="flex items-center gap-1 rounded-md border border-border-subtle bg-surface/40 p-0.5"
+        className="flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5"
       >
         <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
           Chat
@@ -75,8 +75,8 @@ function TabButton({
       aria-pressed={active}
       className={
         active
-          ? "cursor-pointer rounded px-3 py-1 text-caption font-medium text-canvas bg-accent-primary transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
-          : "cursor-pointer rounded px-3 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          ? "cursor-pointer rounded px-3 py-1 text-caption font-medium text-primary-foreground bg-primary transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          : "cursor-pointer rounded px-3 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       }
     >
       {children}

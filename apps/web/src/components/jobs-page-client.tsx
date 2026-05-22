@@ -35,10 +35,10 @@ type Overview = {
 
 function statusClass(status: string | undefined): string {
   const s = (status || "").toLowerCase();
-  if (s === "running" || s === "queued") return "text-primary";
+  if (s === "running" || s === "queued") return "text-foreground";
   if (s === "succeeded") return "text-green-600 dark:text-green-400";
   if (s === "failed") return "text-destructive";
-  return "text-muted";
+  return "text-muted-foreground";
 }
 
 function progressLabel(job: PipelineJob): string {
@@ -108,38 +108,38 @@ export function JobsPageClient({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-4">
       <div>
-        <h1 className="text-title-2 text-primary">Jobs</h1>
-        <p className="mt-1 text-body text-muted">
+        <h1 className="text-h4 text-foreground">Jobs</h1>
+        <p className="mt-1 text-p text-muted-foreground">
           Worker queue, live pipeline jobs (Redis), and dreaming runs. The build log below streams
           events for jobs you start from Documents, Conversations, or Agents.
         </p>
       </div>
 
       {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-p text-destructive">
           {error}
         </p>
       ) : null}
 
       <section className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-border-subtle bg-surface-raised px-3 py-3">
-          <p className="text-caption text-muted">Arq queue depth</p>
-          <p className="text-title-3 text-primary">{arq?.queue_depth ?? "—"}</p>
+        <div className="rounded-lg border border-border bg-secondary px-3 py-3">
+          <p className="text-caption text-muted-foreground">Arq queue depth</p>
+          <p className="text-h5 text-foreground">{arq?.queue_depth ?? "—"}</p>
         </div>
-        <div className="rounded-lg border border-border-subtle bg-surface-raised px-3 py-3">
-          <p className="text-caption text-muted">Arq in progress</p>
-          <p className="text-title-3 text-primary">{arq?.in_progress?.length ?? 0}</p>
+        <div className="rounded-lg border border-border bg-secondary px-3 py-3">
+          <p className="text-caption text-muted-foreground">Arq in progress</p>
+          <p className="text-h5 text-foreground">{arq?.in_progress?.length ?? 0}</p>
         </div>
-        <div className="rounded-lg border border-border-subtle bg-surface-raised px-3 py-3">
-          <p className="text-caption text-muted">Watching (this browser)</p>
-          <p className="text-title-3 text-primary">{active.length}</p>
+        <div className="rounded-lg border border-border bg-secondary px-3 py-3">
+          <p className="text-caption text-muted-foreground">Watching (this browser)</p>
+          <p className="text-h5 text-foreground">{active.length}</p>
         </div>
       </section>
 
       {arq?.in_progress && arq.in_progress.length > 0 ? (
-        <section className="rounded-lg border border-border-subtle bg-surface px-3 py-3">
-          <h2 className="text-title-3 text-secondary">Worker in progress</h2>
-          <ul className="mt-2 space-y-1 font-mono text-caption text-muted">
+        <section className="rounded-lg border border-border bg-card px-3 py-3">
+          <h2 className="text-h5 text-muted-foreground">Worker in progress</h2>
+          <ul className="mt-2 space-y-1 font-mono text-caption text-muted-foreground">
             {arq.in_progress.map((id) => (
               <li key={id}>{id}</li>
             ))}
@@ -147,30 +147,30 @@ export function JobsPageClient({ workspaceId }: { workspaceId: string }) {
         </section>
       ) : null}
 
-      <section className="rounded-lg border border-border-subtle bg-surface">
-        <h2 className="border-b border-border-subtle px-3 py-2 text-title-3 text-secondary">
+      <section className="rounded-lg border border-border bg-card">
+        <h2 className="border-b border-border px-3 py-2 text-h5 text-muted-foreground">
           Pipeline jobs (Redis)
         </h2>
         {pipelineJobs.length === 0 ? (
-          <p className="px-3 py-4 text-caption text-muted">No recent pipeline job hashes for this workspace.</p>
+          <p className="px-3 py-4 text-caption text-muted-foreground">No recent pipeline job hashes for this workspace.</p>
         ) : (
           <ul className="divide-y divide-border-subtle">
             {pipelineJobs.map((j) => (
               <li key={j.job_id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-caption">
                 <span className={cn("font-medium", statusClass(j.status))}>{j.status || "unknown"}</span>
-                <span className="font-mono text-primary">{j.job_id.slice(0, 8)}…</span>
-                <span className="text-muted">{progressLabel(j)}</span>
+                <span className="font-mono text-foreground">{j.job_id.slice(0, 8)}…</span>
+                <span className="text-muted-foreground">{progressLabel(j)}</span>
                 {j.document_id ? (
                   <Link
                     href={`/documents/${j.document_id}`}
-                    className="text-secondary underline hover:text-primary"
+                    className="text-muted-foreground underline hover:text-foreground"
                   >
                     document
                   </Link>
                 ) : null}
                 <button
                   type="button"
-                  className="ml-auto rounded border border-border-subtle px-2 py-0.5 hover:bg-surface-raised"
+                  className="ml-auto rounded border border-border px-2 py-0.5 hover:bg-secondary"
                   onClick={() => {
                     registerActiveJob(
                       j.job_id,
@@ -193,35 +193,35 @@ export function JobsPageClient({ workspaceId }: { workspaceId: string }) {
         )}
       </section>
 
-      <section className="rounded-lg border border-border-subtle bg-surface">
-        <h2 className="border-b border-border-subtle px-3 py-2 text-title-3 text-secondary">
+      <section className="rounded-lg border border-border bg-card">
+        <h2 className="border-b border-border px-3 py-2 text-h5 text-muted-foreground">
           Dream jobs (database)
         </h2>
         {dreamJobs.length === 0 ? (
-          <p className="px-3 py-4 text-caption text-muted">No dream jobs yet — use Dream on an agent.</p>
+          <p className="px-3 py-4 text-caption text-muted-foreground">No dream jobs yet — use Dream on an agent.</p>
         ) : (
           <ul className="divide-y divide-border-subtle">
             {dreamJobs.map((j) => (
               <li key={j.id} className="px-3 py-2 text-caption">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={cn("font-medium", statusClass(j.status))}>{j.status}</span>
-                  <span className="font-mono text-primary">{j.id.slice(0, 8)}…</span>
-                  <span className="text-muted">agent {j.agent_id.slice(0, 8)}…</span>
+                  <span className="font-mono text-foreground">{j.id.slice(0, 8)}…</span>
+                  <span className="text-muted-foreground">agent {j.agent_id.slice(0, 8)}…</span>
                   {j.stats ? (
-                    <span className="text-muted">
+                    <span className="text-muted-foreground">
                       links {String(j.stats.links_added ?? 0)} · embeddings{" "}
                       {String(j.stats.embeddings_refreshed ?? 0)}
                     </span>
                   ) : null}
                   <Link
                     href={`/agents/${j.agent_id}`}
-                    className="text-secondary underline hover:text-primary"
+                    className="text-muted-foreground underline hover:text-foreground"
                   >
                     agent
                   </Link>
                   <button
                     type="button"
-                    className="ml-auto rounded border border-border-subtle px-2 py-0.5 hover:bg-surface-raised"
+                    className="ml-auto rounded border border-border px-2 py-0.5 hover:bg-secondary"
                     onClick={() => {
                       registerActiveJob(j.id, workspaceId, null, "dreaming");
                       toast({ variant: "success", message: "Subscribed to dream job log" });

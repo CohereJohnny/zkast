@@ -176,7 +176,7 @@ export function EntityTypeahead({
   const listboxId = `entity-typeahead-${workspaceId}`;
 
   return (
-    <div ref={wrapperRef} className="text-caption text-muted">
+    <div ref={wrapperRef} className="text-caption text-muted-foreground">
       <label className="block">
         {label}
         {selectedIds.length > 0 ? (
@@ -189,19 +189,19 @@ export function EntityTypeahead({
               return (
                 <li
                   key={id}
-                  className="flex items-center gap-1 rounded-full border border-border-strong bg-surface-raised px-2 py-0.5 text-secondary"
+                  className="flex items-center gap-1 rounded-full border border-input bg-secondary px-2 py-0.5 text-muted-foreground"
                 >
                   <span className="truncate max-w-[12rem]">
                     {meta ? meta.name : id.slice(0, 8)}
                   </span>
                   {meta?.type ? (
-                    <span className="text-[10px] text-muted">· {meta.type}</span>
+                    <span className="text-[10px] text-muted-foreground">· {meta.type}</span>
                   ) : null}
                   <button
                     type="button"
                     aria-label={`Remove ${meta?.name ?? id}`}
                     onClick={() => removeChip(id)}
-                    className="cursor-pointer rounded p-0.5 text-muted hover:bg-surface hover:text-secondary"
+                    className="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-card hover:text-muted-foreground"
                   >
                     <svg
                       aria-hidden="true"
@@ -256,18 +256,18 @@ export function EntityTypeahead({
             aria-controls={listboxId}
             aria-expanded={open}
             aria-autocomplete="list"
-            className="w-full cursor-text rounded border border-border-strong bg-surface px-2 py-1 text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+            className="w-full cursor-text rounded border border-input bg-card px-2 py-1 text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           {open && (busy || hits.length > 0 || query.trim()) ? (
             <ul
               role="listbox"
               id={listboxId}
-              className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-border-strong bg-surface-overlay shadow-modal backdrop-blur"
+              className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-input bg-popover/90 shadow-lg backdrop-blur"
             >
               {busy ? (
-                <li className="px-2 py-1.5 text-muted">Searching…</li>
+                <li className="px-2 py-1.5 text-muted-foreground">Searching…</li>
               ) : hits.length === 0 ? (
-                <li className="px-2 py-1.5 text-muted">No matches.</li>
+                <li className="px-2 py-1.5 text-muted-foreground">No matches.</li>
               ) : (
                 hits.map((h, idx) => (
                   <li
@@ -279,15 +279,15 @@ export function EntityTypeahead({
                       addChip(h);
                     }}
                     onMouseEnter={() => setActiveIdx(idx)}
-                    className={`flex cursor-pointer items-center justify-between px-2 py-1.5 text-secondary ${
-                      idx === activeIdx ? "bg-surface-raised" : ""
-                    } hover:bg-surface-raised`}
+                    className={`flex cursor-pointer items-center justify-between px-2 py-1.5 text-muted-foreground ${
+                      idx === activeIdx ? "bg-secondary" : ""
+                    } hover:bg-secondary`}
                   >
                     <span className="block flex-1 truncate">
                       <span>{h.name}</span>
-                      <span className="ml-2 text-[10px] text-muted">{h.type}</span>
+                      <span className="ml-2 text-[10px] text-muted-foreground">{h.type}</span>
                     </span>
-                    <span className="ml-2 text-[10px] text-muted">
+                    <span className="ml-2 text-[10px] text-muted-foreground">
                       deg {h.degree}
                     </span>
                   </li>

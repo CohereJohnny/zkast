@@ -160,12 +160,12 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-title-2 text-primary">Agents</h1>
+        <h1 className="text-h4 text-foreground">Agents</h1>
         <button
           type="button"
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border border-border-subtle px-3 py-1.5 text-body text-secondary",
-            "hover:bg-surface-raised hover:text-primary disabled:opacity-50",
+            "inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-p text-muted-foreground",
+            "hover:bg-secondary hover:text-foreground disabled:opacity-50",
           )}
           onClick={() => void syncFromNorth()}
           disabled={busy === "sync"}
@@ -174,7 +174,7 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
           Sync from North
         </button>
       </div>
-      <p className="max-w-prose text-body text-muted">
+      <p className="max-w-prose text-p text-muted-foreground">
         Register North agents from your configured instance and import conversations into the same document and
         ingestion pipeline as PDFs. Each import is scoped to the selected agent.
       </p>
@@ -184,7 +184,7 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
             Filter agents
           </label>
           <Search
-            className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+            className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
             strokeWidth={1.5}
             aria-hidden
           />
@@ -196,14 +196,14 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
             placeholder="Filter agents by name or id…"
             autoComplete="off"
             spellCheck={false}
-            className="w-full rounded-md border border-border-strong bg-surface py-1.5 pl-8 pr-8 text-body text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+            className="w-full rounded-md border border-input bg-card py-1.5 pl-8 pr-8 text-p text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           {filter ? (
             <button
               type="button"
               onClick={() => setFilter("")}
               aria-label="Clear filter"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted hover:bg-surface-raised hover:text-primary"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
             </button>
@@ -211,22 +211,22 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
         </div>
       ) : null}
       {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-p text-destructive">
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p className="rounded-md border border-border-subtle bg-surface-raised px-3 py-2 text-body text-secondary">
+        <p className="rounded-md border border-border bg-secondary px-3 py-2 text-p text-muted-foreground">
           {notice}
         </p>
       ) : null}
       {loading ? (
-        <p className="text-caption text-muted" role="status">
+        <p className="text-caption text-muted-foreground" role="status">
           Loading agents…
         </p>
       ) : null}
       {agents.length === 0 && !error && !loading ? (
-        <div className="max-w-prose space-y-2 text-caption text-muted">
+        <div className="max-w-prose space-y-2 text-caption text-muted-foreground">
           <p>
             No agents are registered for this workspace in the <strong>pipeline database</strong> yet. The list
             above is loaded from Postgres via the pipeline (not from North directly). Use{" "}
@@ -241,9 +241,9 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
           pipelineWorkspaceEcho.trim() !== "" &&
           pipelineWorkspaceEcho.trim() !== workspaceId.trim() ? (
             <p>
-              Workspace mismatch: page is <code className="text-secondary">{workspaceId}</code> but the pipeline
-              echoed <code className="text-secondary">{pipelineWorkspaceEcho}</code>. Align{" "}
-              <code className="text-secondary">DATABASE_URL</code> / default workspace between web and pipeline.
+              Workspace mismatch: page is <code className="text-muted-foreground">{workspaceId}</code> but the pipeline
+              echoed <code className="text-muted-foreground">{pipelineWorkspaceEcho}</code>. Align{" "}
+              <code className="text-muted-foreground">DATABASE_URL</code> / default workspace between web and pipeline.
             </p>
           ) : null}
           <p>
@@ -253,19 +253,19 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
         </div>
       ) : null}
       {agents.length > 0 && filteredAgents.length === 0 ? (
-        <p className="text-caption text-muted" role="status">
+        <p className="text-caption text-muted-foreground" role="status">
           No agents match &ldquo;{filter}&rdquo;. Clear the filter to see all{" "}
           {agents.length} agent(s).
         </p>
       ) : null}
-      <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface">
+      <ul className="divide-y divide-border-subtle rounded-lg border border-border bg-card">
         {filteredAgents.map((a) => (
           <li key={a.id} className="flex items-center justify-between gap-3 px-3 py-3">
             <div className="flex min-w-0 items-center gap-2">
-              <Bot className="h-5 w-5 shrink-0 text-muted" strokeWidth={1.5} aria-hidden />
+              <Bot className="h-5 w-5 shrink-0 text-muted-foreground" strokeWidth={1.5} aria-hidden />
               <div className="min-w-0">
-                <p className="truncate text-body text-primary">{a.display_name || a.external_agent_id}</p>
-                <p className="truncate text-caption text-muted">
+                <p className="truncate text-p text-foreground">{a.display_name || a.external_agent_id}</p>
+                <p className="truncate text-caption text-muted-foreground">
                   {a.provider} · {a.external_agent_id}
                 </p>
               </div>
@@ -273,31 +273,31 @@ export function AgentsPanel({ workspaceId }: { workspaceId: string }) {
             <div className="flex shrink-0 flex-wrap items-center gap-2">
               <Link
                 href={`/agents/${a.id}`}
-                className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+                className="rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
                 Open
               </Link>
               <Link
                 href={`/notes?agentId=${encodeURIComponent(a.id)}`}
-                className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+                className="rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
                 Notes
               </Link>
               <Link
                 href={`/graph?agent_id=${encodeURIComponent(a.id)}`}
-                className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+                className="rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
                 Graph
               </Link>
               <Link
                 href={`/chat?agent_id=${encodeURIComponent(a.id)}`}
-                className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+                className="rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
                 Chat
               </Link>
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary"
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground"
                 onClick={async () => {
                   setBusy(`dream:${a.id}`);
                   setError(null);

@@ -350,16 +350,16 @@ function GraphLegend({ data }: { data: GraphPayload }) {
   return (
     <div
       aria-label={mode === "types" ? "Entity type legend" : "Cluster legend"}
-      className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[18rem] rounded-md border border-border-subtle bg-surface-overlay px-2.5 py-2 backdrop-blur"
+      className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[18rem] rounded-md border border-border bg-popover/90 px-2.5 py-2 backdrop-blur"
     >
-      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {mode === "types" ? "Entity types" : "Clusters · top node shown"}
       </p>
       <ul className="flex flex-col gap-1">
         {entries.map((e) => (
           <li
             key={e.key}
-            className="flex items-center gap-2 text-[11px] text-secondary"
+            className="flex items-center gap-2 text-[11px] text-muted-foreground"
           >
             <span
               aria-hidden="true"
@@ -367,7 +367,7 @@ function GraphLegend({ data }: { data: GraphPayload }) {
               style={{ backgroundColor: e.color }}
             />
             <span className="truncate">{e.label}</span>
-            <span className="ml-auto text-muted">{e.count}</span>
+            <span className="ml-auto text-muted-foreground">{e.count}</span>
           </li>
         ))}
       </ul>
@@ -382,7 +382,7 @@ function ZoomControl({ icon, label, onClick }: { icon: string; label: string; on
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded border border-border-strong bg-surface-overlay text-secondary backdrop-blur transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded border border-input bg-popover/90 text-muted-foreground backdrop-blur transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <svg
         aria-hidden="true"
@@ -1001,10 +1001,10 @@ export function GraphCanvas({
     return <p className="text-caption text-red-300">{error}</p>;
   }
   if (!data) {
-    return <p className="text-caption text-muted">Loading graph…</p>;
+    return <p className="text-caption text-muted-foreground">Loading graph…</p>;
   }
   if (data.nodes.length === 0) {
-    return <p className="text-caption text-muted">No entities in this workspace yet.</p>;
+    return <p className="text-caption text-muted-foreground">No entities in this workspace yet.</p>;
   }
 
   return (
@@ -1016,7 +1016,7 @@ export function GraphCanvas({
       ) : null}
       <div
         ref={canvasFrameRef}
-        className="relative min-h-[420px] flex-1 overflow-hidden rounded-md border border-border-subtle bg-canvas"
+        className="relative min-h-[420px] flex-1 overflow-hidden rounded-md border border-border bg-background"
       >
         {canvasSize ? (
           <SigmaContainer
@@ -1062,7 +1062,7 @@ export function GraphCanvas({
             <ZoomControls />
           </SigmaContainer>
         ) : (
-          <div className="flex h-full min-h-[420px] items-center justify-center text-caption text-muted">
+          <div className="flex h-full min-h-[420px] items-center justify-center text-caption text-muted-foreground">
             Preparing graph canvas…
           </div>
         )}

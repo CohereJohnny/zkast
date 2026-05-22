@@ -138,30 +138,30 @@ export function GraphEdgePopover({
   };
 
   return (
-    <div className="mt-4 space-y-4 border-t border-border-subtle pt-3 text-caption">
-      <p className="font-medium text-secondary">Relationships</p>
+    <div className="mt-4 space-y-4 border-t border-border pt-3 text-caption">
+      <p className="font-medium text-muted-foreground">Relationships</p>
       {err ? <p className="text-red-300">{err}</p> : null}
 
       <div>
-        <p className="text-muted">Incident edges</p>
+        <p className="text-muted-foreground">Incident edges</p>
         {edges.length === 0 ? (
-          <p className="mt-1 text-muted">None</p>
+          <p className="mt-1 text-muted-foreground">None</p>
         ) : (
           <ul className="mt-1 max-h-40 space-y-2 overflow-y-auto">
             {edges.map((e) => (
-              <li key={e.id} className="rounded border border-border-subtle p-2">
+              <li key={e.id} className="rounded border border-border p-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] text-muted">{e.id.slice(0, 8)}…</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">{e.id.slice(0, 8)}…</span>
                   {e.valid_to ? <span className="text-amber-200/90">ended</span> : null}
                 </div>
-                <p className="text-secondary">
+                <p className="text-muted-foreground">
                   → <span className="font-mono">{otherEndpoint(e, entityId).slice(0, 8)}…</span> · {e.type}
                 </p>
-                {e.fact ? <p className="text-muted">{e.fact}</p> : null}
+                {e.fact ? <p className="text-muted-foreground">{e.fact}</p> : null}
                 <div className="mt-1 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className="text-accent-primary underline"
+                    className="text-primary underline"
                     onClick={() => startEdit(e)}
                     disabled={Boolean(e.valid_to)}
                   >
@@ -169,7 +169,7 @@ export function GraphEdgePopover({
                   </button>
                   <button
                     type="button"
-                    className="text-muted underline"
+                    className="text-muted-foreground underline"
                     onClick={() => void endEdge(e.id)}
                     disabled={Boolean(e.valid_to)}
                   >
@@ -177,28 +177,28 @@ export function GraphEdgePopover({
                   </button>
                 </div>
                 {editId === e.id ? (
-                  <div className="mt-2 space-y-2 border-t border-border-subtle pt-2">
-                    <label className="block text-muted">
+                  <div className="mt-2 space-y-2 border-t border-border pt-2">
+                    <label className="block text-muted-foreground">
                       Type
                       <input
-                        className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1"
+                        className="mt-1 w-full rounded border border-input bg-background px-2 py-1"
                         value={editType}
                         onChange={(ev) => setEditType(ev.target.value)}
                       />
                     </label>
-                    <label className="block text-muted">
+                    <label className="block text-muted-foreground">
                       Fact
                       <input
-                        className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1"
+                        className="mt-1 w-full rounded border border-input bg-background px-2 py-1"
                         value={editFact}
                         onChange={(ev) => setEditFact(ev.target.value)}
                       />
                     </label>
-                    <label className="block text-muted">
+                    <label className="block text-muted-foreground">
                       Valid to (local, optional)
                       <input
                         type="datetime-local"
-                        className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1"
+                        className="mt-1 w-full rounded border border-input bg-background px-2 py-1"
                         value={editValidTo}
                         onChange={(ev) => setEditValidTo(ev.target.value)}
                       />
@@ -207,12 +207,12 @@ export function GraphEdgePopover({
                       <button
                         type="button"
                         disabled={editBusy}
-                        className="rounded bg-accent-primary px-2 py-1 text-canvas disabled:opacity-50"
+                        className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50"
                         onClick={() => void saveEdit()}
                       >
                         {editBusy ? "…" : "Save"}
                       </button>
-                      <button type="button" className="rounded border border-border-strong px-2 py-1" onClick={() => setEditId(null)}>
+                      <button type="button" className="rounded border border-input px-2 py-1" onClick={() => setEditId(null)}>
                         Cancel
                       </button>
                     </div>
@@ -225,28 +225,28 @@ export function GraphEdgePopover({
       </div>
 
       <div>
-        <p className="font-medium text-secondary">Add edge (manual)</p>
-        <label className="mt-1 block text-muted">
+        <p className="font-medium text-muted-foreground">Add edge (manual)</p>
+        <label className="mt-1 block text-muted-foreground">
           Target entity UUID
           <input
-            className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1 font-mono"
+            className="mt-1 w-full rounded border border-input bg-background px-2 py-1 font-mono"
             value={edgeTarget}
             onChange={(e) => setEdgeTarget(e.target.value)}
             placeholder="Target entity id"
           />
         </label>
-        <label className="mt-1 block text-muted">
+        <label className="mt-1 block text-muted-foreground">
           Relationship type
           <input
-            className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1"
+            className="mt-1 w-full rounded border border-input bg-background px-2 py-1"
             value={edgeType}
             onChange={(e) => setEdgeType(e.target.value)}
           />
         </label>
-        <label className="mt-1 block text-muted">
+        <label className="mt-1 block text-muted-foreground">
           Fact (optional)
           <input
-            className="mt-1 w-full rounded border border-border-strong bg-canvas px-2 py-1"
+            className="mt-1 w-full rounded border border-input bg-background px-2 py-1"
             value={edgeFact}
             onChange={(e) => setEdgeFact(e.target.value)}
           />
@@ -254,7 +254,7 @@ export function GraphEdgePopover({
         <button
           type="button"
           disabled={createBusy || !edgeTarget.trim()}
-          className="mt-2 rounded bg-accent-primary px-2 py-1 font-medium text-canvas disabled:opacity-50"
+          className="mt-2 rounded bg-primary px-2 py-1 font-medium text-primary-foreground disabled:opacity-50"
           onClick={() => void createEdge()}
         >
           {createBusy ? "…" : "Create edge"}

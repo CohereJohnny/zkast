@@ -22,13 +22,13 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div
           role="alert"
-          className="rounded-lg border border-border-strong bg-surface p-6 text-body text-primary"
+          className="rounded-lg border border-input bg-card p-6 text-p text-foreground"
         >
-          <p className="font-semibold text-title-3">Something went wrong</p>
-          <p className="mt-2 text-secondary">{this.state.error.message}</p>
+          <p className="font-semibold text-h5">Something went wrong</p>
+          <p className="mt-2 text-muted-foreground">{this.state.error.message}</p>
           <button
             type="button"
-            className="mt-4 cursor-pointer rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-canvas transition hover:bg-accent-primary-hover"
+            className="mt-4 cursor-pointer rounded-md bg-primary px-4 py-2 text-p font-medium text-primary-foreground transition hover:bg-primary/90"
             onClick={() => this.setState({ error: null })}
           >
             Try again

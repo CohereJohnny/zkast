@@ -111,12 +111,12 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="flex min-h-[520px] flex-col gap-4 p-2">
       <header>
-        <h1 className="text-title-2 text-secondary">Notes</h1>
-        <p className="mt-1 max-w-2xl text-caption text-muted">
+        <h1 className="text-h4 text-muted-foreground">Notes</h1>
+        <p className="mt-1 max-w-2xl text-caption text-muted-foreground">
           Atomic notes from ingestion and manual entries. Edits autosave; merge and split preserve provenance via the
           pipeline.
         </p>
-        <p className="mt-1 text-caption text-muted">{total} notes</p>
+        <p className="mt-1 text-caption text-muted-foreground">{total} notes</p>
       </header>
 
       <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(240px,320px)_1fr]">
@@ -138,7 +138,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
           workspaceId={workspaceId}
         />
 
-        <div className="min-h-[320px] rounded-lg border border-border-subtle bg-surface/30 p-4">
+        <div className="min-h-[320px] rounded-lg border border-border bg-card/30 p-4">
           {selectedId ? (
             <NoteDetail
               workspaceId={workspaceId}
@@ -167,7 +167,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
               }}
             />
           ) : (
-            <p className="text-caption text-muted">Select a note or create a new one.</p>
+            <p className="text-caption text-muted-foreground">Select a note or create a new one.</p>
           )}
         </div>
       </div>

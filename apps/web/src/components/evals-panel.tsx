@@ -112,7 +112,7 @@ function statusChip(status: string) {
         ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
         : s === "failed"
           ? "bg-red-500/15 text-red-700 dark:text-red-300"
-          : "bg-surface-raised text-muted";
+          : "bg-secondary text-muted-foreground";
   return (
     <span className={cn("rounded px-1.5 py-0.5 text-caption font-medium", cls)}>
       {status}
@@ -327,25 +327,25 @@ export function EvalsPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <header>
-        <h1 className="flex items-center gap-2 text-title-2 text-primary">
+        <h1 className="flex items-center gap-2 text-h4 text-foreground">
           <BarChart3 className="h-5 w-5" strokeWidth={1.5} aria-hidden />
           Memory evals
         </h1>
-        <p className="mt-1 max-w-2xl text-body text-secondary">
+        <p className="mt-1 max-w-2xl text-p text-muted-foreground">
           Compare memory systems and retrieval modes on canned datasets. Inspect per-question
           retrieval contexts, answers, and scores.
         </p>
       </header>
 
-      <section className="rounded-lg border border-border-subtle bg-surface p-4">
-        <h2 className="text-title-3 text-primary">Start run</h2>
+      <section className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-h5 text-foreground">Start run</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <label className="flex flex-col gap-1 text-caption text-muted">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Dataset
             <select
               value={datasetName}
               onChange={(e) => setDatasetName(e.target.value)}
-              className="rounded-md border border-border-subtle bg-surface-raised px-2 py-1.5 text-body text-primary"
+              className="rounded-md border border-border bg-secondary px-2 py-1.5 text-p text-foreground"
             >
               {datasets.map((d) => (
                 <option key={d.name} value={d.name}>
@@ -354,14 +354,14 @@ export function EvalsPanel({
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-caption text-muted">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Run mode
             <select
               value={runMode}
               onChange={(e) =>
                 setRunMode(e.target.value as (typeof RUN_MODES)[number]["id"])
               }
-              className="rounded-md border border-border-subtle bg-surface-raised px-2 py-1.5 text-body text-primary"
+              className="rounded-md border border-border bg-secondary px-2 py-1.5 text-p text-foreground"
             >
               {RUN_MODES.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -370,12 +370,12 @@ export function EvalsPanel({
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-caption text-muted">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Top-K cutoffs
             <select
               value={topKPreset}
               onChange={(e) => setTopKPreset(Number(e.target.value))}
-              className="rounded-md border border-border-subtle bg-surface-raised px-2 py-1.5 text-body text-primary"
+              className="rounded-md border border-border bg-secondary px-2 py-1.5 text-p text-foreground"
             >
               {TOP_K_PRESETS.map((p, i) => (
                 <option key={p.label} value={i}>
@@ -395,7 +395,7 @@ export function EvalsPanel({
           </div>
         </div>
         <div className="mt-3">
-          <p className="text-caption text-muted">Memory systems / retrieval modes</p>
+          <p className="text-caption text-muted-foreground">Memory systems / retrieval modes</p>
           <div className="mt-1.5 flex flex-wrap gap-2">
             {MEMORY_MODES.map((m) => (
               <button
@@ -405,8 +405,8 @@ export function EvalsPanel({
                 className={cn(
                   "cursor-pointer rounded-md border px-2 py-1 text-caption transition",
                   selectedModes.includes(m.id)
-                    ? "border-accent-primary bg-accent-primary/10 text-primary"
-                    : "border-border-subtle text-secondary hover:bg-surface-raised",
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "border-border text-muted-foreground hover:bg-secondary",
                 )}
               >
                 {m.label}
@@ -414,14 +414,14 @@ export function EvalsPanel({
             ))}
           </div>
         </div>
-        <label className="mt-3 flex flex-col gap-1 text-caption text-muted">
+        <label className="mt-3 flex flex-col gap-1 text-caption text-muted-foreground">
           Notes (optional)
           <input
             type="text"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="e.g. post-dream baseline"
-            className="rounded-md border border-border-subtle bg-surface-raised px-2 py-1.5 text-body text-primary"
+            className="rounded-md border border-border bg-secondary px-2 py-1.5 text-p text-foreground"
           />
         </label>
         <div className="mt-4 flex gap-2">
@@ -429,7 +429,7 @@ export function EvalsPanel({
             type="button"
             disabled={starting}
             onClick={() => void startRun()}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-body font-medium text-on-accent transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-primary px-3 py-2 text-p font-medium text-on-accent transition hover:opacity-90 disabled:opacity-50"
           >
             <Play className="h-4 w-4" aria-hidden />
             {starting ? "Starting…" : "Start eval run"}
@@ -437,7 +437,7 @@ export function EvalsPanel({
           <button
             type="button"
             onClick={() => void loadRuns()}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border-subtle px-3 py-2 text-body text-secondary transition hover:bg-surface-raised"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-p text-muted-foreground transition hover:bg-secondary"
           >
             <RefreshCw className="h-4 w-4" aria-hidden />
             Refresh
@@ -446,12 +446,12 @@ export function EvalsPanel({
       </section>
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(220px,280px)_1fr]">
-        <aside className="flex min-h-0 flex-col rounded-lg border border-border-subtle bg-surface">
-          <div className="border-b border-border-subtle p-3">
-            <p className="text-title-3 text-primary">Runs</p>
+        <aside className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
+          <div className="border-b border-border p-3">
+            <p className="text-h5 text-foreground">Runs</p>
             <div className="relative mt-2">
               <Search
-                className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted"
+                className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
               />
               <input
@@ -459,13 +459,13 @@ export function EvalsPanel({
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter runs…"
-                className="w-full rounded-md border border-border-subtle bg-surface-raised py-1.5 pl-7 pr-7 text-body text-primary"
+                className="w-full rounded-md border border-border bg-secondary py-1.5 pl-7 pr-7 text-p text-foreground"
               />
               {filter ? (
                 <button
                   type="button"
                   onClick={() => setFilter("")}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted hover:text-primary"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
                   aria-label="Clear filter"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -475,9 +475,9 @@ export function EvalsPanel({
           </div>
           <ul className="min-h-0 flex-1 overflow-y-auto p-2">
             {loadingRuns ? (
-              <li className="px-2 py-3 text-caption text-muted">Loading…</li>
+              <li className="px-2 py-3 text-caption text-muted-foreground">Loading…</li>
             ) : filteredRuns.length === 0 ? (
-              <li className="px-2 py-3 text-caption text-muted">No eval runs yet.</li>
+              <li className="px-2 py-3 text-caption text-muted-foreground">No eval runs yet.</li>
             ) : (
               filteredRuns.map((r) => (
                 <li key={r.id}>
@@ -485,21 +485,21 @@ export function EvalsPanel({
                     type="button"
                     onClick={() => setSelectedRunId(r.id)}
                     className={cn(
-                      "flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2 py-2 text-left transition hover:bg-surface-raised",
-                      selectedRunId === r.id && "bg-surface-raised",
+                      "flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2 py-2 text-left transition hover:bg-secondary",
+                      selectedRunId === r.id && "bg-secondary",
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
-                      <span className="truncate text-body font-medium text-primary">
+                      <span className="truncate text-p font-medium text-foreground">
                         {r.dataset_name}
                       </span>
                       {statusChip(r.status)}
                     </span>
-                    <span className="truncate text-caption text-muted">
+                    <span className="truncate text-caption text-muted-foreground">
                       {(r.retrieval_modes ?? []).join(", ")} · k=
                       {(r.top_k_cutoffs ?? [30]).join(",")}
                     </span>
-                    <span className="text-caption text-muted">
+                    <span className="text-caption text-muted-foreground">
                       {r.created_at ? new Date(r.created_at).toLocaleString() : ""}
                     </span>
                   </button>
@@ -511,16 +511,16 @@ export function EvalsPanel({
 
         <main className="flex min-h-0 flex-col gap-4 overflow-y-auto">
           {!selectedRunId ? (
-            <p className="text-body text-muted">Select a run to view summary and per-question results.</p>
+            <p className="text-p text-muted-foreground">Select a run to view summary and per-question results.</p>
           ) : loadingDetail && !detail ? (
-            <p className="text-body text-muted">Loading run detail…</p>
+            <p className="text-p text-muted-foreground">Loading run detail…</p>
           ) : detail ? (
             <>
-              <section className="rounded-lg border border-border-subtle bg-surface p-4">
+              <section className="rounded-lg border border-border bg-card p-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-title-3 text-primary">{detail.run.dataset_name}</h2>
+                  <h2 className="text-h5 text-foreground">{detail.run.dataset_name}</h2>
                   {statusChip(detail.run.status)}
-                  <span className="text-caption text-muted">
+                  <span className="text-caption text-muted-foreground">
                     Run {detail.run.id.slice(0, 8)}…
                   </span>
                 </div>
@@ -528,7 +528,7 @@ export function EvalsPanel({
                   <div className="mt-4 overflow-x-auto">
                     <table className="w-full min-w-[480px] text-left text-caption">
                       <thead>
-                        <tr className="border-b border-border-subtle text-muted">
+                        <tr className="border-b border-border text-muted-foreground">
                           <th className="py-1 pr-3">Mode</th>
                           <th className="py-1 pr-3">Pattern match</th>
                           <th className="py-1 pr-3">Citation recall</th>
@@ -539,8 +539,8 @@ export function EvalsPanel({
                       </thead>
                       <tbody>
                         {Object.entries(summary.modes).map(([mode, stats]) => (
-                          <tr key={mode} className="border-b border-border-subtle/60">
-                            <td className="py-1.5 pr-3 font-medium text-primary">{mode}</td>
+                          <tr key={mode} className="border-b border-border/60">
+                            <td className="py-1.5 pr-3 font-medium text-foreground">{mode}</td>
                             <td className="py-1.5 pr-3">{pct(stats.pattern_match_rate)}</td>
                             <td className="py-1.5 pr-3">{pct(stats.citation_recall_avg)}</td>
                             <td className="py-1.5 pr-3">{pct(stats.context_recall_avg)}</td>
@@ -552,21 +552,21 @@ export function EvalsPanel({
                     </table>
                   </div>
                 ) : detail.run.status === "running" ? (
-                  <p className="mt-3 text-body text-muted">Run in progress — scores appear when complete.</p>
+                  <p className="mt-3 text-p text-muted-foreground">Run in progress — scores appear when complete.</p>
                 ) : null}
 
                 {summary.abilities && Object.keys(summary.abilities).length > 0 ? (
                   <div className="mt-4">
-                    <h3 className="text-body font-medium text-primary">By ability type</h3>
+                    <h3 className="text-p font-medium text-foreground">By ability type</h3>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {Object.entries(summary.abilities).map(([ability, byMode]) => (
                         <div
                           key={ability}
-                          className="rounded-md border border-border-subtle px-2 py-1.5 text-caption"
+                          className="rounded-md border border-border px-2 py-1.5 text-caption"
                         >
-                          <span className="font-medium text-primary">{ability}</span>
+                          <span className="font-medium text-foreground">{ability}</span>
                           {Object.entries(byMode).map(([mode, st]) => (
-                            <span key={mode} className="ml-2 text-muted">
+                            <span key={mode} className="ml-2 text-muted-foreground">
                               {mode}: {pct(st.pattern_match_rate)}
                             </span>
                           ))}
@@ -577,8 +577,8 @@ export function EvalsPanel({
                 ) : null}
               </section>
 
-              <section className="rounded-lg border border-border-subtle bg-surface p-4">
-                <h3 className="text-title-3 text-primary">Questions</h3>
+              <section className="rounded-lg border border-border bg-card p-4">
+                <h3 className="text-h5 text-foreground">Questions</h3>
                 <ul className="mt-2 divide-y divide-border-subtle">
                   {detail.questions.map((q) => {
                     const qResults = detail.results.filter((r) => r.question_id === q.id);
@@ -595,12 +595,12 @@ export function EvalsPanel({
                             setInspectorMode(first?.retrieval_mode ?? null);
                             setInspectorK(first?.top_k_cutoff ?? null);
                           }}
-                          className="flex w-full cursor-pointer items-start gap-2 text-left transition hover:text-primary"
+                          className="flex w-full cursor-pointer items-start gap-2 text-left transition hover:text-foreground"
                         >
-                          <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted" aria-hidden />
+                          <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                           <div className="min-w-0 flex-1">
-                            <p className="text-body text-primary">{q.question_text}</p>
-                            <p className="mt-0.5 text-caption text-muted">
+                            <p className="text-p text-foreground">{q.question_text}</p>
+                            <p className="mt-0.5 text-caption text-muted-foreground">
                               {q.ability_type ?? q.category} · {q.question_key} ·{" "}
                               {qResults.length} results
                               {best ? " · has match" : ""}
@@ -614,9 +614,9 @@ export function EvalsPanel({
               </section>
 
               {inspectorQuestion && inspectorResult ? (
-                <section className="rounded-lg border border-border-subtle bg-surface p-4">
-                  <h3 className="text-title-3 text-primary">Question inspector</h3>
-                  <p className="mt-2 text-body text-secondary">{inspectorQuestion.question_text}</p>
+                <section className="rounded-lg border border-border bg-card p-4">
+                  <h3 className="text-h5 text-foreground">Question inspector</h3>
+                  <p className="mt-2 text-p text-muted-foreground">{inspectorQuestion.question_text}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {detail.results
                       .filter((r) => r.question_id === inspectorQid)
@@ -631,8 +631,8 @@ export function EvalsPanel({
                           className={cn(
                             "cursor-pointer rounded border px-2 py-1 text-caption transition",
                             inspectorResult.id === r.id
-                              ? "border-accent-primary bg-accent-primary/10 text-primary"
-                              : "border-border-subtle text-muted hover:bg-surface-raised",
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-border text-muted-foreground hover:bg-secondary",
                           )}
                         >
                           {r.memory_system ?? r.retrieval_mode} k={r.top_k_cutoff}
@@ -641,11 +641,11 @@ export function EvalsPanel({
                   </div>
                   <div className="mt-4 grid gap-4 lg:grid-cols-2">
                     <div>
-                      <h4 className="text-body font-medium text-primary">Answer</h4>
-                      <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-surface-raised p-2 text-caption text-secondary">
+                      <h4 className="text-p font-medium text-foreground">Answer</h4>
+                      <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-secondary p-2 text-caption text-muted-foreground">
                         {inspectorResult.answer_text}
                       </pre>
-                      <p className="mt-2 text-caption text-muted">
+                      <p className="mt-2 text-caption text-muted-foreground">
                         Pattern:{" "}
                         {(inspectorResult.scores as { pattern_match?: boolean }).pattern_match
                           ? "match"
@@ -664,24 +664,24 @@ export function EvalsPanel({
                       </p>
                     </div>
                     <div>
-                      <h4 className="text-body font-medium text-primary">Retrieved contexts</h4>
+                      <h4 className="text-p font-medium text-foreground">Retrieved contexts</h4>
                       <ul className="mt-1 max-h-64 space-y-2 overflow-y-auto">
                         {(inspectorResult.retrieval_items ?? []).length === 0 ? (
-                          <li className="text-caption text-muted">No retrieval snapshot stored.</li>
+                          <li className="text-caption text-muted-foreground">No retrieval snapshot stored.</li>
                         ) : (
                           (inspectorResult.retrieval_items ?? []).map((item, i) => (
                             <li
                               key={`${item.source_id}-${i}`}
-                              className="rounded-md border border-border-subtle bg-surface-raised p-2 text-caption"
+                              className="rounded-md border border-border bg-secondary p-2 text-caption"
                             >
-                              <span className="font-medium text-primary">
+                              <span className="font-medium text-foreground">
                                 {item.source_kind}:{item.source_id}
                               </span>
                               {item.score != null ? (
-                                <span className="ml-2 text-muted">score={item.score}</span>
+                                <span className="ml-2 text-muted-foreground">score={item.score}</span>
                               ) : null}
                               {item.excerpt ? (
-                                <p className="mt-1 text-secondary">{item.excerpt}</p>
+                                <p className="mt-1 text-muted-foreground">{item.excerpt}</p>
                               ) : null}
                             </li>
                           ))

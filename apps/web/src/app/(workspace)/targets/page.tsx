@@ -9,7 +9,7 @@ export default function TargetsPage() {
         <button
           type="button"
           disabled
-          className="cursor-not-allowed rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-canvas opacity-45"
+          className="cursor-not-allowed rounded-md bg-primary px-4 py-2 text-p font-medium text-primary-foreground opacity-45"
         >
           Add target
         </button>

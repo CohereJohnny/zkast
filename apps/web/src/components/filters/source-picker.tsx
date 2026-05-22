@@ -137,7 +137,7 @@ export function SourcePicker({
   const listboxId = `source-listbox-${workspaceId}`;
 
   return (
-    <div ref={wrapperRef} className="text-caption text-muted">
+    <div ref={wrapperRef} className="text-caption text-muted-foreground">
       <label className="block">
         Sources
         <div className="relative mt-1">
@@ -157,14 +157,14 @@ export function SourcePicker({
             aria-controls={listboxId}
             aria-expanded={open}
             aria-autocomplete="list"
-            className="w-full cursor-pointer rounded border border-border-strong bg-surface px-2 py-1 text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50"
+            className="w-full cursor-pointer rounded border border-input bg-card px-2 py-1 text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           />
           {selected && !open ? (
             <button
               type="button"
               aria-label="Clear source selection"
               onClick={() => choose(null)}
-              className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted transition-colors duration-150 hover:bg-surface-raised hover:text-secondary"
+              className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-muted-foreground"
             >
               <svg
                 aria-hidden="true"
@@ -184,7 +184,7 @@ export function SourcePicker({
             <ul
               role="listbox"
               id={listboxId}
-              className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-border-strong bg-surface-overlay shadow-modal backdrop-blur"
+              className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-input bg-popover/90 shadow-lg backdrop-blur"
             >
               {filtered.map((d, idx) => (
                 <li
@@ -196,15 +196,15 @@ export function SourcePicker({
                     choose(d);
                   }}
                   onMouseEnter={() => setActiveIdx(idx)}
-                  className={`cursor-pointer px-2 py-1.5 text-secondary transition-colors duration-150 ${
-                    idx === activeIdx ? "bg-surface-raised" : ""
-                  } hover:bg-surface-raised`}
+                  className={`cursor-pointer px-2 py-1.5 text-muted-foreground transition-colors duration-150 ${
+                    idx === activeIdx ? "bg-secondary" : ""
+                  } hover:bg-secondary`}
                 >
                   <span className="flex items-center gap-1.5">
                     <span
                       className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
                         d.source_kind === "pdf"
-                          ? "bg-primary/15 text-primary"
+                          ? "bg-primary/15 text-foreground"
                           : "bg-amber-500/15 text-amber-100"
                       }`}
                     >
@@ -212,7 +212,7 @@ export function SourcePicker({
                     </span>
                     <span className="block min-w-0 flex-1 truncate">{rowPrimaryLabel(d)}</span>
                   </span>
-                  <span className="mt-0.5 block truncate pl-[3.25rem] text-[10px] text-muted">
+                  <span className="mt-0.5 block truncate pl-[3.25rem] text-[10px] text-muted-foreground">
                     {rowSecondaryLine(d)}
                   </span>
                 </li>
@@ -220,7 +220,7 @@ export function SourcePicker({
             </ul>
           ) : null}
           {open && filtered.length === 0 ? (
-            <p className="absolute z-20 mt-1 w-full rounded-md border border-border-strong bg-surface-overlay px-2 py-1.5 text-muted">
+            <p className="absolute z-20 mt-1 w-full rounded-md border border-input bg-popover/90 px-2 py-1.5 text-muted-foreground">
               No matching sources.
             </p>
           ) : null}

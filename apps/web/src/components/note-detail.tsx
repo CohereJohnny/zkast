@@ -276,7 +276,7 @@ export function NoteDetail({
   }
 
   if (!note) {
-    return <p className="text-caption text-muted">Loading note…</p>;
+    return <p className="text-caption text-muted-foreground">Loading note…</p>;
   }
 
   return (
@@ -298,28 +298,28 @@ export function NoteDetail({
             id="note-title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="w-full border-b border-transparent bg-transparent text-title-3 text-secondary outline-none focus:border-accent-primary"
+            className="w-full border-b border-transparent bg-transparent text-h5 text-muted-foreground outline-none focus:border-primary"
           />
-          <p className="mt-1 text-caption text-muted">
+          <p className="mt-1 text-caption text-muted-foreground">
             <span className="capitalize">{note.origin}</span>
             {note.origin === "manual" ? (
               <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-100">Manual</span>
             ) : null}
             · Updated {new Date(note.updated_at).toLocaleString()}
             {note.agent_id ? (
-              <span className="ml-2 font-mono text-muted">· agent {note.agent_id}</span>
+              <span className="ml-2 font-mono text-muted-foreground">· agent {note.agent_id}</span>
             ) : null}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-caption text-muted" aria-live="polite">
+          <span className="text-caption text-muted-foreground" aria-live="polite">
             {saveState === "saving" ? "Saving…" : null}
             {saveState === "saved" ? "Saved" : null}
             {saveState === "error" ? "Save error" : null}
           </span>
           <button
             type="button"
-            className="rounded-md border border-border-strong px-2 py-1 text-caption text-secondary"
+            className="rounded-md border border-input px-2 py-1 text-caption text-muted-foreground"
             onClick={onOpenMerge}
           >
             Merge…
@@ -339,41 +339,41 @@ export function NoteDetail({
         note.dreaming_touched_at) ? (
         <section
           aria-label="Agent memory"
-          className="rounded-md border border-border-subtle bg-surface/40 p-3 text-caption text-secondary"
+          className="rounded-md border border-border bg-card/40 p-3 text-caption text-muted-foreground"
         >
-          <p className="font-medium text-primary">A-MEM / dreaming</p>
+          <p className="font-medium text-foreground">A-MEM / dreaming</p>
           {note.memory_context ? (
             <p className="mt-2">
-              <span className="text-muted">Context: </span>
+              <span className="text-muted-foreground">Context: </span>
               {note.memory_context}
             </p>
           ) : null}
           {note.memory_keywords && note.memory_keywords.length > 0 ? (
             <p className="mt-2">
-              <span className="text-muted">Keywords: </span>
+              <span className="text-muted-foreground">Keywords: </span>
               {note.memory_keywords.join(", ")}
             </p>
           ) : null}
           {note.dreaming_touched_at ? (
-            <p className="mt-2 text-muted">
+            <p className="mt-2 text-muted-foreground">
               Dreaming touched {new Date(note.dreaming_touched_at).toLocaleString()}
             </p>
           ) : null}
         </section>
       ) : null}
 
-      <label className="block text-caption text-muted">
+      <label className="block text-caption text-muted-foreground">
         Tags (comma-separated)
         <input
           value={tagsRaw}
           onChange={(e) => setTagsRaw(e.target.value)}
-          className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 text-body text-secondary"
+          className="mt-1 w-full rounded-md border border-input bg-card px-2 py-1 text-p text-muted-foreground"
         />
       </label>
 
       <NoteSplitControl selection={selection} busy={splitBusy} onSplit={() => void doSplit()} />
 
-      <label className="block text-caption text-muted">
+      <label className="block text-caption text-muted-foreground">
         Body
         <textarea
           ref={taRef}
@@ -383,12 +383,12 @@ export function NoteDetail({
           onKeyUp={captureSelection}
           onMouseUp={captureSelection}
           rows={16}
-          className="mt-1 w-full max-w-[68ch] rounded-md border border-border-strong bg-surface px-3 py-2 font-serif text-body leading-relaxed text-secondary"
+          className="mt-1 w-full max-w-[68ch] rounded-md border border-input bg-card px-3 py-2 font-serif text-p leading-relaxed text-muted-foreground"
         />
       </label>
 
-      <section aria-label="Source episodes" className="text-caption text-muted">
-        <p className="font-medium text-secondary">Source episodes</p>
+      <section aria-label="Source episodes" className="text-caption text-muted-foreground">
+        <p className="font-medium text-muted-foreground">Source episodes</p>
         {note.source_episodes?.length ? (
           <ul className="mt-1 list-inside list-disc">
             {note.source_episodes.map((se) => (
@@ -404,18 +404,18 @@ export function NoteDetail({
       </section>
 
       <section aria-label="Links" className="space-y-3">
-        <p className="text-body font-medium text-secondary">Links</p>
-        <div className="flex flex-wrap gap-2 rounded-md border border-border-subtle bg-surface/40 p-2">
+        <p className="text-p font-medium text-muted-foreground">Links</p>
+        <div className="flex flex-wrap gap-2 rounded-md border border-border bg-card/40 p-2">
           <input
             placeholder="Target note uuid"
             value={targetLink}
             onChange={(e) => setTargetLink(e.target.value)}
-            className="min-w-[12rem] flex-1 rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption"
+            className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-2 py-1 font-mono text-caption"
           />
           <select
             value={kindLink}
             onChange={(e) => setKindLink(e.target.value)}
-            className="rounded-md border border-border-strong bg-surface px-2 py-1 text-caption"
+            className="rounded-md border border-input bg-card px-2 py-1 text-caption"
           >
             {LINK_KINDS.map((k) => (
               <option key={k} value={k}>
@@ -428,12 +428,12 @@ export function NoteDetail({
               placeholder="Custom label"
               value={customLabel}
               onChange={(e) => setCustomLabel(e.target.value)}
-              className="rounded-md border border-border-strong bg-surface px-2 py-1 text-caption"
+              className="rounded-md border border-input bg-card px-2 py-1 text-caption"
             />
           ) : null}
           <button
             type="button"
-            className="rounded-md bg-accent-primary px-2 py-1 text-caption font-medium text-canvas"
+            className="rounded-md bg-primary px-2 py-1 text-caption font-medium text-primary-foreground"
             onClick={() => void addLink()}
           >
             Add link
@@ -441,13 +441,13 @@ export function NoteDetail({
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <p className="text-caption font-medium text-muted">Outgoing</p>
+            <p className="text-caption font-medium text-muted-foreground">Outgoing</p>
             <ul className="mt-1 space-y-1">
               {note.links_out.map((l) => (
-                <li key={l.id} className="flex items-center justify-between gap-2 text-caption text-secondary">
+                <li key={l.id} className="flex items-center justify-between gap-2 text-caption text-muted-foreground">
                   <span>
                     → {l.target_note_id}{" "}
-                    <span className="text-muted">
+                    <span className="text-muted-foreground">
                       ({l.kind}
                       {l.custom_label ? `: ${l.custom_label}` : ""}
                       {l.link_reason ? ` · ${l.link_reason}` : ""}
@@ -463,16 +463,16 @@ export function NoteDetail({
                   </button>
                 </li>
               ))}
-              {note.links_out.length === 0 ? <li className="text-muted">None</li> : null}
+              {note.links_out.length === 0 ? <li className="text-muted-foreground">None</li> : null}
             </ul>
           </div>
           <div>
-            <p className="text-caption font-medium text-muted">Incoming</p>
+            <p className="text-caption font-medium text-muted-foreground">Incoming</p>
             <ul className="mt-1 space-y-1">
               {note.links_in.map((l) => (
-                <li key={l.id} className="text-caption text-secondary">
+                <li key={l.id} className="text-caption text-muted-foreground">
                   ← {l.source_note_id}{" "}
-                  <span className="text-muted">
+                  <span className="text-muted-foreground">
                     ({l.kind}
                     {l.custom_label ? `: ${l.custom_label}` : ""}
                     {l.link_reason ? ` · ${l.link_reason}` : ""}
@@ -480,7 +480,7 @@ export function NoteDetail({
                   </span>
                 </li>
               ))}
-              {note.links_in.length === 0 ? <li className="text-muted">None</li> : null}
+              {note.links_in.length === 0 ? <li className="text-muted-foreground">None</li> : null}
             </ul>
           </div>
         </div>

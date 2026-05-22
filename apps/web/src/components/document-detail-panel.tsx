@@ -84,7 +84,7 @@ function ingestionRunStatusClass(status: string): string {
     case "cancelled":
       return "text-amber-200/90";
     default:
-      return "text-secondary";
+      return "text-muted-foreground";
   }
 }
 
@@ -292,22 +292,22 @@ export function DocumentDetailPanel({
 
   return (
     <aside
-      className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-border-strong bg-canvas shadow-xl"
+      className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-input bg-background shadow-xl"
       aria-label="Document details"
     >
-      <div className="flex items-start justify-between gap-2 border-b border-border-subtle p-4">
+      <div className="flex items-start justify-between gap-2 border-b border-border p-4">
         <div className="min-w-0">
-          <p className="truncate text-title-3 text-secondary">
+          <p className="truncate text-h5 text-muted-foreground">
             {loading ? "Loading…" : doc?.original_filename ?? "Document"}
           </p>
           {doc ? (
             <>
-              <p className="mt-1 text-caption text-muted">
+              <p className="mt-1 text-caption text-muted-foreground">
                 {doc.page_count != null ? `${doc.page_count} pages · ` : ""}
                 {(doc.byte_size / 1024).toFixed(1)} KB ·{" "}
-                <span className="text-secondary">{doc.status.replace(/_/g, " ")}</span>
+                <span className="text-muted-foreground">{doc.status.replace(/_/g, " ")}</span>
               </p>
-              <p className="mt-1 text-caption text-muted/90">
+              <p className="mt-1 text-caption text-muted-foreground/90">
                 Current pipeline stage for this document. Each ingestion run below is one attempt (newest first).
               </p>
             </>
@@ -315,7 +315,7 @@ export function DocumentDetailPanel({
         </div>
         <button
           type="button"
-          className="shrink-0 rounded-md border border-border-strong px-2 py-1 text-caption text-muted hover:bg-surface"
+          className="shrink-0 rounded-md border border-input px-2 py-1 text-caption text-muted-foreground hover:bg-card"
           onClick={onClose}
         >
           Close
@@ -335,7 +335,7 @@ export function DocumentDetailPanel({
         ) : null}
 
         <section aria-label="Retry ingestion" className="mb-6">
-          <p className="text-body font-medium text-secondary">Retry from stage</p>
+          <p className="text-p font-medium text-muted-foreground">Retry from stage</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {(
               [
@@ -348,7 +348,7 @@ export function DocumentDetailPanel({
                 key={stage}
                 type="button"
                 disabled={retryBusy !== null}
-                className="rounded-md border border-border-strong px-2 py-1 text-caption text-secondary hover:bg-surface disabled:opacity-50"
+                className="rounded-md border border-input px-2 py-1 text-caption text-muted-foreground hover:bg-card disabled:opacity-50"
                 onClick={() => void postRetry(stage)}
               >
                 {retryBusy === stage ? "…" : label}
@@ -360,8 +360,8 @@ export function DocumentDetailPanel({
         {doc ? (
           doc.mime_type === "application/pdf" ? (
             <section aria-label="Re-ingest" className="mb-6">
-              <p className="text-body font-medium text-secondary">Re-ingest (new PDF)</p>
-              <p className="mt-1 text-caption text-muted">
+              <p className="text-p font-medium text-muted-foreground">Re-ingest (new PDF)</p>
+              <p className="mt-1 text-caption text-muted-foreground">
                 Upload replaces this document id in metadata; prior episodes and notes are kept until you delete them.
               </p>
               <input
@@ -373,7 +373,7 @@ export function DocumentDetailPanel({
               />
               <button
                 type="button"
-                className="mt-2 rounded-md bg-accent-primary px-3 py-1.5 text-caption font-medium text-canvas"
+                className="mt-2 rounded-md bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground"
                 onClick={() => reingestRef.current?.click()}
               >
                 Choose replacement PDF
@@ -381,38 +381,38 @@ export function DocumentDetailPanel({
             </section>
           ) : (
             <section aria-label="Re-ingest" className="mb-6">
-              <p className="text-body font-medium text-secondary">Re-ingest</p>
-              <p className="mt-1 text-caption text-muted">
+              <p className="text-p font-medium text-muted-foreground">Re-ingest</p>
+              <p className="mt-1 text-caption text-muted-foreground">
                 North conversation transcripts are JSON artifacts. Use{" "}
-                <span className="text-secondary">Delete</span> and import again from Agents if you need a fresh copy.
+                <span className="text-muted-foreground">Delete</span> and import again from Agents if you need a fresh copy.
               </p>
             </section>
           )
         ) : null}
 
         <section aria-label="Ingestion runs" className="mb-6">
-          <p className="text-body font-medium text-secondary">Ingestion runs</p>
-          <p className="mt-1 text-caption text-muted">
+          <p className="text-p font-medium text-muted-foreground">Ingestion runs</p>
+          <p className="mt-1 text-caption text-muted-foreground">
             Retries start a new run. A previous in-flight run is closed as{" "}
             <span className="text-amber-200/90">Superseded</span>, not a pipeline failure.{" "}
             <span className="text-red-300/90">Failed</span> means the attempt ended in error.
           </p>
           {runs.length === 0 ? (
-            <p className="mt-2 text-caption text-muted">No runs recorded.</p>
+            <p className="mt-2 text-caption text-muted-foreground">No runs recorded.</p>
           ) : (
-            <ol className="mt-2 space-y-2 border-l border-border-subtle pl-3">
+            <ol className="mt-2 space-y-2 border-l border-border pl-3">
               {runs.map((r) => {
                 const isCurrent = r.status === "running" && r.ended_at == null;
                 const label = ingestionRunStatusLabel(r.status);
                 return (
-                  <li key={r.id} className="text-caption text-muted">
+                  <li key={r.id} className="text-caption text-muted-foreground">
                     <span className={`font-medium ${ingestionRunStatusClass(r.status)}`}>{label}</span>
                     {isCurrent ? (
                       <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-caption text-emerald-200 ring-1 ring-emerald-500/35">
                         Current attempt
                       </span>
                     ) : null}
-                    <span className="text-muted"> · </span>
+                    <span className="text-muted-foreground"> · </span>
                     {new Date(r.started_at).toLocaleString()}
                     {r.ended_at ? ` → ${new Date(r.ended_at).toLocaleString()}` : ""}
                   </li>
@@ -435,25 +435,25 @@ export function DocumentDetailPanel({
 
       {deleteOpen ? (
         <div
-          className="border-t border-border-strong bg-surface/90 p-4 backdrop-blur"
+          className="border-t border-input bg-card/90 p-4 backdrop-blur"
           role="dialog"
           aria-modal="true"
           aria-label="Confirm delete"
         >
-          <p className="text-body font-medium text-secondary">Delete document</p>
+          <p className="text-p font-medium text-muted-foreground">Delete document</p>
           {previewLoading ? (
-            <p className="mt-2 text-caption text-muted">Loading preview…</p>
+            <p className="mt-2 text-caption text-muted-foreground">Loading preview…</p>
           ) : preview ? (
-            <ul className="mt-2 list-inside list-disc text-caption text-muted">
+            <ul className="mt-2 list-inside list-disc text-caption text-muted-foreground">
               <li>Exclusive notes: {preview.exclusive_note_count}</li>
               <li>Shared notes (kept): {preview.shared_note_count}</li>
               <li>Entities touched by episodes: {preview.entity_touch_count}</li>
               <li>Relationships touched: {preview.relationship_touch_count}</li>
             </ul>
           ) : (
-            <p className="mt-2 text-caption text-muted">No preview available.</p>
+            <p className="mt-2 text-caption text-muted-foreground">No preview available.</p>
           )}
-          <fieldset className="mt-3 space-y-2 text-caption text-secondary">
+          <fieldset className="mt-3 space-y-2 text-caption text-muted-foreground">
             <legend className="sr-only">Cascade mode</legend>
             <label className="flex items-center gap-2">
               <input
@@ -492,7 +492,7 @@ export function DocumentDetailPanel({
           <div className="mt-4 flex gap-2">
             <button
               type="button"
-              className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary"
+              className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground"
               onClick={() => setDeleteOpen(false)}
               disabled={deleteBusy}
             >
