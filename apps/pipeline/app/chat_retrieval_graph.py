@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.cohere_chat import ChatDocument
-from app.filter_options_repo import summarize_workspace_graph
+from app.filter_options_repo import summarize_workspace_graph, workspace_graph_store_empty
 from app.graphiti_factory import graphiti_for_workspace
 
 logger = logging.getLogger(__name__)
@@ -190,6 +190,14 @@ async def retrieve(
     strategy)`` tuple the dispatcher expects.
     """
     if not query_text.strip():
+        return [], [], 0, False, GRAPH_STRATEGY
+
+    # Postgres is the source of truth for "does this workspace have a graph?"
+    # FalkorDB/Graphiti can retain stale edges after a baseline reset; skip
+    # Graphiti when the working store is empty.
+    if await asyncio.to_thread(
+        workspace_graph_store_empty, database_url, workspace_id=workspace_id
+    ):
         return [], [], 0, False, GRAPH_STRATEGY
 
     # ---- Graph-context grounding document --------------------------------

@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  BarChart3,
   BookOpen,
   Bot,
   FileText,
@@ -27,6 +28,7 @@ const items = [
   { href: "/graph", label: "Graph", Icon: Network },
   { href: "/wiki", label: "Wiki", Icon: BookOpen },
   { href: "/chat", label: "Chat", Icon: MessageSquare },
+  { href: "/evals", label: "Evals", Icon: BarChart3 },
   { href: "/snapshots", label: "Snapshots", Icon: Camera },
   { href: "/targets", label: "External Targets", Icon: Target },
   { href: "/settings", label: "Settings", Icon: Settings },

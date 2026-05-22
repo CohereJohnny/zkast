@@ -24,9 +24,9 @@ import {
  * - On `/documents`, when that column collapses to the thin rail, the parent
  *   stops mounting this component, so the log collapses with the panel.
  * - Subscribes (one `EventSource` per active job) to
- *   `/api/v1/jobs/{jobId}/events?replay=false`. Live tail only — no Redis Stream
- *   replay — so clearing the panel or navigating away does not reload hundreds of
- *   stale lines (the documents panel SSE keeps replay for mid-job progress).
+ *   `/api/v1/jobs/{jobId}/events?replay=true`. Replays the last events from the
+ *   per-job Redis Stream so opening the log mid-run still shows parse/notes
+ *   progress (clear still only clears the local buffer).
  * - Auto-dismisses jobs from the active-jobs context on `job_completed` /
  *   `job_failed`.
  * - Cross-wires `metric` events whose name implies graph mutation
@@ -347,7 +347,7 @@ export function JobLogConsole() {
         <JobSubscription
           key={j.jobId}
           job={j}
-          replayHistory={false}
+          replayHistory
           onEvent={handleEvent}
           onTerminal={handleTerminal}
         />
@@ -440,9 +440,17 @@ export function JobLogConsole() {
           >
             {filteredLines.length === 0 ? (
               <p className="text-muted">
-                {hasJobs
-                  ? "Waiting for events…"
-                  : "No active jobs. Import a conversation, run Dream, or upload a PDF to see live progress here."}
+                {hasJobs ? (
+                  <>
+                    Subscribed to {jobs.length} job
+                    {jobs.length === 1 ? "" : "s"} ({jobs.map((j) => j.jobId.slice(0, 8)).join(", ")}
+                    ). Waiting for events… If this stays empty for more than a minute,
+                    confirm the arq <span className="text-secondary">worker</span> container is
+                    running and check the Jobs page for queue depth.
+                  </>
+                ) : (
+                  "No active jobs. Import a conversation, run Dream, or upload a PDF to see live progress here."
+                )}
               </p>
             ) : (
               filteredLines.map((l) => (

@@ -242,15 +242,59 @@ export function DocumentsPanel({
     [clearJob, load],
   );
 
-  const { registerActiveJob } = useJobEvents();
+  const { registerActiveJob, requestOpenLogConsole } = useJobEvents();
 
   const registerJob = useCallback(
     (docId: string, jobId: string) => {
       setActiveJobs((m) => ({ ...m, [docId]: jobId }));
       registerActiveJob(jobId, workspaceId, docId, "document_parse");
+      requestOpenLogConsole();
     },
-    [registerActiveJob, workspaceId],
+    [registerActiveJob, requestOpenLogConsole, workspaceId],
   );
+
+  /** Re-attach SSE when the tab was refreshed mid-ingestion (localStorage may lack the job). */
+  useEffect(() => {
+    if (!hasActiveIngestion) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/jobs/overview`,
+          { cache: "no-store" },
+        );
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as {
+          pipeline_jobs?: Array<{
+            job_id?: string;
+            document_id?: string;
+            status?: string;
+            kind?: string;
+          }>;
+        };
+        for (const j of body.pipeline_jobs ?? []) {
+          if (!j.job_id || !j.document_id) continue;
+          const st = (j.status ?? "").toLowerCase();
+          if (st === "succeeded" || st === "failed" || st === "cancelled") continue;
+          registerActiveJob(
+            j.job_id,
+            workspaceId,
+            j.document_id,
+            (j.kind as "document_parse" | undefined) ?? "document_parse",
+          );
+          setActiveJobs((m) => ({ ...m, [j.document_id!]: j.job_id! }));
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    void sync();
+    const t = window.setInterval(() => void sync(), 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [hasActiveIngestion, registerActiveJob, workspaceId]);
 
   const uploadFiles = async (files: File[]) => {
     setUploadError(null);

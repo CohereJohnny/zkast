@@ -67,6 +67,20 @@ def list_tag_counts(database_url: str, *, workspace_id: str) -> list[dict[str, A
     return [{"name": r["name"], "count": int(r["count"])} for r in rows]
 
 
+def workspace_graph_store_empty(database_url: str, *, workspace_id: str) -> bool:
+    """True when the Postgres working graph has no entities and no relationships."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        ent = conn.execute(
+            "SELECT COUNT(*) AS c FROM entities WHERE workspace_id = %s::uuid",
+            (workspace_id,),
+        ).fetchone()
+        rel = conn.execute(
+            "SELECT COUNT(*) AS c FROM relationships WHERE workspace_id = %s::uuid",
+            (workspace_id,),
+        ).fetchone()
+    return int(ent["c"] if ent else 0) == 0 and int(rel["c"] if rel else 0) == 0
+
+
 def summarize_workspace_graph(
     database_url: str,
     *,

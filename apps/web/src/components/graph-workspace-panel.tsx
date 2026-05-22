@@ -108,7 +108,11 @@ function GraphWorkspaceInner({
   const showList = listMode || canvasBroken;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row xl:items-start">
+    // ``items-stretch`` (default) on the xl row keeps the canvas column
+    // tall enough to fill the panel — the previous ``items-start`` capped
+    // it at the canvas's natural ~420-480px floor and left a large blank
+    // band on wide screens.
+    <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <p className="text-title-3 text-secondary">Graph</p>
@@ -185,7 +189,10 @@ function GraphWorkspaceInner({
         )}
       </div>
       {selectedId ? (
-        <div className="border-t border-border-subtle pt-2 xl:max-h-[min(70vh,560px)] xl:w-[min(100%,22rem)] xl:shrink-0 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+        // Side panel keeps an explicit height cap on wide screens so its
+        // internal scroll area stays predictable even though the parent
+        // row now stretches to the panel height.
+        <div className="border-t border-border-subtle pt-2 xl:w-[min(100%,22rem)] xl:shrink-0 xl:overflow-auto xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
           <GraphSelectionPanel
             workspaceId={workspaceId}
             entityId={selectedId}

@@ -114,4 +114,26 @@ def test_aggregate_rollup() -> None:
 
 
 def test_aggregate_empty_returns_empty_shape() -> None:
-    assert aggregate_scores([]) == {"modes": {}, "categories": {}}
+    assert aggregate_scores([]) == {
+        "modes": {},
+        "categories": {},
+        "abilities": {},
+        "top_k": {},
+    }
+
+
+def test_context_recall_from_retrieved_items() -> None:
+    r = score_answer(
+        answer_text="Some answer",
+        refused=False,
+        expected_answer_patterns=[],
+        expected_entity_names=[],
+        cited_source_kinds=[],
+        cited_source_ids=[],
+        cited_excerpts=[],
+        refusal_expected=False,
+        expected_source_ids=["note:abc-123"],
+        retrieved_items=[{"source_id": "note:abc-123", "excerpt": "pivot details"}],
+    )
+    assert r.context_recall == 1.0
+    assert r.context_hits == 1

@@ -487,7 +487,27 @@ async def _parse_north_transcript(
     await job_hset(
         redis,
         job_id,
-        progress=json.dumps({"percent": 100, "stage": "parsing", "message": "queued_notes"}),
+        status="running",
+        progress=json.dumps(
+            {"percent": 5, "stage": "generating_notes", "message": "queued_notes"}
+        ),
+    )
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="generating_notes",
+        message="Note generation queued; worker will start shortly",
+        data={"document_id": document_id},
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+    await publish_job_event(
+        redis,
+        job_id,
+        "stage_progress",
+        stage="generating_notes",
+        percent=5,
     )
 
 
@@ -714,9 +734,31 @@ async def parse_document(
                 await job_hset(
                     redis,
                     job_id,
+                    status="running",
                     progress=json.dumps(
-                        {"percent": 100, "stage": "parsing", "message": "queued_notes"}
+                        {
+                            "percent": 5,
+                            "stage": "generating_notes",
+                            "message": "queued_notes",
+                        }
                     ),
+                )
+                await record_log(
+                    redis,
+                    job_id=job_id,
+                    level="info",
+                    stage="generating_notes",
+                    message="Note generation queued; worker will start shortly",
+                    data={"document_id": document_id},
+                    database_url=database_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+                await publish_job_event(
+                    redis,
+                    job_id,
+                    "stage_progress",
+                    stage="generating_notes",
+                    percent=5,
                 )
             finally:
                 await asyncio.to_thread(pdf.close)
@@ -781,9 +823,20 @@ async def generate_atomic_notes(
     await job_hset(
         redis,
         job_id,
+        status="running",
         progress=json.dumps({"percent": 0, "stage": "generating_notes"}),
     )
     await publish_job_event(redis, job_id, "stage_started", stage="generating_notes")
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="generating_notes",
+        message="generate_atomic_notes worker started",
+        data={"document_id": document_id},
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
     _started_at = asyncio.get_event_loop().time()
 
     try:

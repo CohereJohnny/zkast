@@ -1,27 +1,15 @@
-"""Sprint 6b — internal routes for the chat-eval / retrieval-mode UI.
-
-Wraps two things:
-
-1. Naive-RAG raw-chunk index management (backfill + status).
-2. Chat eval-run lifecycle: list runs, fetch run details, kick off a
-   new run.
-
-The eval runner is intentionally blocking (Cohere streaming per
-question), so for a real dataset it runs over many minutes. The HTTP
-handler runs it in a background task and the UI polls
-``GET .../eval/runs/{run_id}`` for status.
-"""
+"""Internal routes for memory eval runs and retrieval-index management."""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
-
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import structlog
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from psycopg.rows import dict_row
@@ -29,13 +17,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import raw_chunk_index
 from app.config import Settings
-from app.eval.runner import default_modes_for_dataset, run_eval as _run_eval_async
+from app.eval.runner import (
+    create_eval_run,
+    default_modes_for_dataset,
+    run_eval as _run_eval_async,
+)
 from app.graphiti_factory import resolve_cohere_api_key
 from app.note_embedding_index import backfill_note_embeddings
 from app.retrieval_embeddings_repo import count_by_kind
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["internal-eval"])
+
+DATASETS_DIR = Path(__file__).resolve().parent / "eval" / "datasets"
 
 
 # -----------------------------------------------------------------------------
@@ -48,18 +42,13 @@ class BackfillRequest(BaseModel):
     embedding_model: str | None = None
     kinds: list[str] | None = Field(
         default=None,
-        description="Index kinds to backfill: raw_chunk, note_zettel, note_amem. Default raw_chunk only.",
+        description="Index kinds: raw_chunk, note_zettel, note_amem.",
     )
-    agent_id: uuid.UUID | None = Field(
-        default=None,
-        description="When set, note backfills only target notes for this North agent.",
-    )
+    agent_id: uuid.UUID | None = None
     limit: int | None = Field(default=500, ge=1, le=5000)
 
 
-@router.get(
-    "/internal/v1/workspaces/{workspace_id}/retrieval-index/status"
-)
+@router.get("/internal/v1/workspaces/{workspace_id}/retrieval-index/status")
 async def get_index_status(
     workspace_id: uuid.UUID,
     request: Request,
@@ -86,9 +75,7 @@ async def get_index_status(
     )
 
 
-@router.post(
-    "/internal/v1/workspaces/{workspace_id}/retrieval-index/backfill"
-)
+@router.post("/internal/v1/workspaces/{workspace_id}/retrieval-index/backfill")
 async def post_backfill_index(
     workspace_id: uuid.UUID,
     request: Request,
@@ -137,6 +124,30 @@ async def post_backfill_index(
 
 
 # -----------------------------------------------------------------------------
+# Eval datasets catalog
+# -----------------------------------------------------------------------------
+
+
+@router.get("/internal/v1/eval/datasets")
+async def list_eval_datasets() -> JSONResponse:
+    items: list[dict[str, Any]] = []
+    for path in sorted(DATASETS_DIR.glob("*.yaml")):
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        name = str(data.get("name") or path.stem)
+        items.append(
+            {
+                "name": name,
+                "file": path.name,
+                "description": (data.get("description") or "").strip(),
+                "question_count": len(data.get("questions") or []),
+                "default_modes": default_modes_for_dataset(name),
+            }
+        )
+    return JSONResponse(content={"items": items})
+
+
+# -----------------------------------------------------------------------------
 # Eval runs
 # -----------------------------------------------------------------------------
 
@@ -147,11 +158,12 @@ class StartEvalBody(BaseModel):
     retrieval_modes: list[str] | None = Field(default=None)
     notes: str | None = Field(default=None, max_length=2000)
     agent_id: uuid.UUID | None = Field(default=None)
+    top_k_cutoffs: list[int] | None = Field(default=None)
+    run_mode: str = Field(default="full")
+    eval_kind: str = Field(default="memory_system")
 
 
-@router.get(
-    "/internal/v1/workspaces/{workspace_id}/eval/runs"
-)
+@router.get("/internal/v1/workspaces/{workspace_id}/eval/runs")
 async def list_eval_runs(
     workspace_id: uuid.UUID,
     request: Request,
@@ -167,6 +179,11 @@ async def list_eval_runs(
                 retrieval_modes,
                 status,
                 notes,
+                eval_kind,
+                agent_id::text AS agent_id,
+                top_k_cutoffs,
+                run_config,
+                summary,
                 created_at,
                 completed_at
             FROM chat_eval_runs
@@ -179,9 +196,7 @@ async def list_eval_runs(
     return JSONResponse(content={"items": _serialize_rows(rows)})
 
 
-@router.get(
-    "/internal/v1/workspaces/{workspace_id}/eval/runs/{run_id}"
-)
+@router.get("/internal/v1/workspaces/{workspace_id}/eval/runs/{run_id}")
 async def get_eval_run(
     workspace_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -198,6 +213,11 @@ async def get_eval_run(
                 retrieval_modes,
                 status,
                 notes,
+                eval_kind,
+                agent_id::text AS agent_id,
+                top_k_cutoffs,
+                run_config,
+                summary,
                 created_at,
                 completed_at
             FROM chat_eval_runs
@@ -216,9 +236,12 @@ async def get_eval_run(
                 id::text AS id,
                 question_key,
                 category,
+                ability_type,
                 question_text,
                 expected_answer_patterns,
                 expected_entity_ids,
+                expected_source_ids,
+                expected_context_patterns,
                 refusal_expected,
                 notes
             FROM chat_eval_questions
@@ -233,16 +256,19 @@ async def get_eval_run(
                 id::text AS id,
                 question_id::text AS question_id,
                 retrieval_mode,
+                memory_system,
+                top_k_cutoff,
                 answer_text,
                 refused,
                 scores,
+                retrieval_items,
                 latency_ms,
                 tokens_in,
                 tokens_out,
                 created_at
             FROM chat_eval_results
             WHERE run_id = %s::uuid
-            ORDER BY question_id, retrieval_mode
+            ORDER BY question_id, retrieval_mode, top_k_cutoff
             """,
             (str(run_id),),
         ).fetchall()
@@ -255,25 +281,44 @@ async def get_eval_run(
     )
 
 
-@router.post(
-    "/internal/v1/workspaces/{workspace_id}/eval/runs"
-)
+@router.post("/internal/v1/workspaces/{workspace_id}/eval/runs")
 async def start_eval_run(
     workspace_id: uuid.UUID,
     request: Request,
     body: StartEvalBody,
 ) -> JSONResponse:
-    """Kick off an eval run in the background.
-
-    Responds 202 with the run id; the UI polls
-    ``GET .../eval/runs/{run_id}`` until ``status='complete'``.
-    """
+    settings: Settings = request.app.state.settings
     ds_key = (body.dataset_name or "oil_gas_v1").removesuffix(".yaml")
     modes = list(body.retrieval_modes or default_modes_for_dataset(ds_key))
-    notes = body.notes
-    agent_id_val = str(body.agent_id) if body.agent_id else None
-    ds_path = Path(__file__).resolve().parent / "eval" / "datasets" / f"{ds_key}.yaml"
+    cutoffs = body.top_k_cutoffs or [10, 30]
+    ds_path = DATASETS_DIR / f"{ds_key}.yaml"
     dataset_path = ds_path if ds_path.is_file() else None
+    if not dataset_path:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "invalid_dataset", "message": f"Unknown dataset: {ds_key}"}},
+        )
+
+    with dataset_path.open("r", encoding="utf-8") as fh:
+        dataset_meta = yaml.safe_load(fh) or {}
+
+    run_config = {
+        "run_mode": body.run_mode,
+        "dataset_file": dataset_path.name,
+    }
+    run_id = await asyncio.to_thread(
+        create_eval_run,
+        settings.database_url,
+        workspace_id=str(workspace_id),
+        dataset_name=str(dataset_meta.get("name") or ds_key),
+        dataset_version=str(dataset_meta.get("version") or "1"),
+        modes=modes,
+        notes=body.notes,
+        eval_kind=body.eval_kind,
+        agent_id=str(body.agent_id) if body.agent_id else None,
+        top_k_cutoffs=cutoffs,
+        run_config=run_config,
+    )
 
     async def _runner() -> None:
         try:
@@ -281,14 +326,23 @@ async def start_eval_run(
                 workspace_id=str(workspace_id),
                 dataset_path=dataset_path,
                 modes=modes,
-                notes=notes,
-                agent_id=agent_id_val,
+                notes=body.notes,
+                agent_id=str(body.agent_id) if body.agent_id else None,
+                run_id=run_id,
+                top_k_cutoffs=cutoffs,
+                run_mode=body.run_mode,
+                eval_kind=body.eval_kind,
+                run_config=run_config,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("eval_run_failed", workspace_id=str(workspace_id), err=str(exc))
+            logger.exception(
+                "eval_run_failed",
+                workspace_id=str(workspace_id),
+                run_id=run_id,
+                err=str(exc),
+            )
 
     task = asyncio.create_task(_runner())
-    # Track on the FastAPI app state so the GC doesn't drop the task.
     pending = getattr(request.app.state, "background_tasks", None)
     if pending is None:
         pending = set()
@@ -300,8 +354,11 @@ async def start_eval_run(
         status_code=202,
         content={
             "status": "started",
+            "run_id": run_id,
             "dataset_name": body.dataset_name or "oil_gas_v1",
             "retrieval_modes": modes,
+            "top_k_cutoffs": cutoffs,
+            "run_mode": body.run_mode,
         },
     )
 
