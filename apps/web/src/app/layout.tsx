@@ -1,28 +1,24 @@
 import type { Metadata } from "next";
-import { Crimson_Pro, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { IBM_Plex_Mono, Inter } from "next/font/google";
 import { Suspense, type ReactNode } from "react";
 
 import { ErrorBoundary } from "@/components/error-boundary";
 import { FeedbackProvider } from "@/components/feedback-provider";
 import { QueryProvider } from "@/components/query-provider";
+import { ThemeProvider } from "@/components/theme-provider";
 
 import "./globals.css";
 
-const plusJakarta = Plus_Jakarta_Sans({
+const fontSans = Inter({
   subsets: ["latin"],
-  variable: "--font-plus-jakarta",
+  variable: "--font-family-regular",
   display: "swap",
 });
 
-const crimson = Crimson_Pro({
+const fontMono = IBM_Plex_Mono({
   subsets: ["latin"],
-  variable: "--font-crimson",
-  display: "swap",
-});
-
-const jetbrains = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains",
+  weight: ["400", "500"],
+  variable: "--font-mono-regular",
   display: "swap",
 });
 
@@ -33,8 +29,8 @@ export const metadata: Metadata = {
 
 function LoadingShell() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-canvas text-secondary">
-      <p className="text-body" role="status">
+    <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
+      <p className="text-p" role="status">
         Loading…
       </p>
     </div>
@@ -43,20 +39,22 @@ function LoadingShell() {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" data-theme="dark" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body
-        className={`${plusJakarta.variable} ${crimson.variable} ${jetbrains.variable} font-sans`}
+        className={`${fontSans.variable} ${fontMono.variable} font-regular antialiased`}
       >
         <a href="#main-content" className="skip-link">
           Skip to main content
         </a>
-        <QueryProvider>
-          <FeedbackProvider>
-            <ErrorBoundary>
-              <Suspense fallback={<LoadingShell />}>{children}</Suspense>
-            </ErrorBoundary>
-          </FeedbackProvider>
-        </QueryProvider>
+        <ThemeProvider>
+          <QueryProvider>
+            <FeedbackProvider>
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingShell />}>{children}</Suspense>
+              </ErrorBoundary>
+            </FeedbackProvider>
+          </QueryProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

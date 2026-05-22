@@ -26,14 +26,14 @@ export function EmptyState({
       )}
     >
       <div
-        className="flex h-28 w-40 items-center justify-center rounded-lg border border-dashed border-border-strong bg-surface-raised/40 text-caption text-muted"
+        className="flex h-28 w-40 items-center justify-center rounded-lg border border-dashed border-input bg-secondary/40 text-caption text-muted-foreground"
         aria-hidden
       >
         Illustration placeholder
       </div>
       <div className="max-w-md space-y-2">
-        <h1 className="text-display font-semibold text-primary">{title}</h1>
-        <p className="text-body text-secondary">{description}</p>
+        <h1 className="text-h2 font-semibold text-foreground">{title}</h1>
+        <p className="text-p text-muted-foreground">{description}</p>
       </div>
       {cta ? <div className="flex justify-center">{cta}</div> : null}
     </div>

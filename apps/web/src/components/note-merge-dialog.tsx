@@ -156,17 +156,17 @@ export function NoteMergeDialog({
       aria-modal="true"
       aria-label="Merge notes"
     >
-      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border-strong bg-canvas p-4 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-input bg-background p-4 shadow-xl">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <p className="text-title-3 text-secondary">Merge notes</p>
-            <p className="mt-1 text-caption text-muted">
-              Survivor: <span className="font-mono text-secondary">{survivorNoteId}</span>
+            <p className="text-h5 text-muted-foreground">Merge notes</p>
+            <p className="mt-1 text-caption text-muted-foreground">
+              Survivor: <span className="font-mono text-muted-foreground">{survivorNoteId}</span>
             </p>
           </div>
           <button
             type="button"
-            className="text-caption text-muted hover:text-secondary"
+            className="text-caption text-muted-foreground hover:text-muted-foreground"
             onClick={onClose}
           >
             Close
@@ -174,16 +174,16 @@ export function NoteMergeDialog({
         </div>
 
         {showUndo ? (
-          <div className="mt-4 space-y-3 text-caption text-secondary">
+          <div className="mt-4 space-y-3 text-caption text-muted-foreground">
             <p>
               Merge completed. The other note was removed. Choose either:
             </p>
-            <ul className="ml-4 list-disc space-y-1 text-muted">
+            <ul className="ml-4 list-disc space-y-1 text-muted-foreground">
               <li>
-                <strong className="text-secondary">Full undo</strong> &mdash; restore the merged note row and re-attach its provenance.
+                <strong className="text-muted-foreground">Full undo</strong> &mdash; restore the merged note row and re-attach its provenance.
               </li>
               <li>
-                <strong className="text-secondary">Revert survivor fields</strong> &mdash; keep the merge but roll back this note&rsquo;s title,
+                <strong className="text-muted-foreground">Revert survivor fields</strong> &mdash; keep the merge but roll back this note&rsquo;s title,
                 body and tags.
               </li>
             </ul>
@@ -191,7 +191,7 @@ export function NoteMergeDialog({
               <button
                 type="button"
                 disabled={busy}
-                className="rounded-md bg-danger px-3 py-1.5 font-medium text-white transition-colors duration-150 hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-50"
+                className="rounded-md bg-destructive px-3 py-1.5 font-medium text-white transition-colors duration-150 hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
                 onClick={() => void fullUndo()}
               >
                 {busy ? "…" : "Full undo"}
@@ -199,14 +199,14 @@ export function NoteMergeDialog({
               <button
                 type="button"
                 disabled={busy || !survivorBefore}
-                className="rounded-md border border-border-strong px-3 py-1.5 text-secondary transition-colors duration-150 hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-input px-3 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:opacity-50"
                 onClick={() => void revertSurvivorFields()}
               >
                 {busy ? "…" : "Revert survivor fields"}
               </button>
               <button
                 type="button"
-                className="rounded-md bg-accent-primary px-3 py-1.5 font-medium text-canvas"
+                className="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground"
                 onClick={onClose}
               >
                 Done
@@ -215,17 +215,17 @@ export function NoteMergeDialog({
           </div>
         ) : (
           <>
-            <label className="mt-4 block text-caption text-secondary">
+            <label className="mt-4 block text-caption text-muted-foreground">
               Other note id (uuid)
               <input
-                className="mt-1 w-full rounded-md border border-border-strong bg-surface px-2 py-1 font-mono text-caption text-secondary"
+                className="mt-1 w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-caption text-muted-foreground"
                 value={otherId}
                 onChange={(e) => setOtherId(e.target.value)}
                 placeholder="00000000-0000-4000-8000-000000000000"
               />
             </label>
 
-            <fieldset className="mt-4 space-y-2 text-caption text-secondary">
+            <fieldset className="mt-4 space-y-2 text-caption text-muted-foreground">
               <legend className="font-medium">Keep field from</legend>
               {(
                 [
@@ -235,7 +235,7 @@ export function NoteMergeDialog({
                 ] as const
               ).map(([field, val, set]) => (
                 <div key={field} className="flex flex-wrap gap-3">
-                  <span className="w-14 capitalize text-muted">{field}</span>
+                  <span className="w-14 capitalize text-muted-foreground">{field}</span>
                   <label className="flex items-center gap-1">
                     <input
                       type="radio"
@@ -270,7 +270,7 @@ export function NoteMergeDialog({
           <div className="mt-4 flex justify-end gap-2">
             <button
               type="button"
-              className="rounded-md border border-border-strong px-3 py-1.5 text-caption text-secondary"
+              className="rounded-md border border-input px-3 py-1.5 text-caption text-muted-foreground"
               onClick={onClose}
             >
               Cancel
@@ -278,7 +278,7 @@ export function NoteMergeDialog({
             <button
               type="button"
               disabled={busy || !otherId.trim()}
-              className="rounded-md bg-accent-primary px-3 py-1.5 text-caption font-medium text-canvas disabled:opacity-50"
+              className="rounded-md bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground disabled:opacity-50"
               onClick={() => void submit()}
             >
               {busy ? "Merging…" : "Merge"}

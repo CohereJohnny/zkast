@@ -57,19 +57,19 @@ function AccessibleGraphList({
   }, [workspaceId, qs]);
 
   if (error) return <p className="text-caption text-red-300">{error}</p>;
-  if (!data) return <p className="text-caption text-muted">Loading list…</p>;
-  if (!data.nodes.length) return <p className="text-caption text-muted">No entities.</p>;
+  if (!data) return <p className="text-caption text-muted-foreground">Loading list…</p>;
+  if (!data.nodes.length) return <p className="text-caption text-muted-foreground">No entities.</p>;
   return (
     <ul className="max-h-[360px] space-y-1 overflow-auto text-caption">
       {data.nodes.map((n) => (
         <li key={n.id}>
           <button
             type="button"
-            className="w-full rounded px-2 py-1 text-left text-secondary hover:bg-surface"
+            className="w-full rounded px-2 py-1 text-left text-muted-foreground hover:bg-card"
             onClick={() => onPick(n.id)}
           >
             <span className="font-medium">{n.name}</span>{" "}
-            <span className="text-muted">({n.type})</span>
+            <span className="text-muted-foreground">({n.type})</span>
           </button>
         </li>
       ))}
@@ -115,9 +115,9 @@ function GraphWorkspaceInner({
     <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-title-3 text-secondary">Graph</p>
+          <p className="text-h5 text-muted-foreground">Graph</p>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-caption text-muted">
+            <label className="flex items-center gap-2 text-caption text-muted-foreground">
               <input type="checkbox" checked={listMode} onChange={(e) => setListMode(e.target.checked)} />
               Accessible list
             </label>
@@ -128,7 +128,7 @@ function GraphWorkspaceInner({
                 title="Collapse graph panel"
                 aria-label="Collapse graph panel"
                 aria-expanded
-                className="cursor-pointer rounded border border-border-subtle px-1.5 py-0.5 text-caption text-muted transition-colors duration-150 hover:bg-surface hover:text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+                className="cursor-pointer rounded border border-border px-1.5 py-0.5 text-caption text-muted-foreground transition-colors duration-150 hover:bg-card hover:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span aria-hidden="true">›</span>
               </button>
@@ -144,7 +144,7 @@ function GraphWorkspaceInner({
         {canvasBroken ? (
           <button
             type="button"
-            className="self-start rounded border border-border-strong px-2 py-1 text-caption text-secondary hover:bg-surface"
+            className="self-start rounded border border-input px-2 py-1 text-caption text-muted-foreground hover:bg-card"
             onClick={() => {
               setCanvasBroken(false);
               bump();
@@ -192,7 +192,7 @@ function GraphWorkspaceInner({
         // Side panel keeps an explicit height cap on wide screens so its
         // internal scroll area stays predictable even though the parent
         // row now stretches to the panel height.
-        <div className="border-t border-border-subtle pt-2 xl:w-[min(100%,22rem)] xl:shrink-0 xl:overflow-auto xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+        <div className="border-t border-border pt-2 xl:w-[min(100%,22rem)] xl:shrink-0 xl:overflow-auto xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
           <GraphSelectionPanel
             workspaceId={workspaceId}
             entityId={selectedId}
@@ -220,9 +220,9 @@ export function GraphWorkspacePanel({
       // layouts). ``min-h-[480px]`` is the floor for very short
       // viewports. Removed the previous fixed-height cap that caused the
       // empty band below the canvas.
-      className="flex min-h-[480px] flex-1 flex-col rounded-lg border border-border-subtle bg-surface/80 p-4"
+      className="flex min-h-[480px] flex-1 flex-col rounded-lg border border-border bg-card/80 p-4"
     >
-      <Suspense fallback={<p className="text-caption text-muted">Loading graph panel…</p>}>
+      <Suspense fallback={<p className="text-caption text-muted-foreground">Loading graph panel…</p>}>
         <GraphWorkspaceInner workspaceId={workspaceId} onCollapse={onCollapse} />
       </Suspense>
     </section>

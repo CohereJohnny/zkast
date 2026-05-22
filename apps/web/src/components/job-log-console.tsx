@@ -68,7 +68,7 @@ type ServerEvent = {
 };
 
 const LEVEL_CLASS: Record<Level, string> = {
-  info: "text-secondary",
+  info: "text-muted-foreground",
   warning: "text-amber-200",
   error: "text-red-300",
 };
@@ -113,7 +113,7 @@ function eventToMessage(ev: ServerEvent): string {
 function StageBadge({ stage }: { stage: string }) {
   const label = STAGE_LABEL[stage] ?? stage;
   return (
-    <span className="rounded border border-border-subtle bg-surface-raised px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted">
+    <span className="rounded border border-border bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
       {label}
     </span>
   );
@@ -339,7 +339,7 @@ export function JobLogConsole() {
       // as a thin header row at the bottom of the Documents column and
       // the documents list keeps its full height. Open state shares the
       // column 50/50 with the documents list via the parent ``flex-col``.
-      className={`flex min-h-0 flex-col rounded-lg border border-border-subtle bg-surface/60 ${
+      className={`flex min-h-0 flex-col rounded-lg border border-border bg-card/60 ${
         open ? "flex-1" : ""
       }`}
     >
@@ -356,22 +356,22 @@ export function JobLogConsole() {
         type="button"
         onClick={() => persistOpen(!open)}
         aria-expanded={open}
-        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-inset"
+        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <ConsoleIcon />
         <span className="font-medium">Pipeline log</span>
         <span
-          className={`${hasJobs ? "text-accent-primary" : "text-muted"}`}
+          className={`${hasJobs ? "text-foreground" : "text-muted-foreground"}`}
           aria-live="polite"
         >
           {hasJobs ? `${jobs.length} active` : "idle"}
         </span>
-        <span className="ml-auto text-muted">{lineCountLabel}</span>
+        <span className="ml-auto text-muted-foreground">{lineCountLabel}</span>
         <ChevronIcon open={open} />
       </button>
       {open ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 border-t border-border-subtle px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2 text-caption text-muted">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 border-t border-border px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
             <label className="flex items-center gap-1">
               <span>Level</span>
               <select
@@ -379,7 +379,7 @@ export function JobLogConsole() {
                 onChange={(e) =>
                   setLevelFilter(e.target.value as "all" | Level)
                 }
-                className="cursor-pointer rounded border border-border-strong bg-canvas px-1.5 py-0.5 text-secondary"
+                className="cursor-pointer rounded border border-input bg-background px-1.5 py-0.5 text-muted-foreground"
               >
                 <option value="all">All</option>
                 <option value="info">Info</option>
@@ -392,7 +392,7 @@ export function JobLogConsole() {
               <select
                 value={jobFilter}
                 onChange={(e) => setJobFilter(e.target.value)}
-                className="max-w-[14ch] cursor-pointer truncate rounded border border-border-strong bg-canvas px-1.5 py-0.5 text-secondary"
+                className="max-w-[14ch] cursor-pointer truncate rounded border border-input bg-background px-1.5 py-0.5 text-muted-foreground"
               >
                 <option value="all">All</option>
                 {jobs.map((j) => (
@@ -415,14 +415,14 @@ export function JobLogConsole() {
             <button
               type="button"
               onClick={() => void copyLog()}
-              className="ml-auto cursor-pointer rounded border border-border-strong px-2 py-0.5 text-secondary transition-colors duration-150 hover:bg-surface-raised"
+              className="ml-auto cursor-pointer rounded border border-input px-2 py-0.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
             >
               Copy
             </button>
             <button
               type="button"
               onClick={clearLog}
-              className="cursor-pointer rounded border border-border-strong px-2 py-0.5 text-secondary transition-colors duration-150 hover:bg-surface-raised"
+              className="cursor-pointer rounded border border-input px-2 py-0.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
             >
               Clear
             </button>
@@ -434,18 +434,18 @@ export function JobLogConsole() {
             // column; ``flex-1`` lets it grow into any extra vertical room
             // the column has available, which is the whole point of moving
             // this in from the floating drawer.
-            className="min-h-[12rem] flex-1 overflow-y-auto rounded-md border border-border-subtle bg-canvas px-2 py-1 font-mono text-[12px] leading-relaxed"
+            className="min-h-[12rem] flex-1 overflow-y-auto rounded-md border border-border bg-background px-2 py-1 font-mono text-[12px] leading-relaxed"
             role="log"
             aria-live="polite"
           >
             {filteredLines.length === 0 ? (
-              <p className="text-muted">
+              <p className="text-muted-foreground">
                 {hasJobs ? (
                   <>
                     Subscribed to {jobs.length} job
                     {jobs.length === 1 ? "" : "s"} ({jobs.map((j) => j.jobId.slice(0, 8)).join(", ")}
                     ). Waiting for events… If this stays empty for more than a minute,
-                    confirm the arq <span className="text-secondary">worker</span> container is
+                    confirm the arq <span className="text-muted-foreground">worker</span> container is
                     running and check the Jobs page for queue depth.
                   </>
                 ) : (
@@ -455,10 +455,10 @@ export function JobLogConsole() {
             ) : (
               filteredLines.map((l) => (
                 <p key={l.id} className="whitespace-pre-wrap break-words">
-                  <span className="text-muted">
+                  <span className="text-muted-foreground">
                     {new Date(l.ts).toLocaleTimeString()}
                   </span>{" "}
-                  <span className="text-muted">{l.jobId.slice(0, 8)}</span>{" "}
+                  <span className="text-muted-foreground">{l.jobId.slice(0, 8)}</span>{" "}
                   <StageBadge stage={l.stage || "-"} />{" "}
                   <span className={LEVEL_CLASS[l.level]}>{l.message}</span>
                 </p>

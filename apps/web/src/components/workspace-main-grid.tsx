@@ -36,9 +36,9 @@ function CollapseRail({
       title={`Expand ${label.toLowerCase()} panel`}
       aria-label={`Expand ${label.toLowerCase()} panel`}
       aria-expanded={false}
-      className="flex h-full w-full cursor-pointer flex-col items-center justify-start gap-3 rounded-lg border border-border-subtle bg-surface/80 py-3 text-caption text-muted transition-colors duration-150 hover:bg-surface hover:text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="flex h-full w-full cursor-pointer flex-col items-center justify-start gap-3 rounded-lg border border-border bg-card/80 py-3 text-caption text-muted-foreground transition-colors duration-150 hover:bg-card hover:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span aria-hidden="true" className="text-body leading-none">
+      <span aria-hidden="true" className="text-p leading-none">
         {chevron}
       </span>
       <span
@@ -70,7 +70,7 @@ function CollapseHeaderButton({
       title={`Collapse ${label.toLowerCase()} panel`}
       aria-label={`Collapse ${label.toLowerCase()} panel`}
       aria-expanded
-      className="ml-auto cursor-pointer rounded border border-border-subtle px-1.5 py-0.5 text-caption text-muted transition-colors duration-150 hover:bg-surface hover:text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="ml-auto cursor-pointer rounded border border-border px-1.5 py-0.5 text-caption text-muted-foreground transition-colors duration-150 hover:bg-card hover:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span aria-hidden="true">{chevron}</span>
     </button>
@@ -206,7 +206,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 id="main-content"
                 tabIndex={-1}
                 aria-label="Documents"
-                className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-border-strong bg-surface p-4 outline-none"
+                className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-input bg-card p-4 outline-none"
               >
                 <div className="flex items-center gap-2">
                   <CollapseHeaderButton
@@ -246,7 +246,7 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                         : "Main workspace panel"
               }
               className={cn(
-                "flex min-h-0 flex-col rounded-lg border border-border-strong bg-surface outline-none",
+                "flex min-h-0 flex-col rounded-lg border border-input bg-card outline-none",
                 dockJobLog ? "gap-3 overflow-hidden p-4" : "overflow-auto",
               )}
             >

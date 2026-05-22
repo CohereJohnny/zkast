@@ -1,0 +1,94 @@
+@theme {
+  /* Colors */
+  --color-*: initial; /* https://tailwindcss.com/docs/theme#overriding-the-default-theme */
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  /* Font Sizes */
+  --text-caption: 0.75rem;
+  --text-label-sm: 0.625rem;
+  --text-label: 0.75rem;
+  --text-overline: 0.875rem;
+  --text-p-xs: 0.625rem;
+  --text-p-sm: 0.75rem;
+  --text-p: 0.875rem;
+  --text-p-lg: 1rem;
+  --text-code: 1rem;
+  --text-code-sm: 0.75rem;
+  --text-logo: 1.5rem;
+  --text-h6-m: 0.875rem;
+  --text-h6: 1rem;
+  --text-h5-m: 1.125rem;
+  --text-h5: 1.4rem;
+  --text-h4-m: 1.3125rem;
+  --text-h4: 1.875rem;
+  --text-h3-m: 1.75rem;
+  --text-h3: 2.375rem;
+  --text-h2-m: 2.375rem;
+  --text-h2: 3.1875rem;
+  --text-h1-m: 3.1875rem;
+  --text-h1: 4.1875rem;
+
+  /* Sizing, Spacing, Shadows, etc. */
+  --spacing-left-panel-collapsed: 82px;
+  --spacing-left-panel-expanded: 288px;
+  --spacing-icon-xs: 12px;
+  --spacing-icon-sm: 14px;
+  --spacing-icon-md: 16px;
+  --spacing-icon-lg: 24px;
+  --spacing-icon-xl: 36px;
+  --spacing-cell-xs: 24px;
+  --spacing-cell-sm: 32px;
+  --spacing-cell-md: 40px;
+  --spacing-cell-lg: 50px;
+  --spacing-cell-xl: 64px;
+
+  --min-width-menu: 174px;
+  --min-width-modal: 648px;
+  --width-modal: 648px;
+  --width-toast: 320px;
+  --width-toast-sm: 280px;
+  --max-width-modal: min(70vw, 860px);
+  --max-width-modal-lg: min(70vw, 1200px);
+  --max-width-message: 976px;
+  --width-tools-menu: 450px;
+  --height-tools-menu: 350px;
+  --max-height-tools-menu: 350px;
+  --height-cell-button: 40px;
+  --height-header: 64px;
+  --min-height-digest-card: 146px;
+  --max-height-modal: calc(100vh - 120px);
+  --width-automation-builder-menu: 250px;
+
+  --z-index-composer: 10;
+  --z-index-tag-suggestions: 10;
+  --z-index-side-nav-panel-backdrop: 20;
+  /*
+   * Canvas-anchored floating UI (e.g. the automations builder node-controls
+   * popover) that should sit above canvas nodes but below the assistant chat
+   * panel and other side overlays.
+   */
+  --z-index-builder-canvas-overlay: 25;
+  --z-index-side-nav-panel: 30;
+  --z-index-drag-drop-input-overlay: 50;
+  --z-index-read-only-conversation-footer: 60;
+  --z-index-backdrop: 200;
+  --z-index-modal: 400;
+  --z-index-popover: 400;
+  --z-index-tooltip: 999999;
+  --z-index-nested-modal: 100001;
+  --shadow-menu: 0px 4px 12px 0px rgba(197, 188, 172, 0.48);
+  --shadow-top: 4px 0px 12px 0px rgba(197, 188, 172, 0.48);
+  --shadow-composer-tab: 0px 4px 12px 0px rgba(0, 0, 0, 0.05);
+}
+
+/* https://tailwindcss.com/docs/theme#referencing-other-variables */
+@theme inline {
+  --font-regular:
+    'fontCustomRegular', var(--font-family-regular), Helvetica Neue, Helvetica, Arial, sans-serif;
+  --font-mono: 'fontCustomMonoRegular', var(--font-mono-regular), sans-serif;
+  --font-korean: 'fontCustomKorean', var(--font-family-korean), sans-serif;
+  --font-arabic: 'fontCustomArabic', var(--font-family-arabic), sans-serif;
+  --font-japanese: 'fontCustomJapanese', var(--font-family-japanese), sans-serif;
+  --font-katex: var(--font-family-katex), sans-serif;
+}

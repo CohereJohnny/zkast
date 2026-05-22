@@ -67,20 +67,20 @@ function EvidenceSection({
   if (rows === null) {
     return (
       <section className="mt-4" aria-busy="true">
-        <p className="font-medium text-secondary">Evidence</p>
-        <p className="mt-1 text-muted">Loading…</p>
+        <p className="font-medium text-muted-foreground">Evidence</p>
+        <p className="mt-1 text-muted-foreground">Loading…</p>
       </section>
     );
   }
 
   return (
     <section className="mt-4" aria-label="Source evidence">
-      <p className="font-medium text-secondary">
-        Evidence{total > rows.length ? <span className="text-muted"> · {total} total</span> : null}
+      <p className="font-medium text-muted-foreground">
+        Evidence{total > rows.length ? <span className="text-muted-foreground"> · {total} total</span> : null}
       </p>
       {error ? <p className="mt-1 text-red-300">{error}</p> : null}
       {rows.length === 0 && !error ? (
-        <p className="mt-1 text-muted">
+        <p className="mt-1 text-muted-foreground">
           No source evidence recorded yet. Re-run ingestion with LangExtract enabled to populate.
         </p>
       ) : null}
@@ -88,17 +88,17 @@ function EvidenceSection({
         {rows.map((r) => (
           <li
             key={r.id}
-            className="rounded border border-border-subtle bg-surface/40 p-2"
+            className="rounded border border-border bg-card/40 p-2"
           >
-            <p className="text-muted">
-              <span className="text-secondary">{r.document_filename}</span>
+            <p className="text-muted-foreground">
+              <span className="text-muted-foreground">{r.document_filename}</span>
               {r.page > 0 ? <span> · p.{r.page}</span> : null}
             </p>
-            <blockquote className="mt-1 border-l-2 border-accent-primary/60 pl-2 text-secondary">
+            <blockquote className="mt-1 border-l-2 border-primary/60 pl-2 text-muted-foreground">
               {r.quote}
             </blockquote>
             <Link
-              className="mt-1 inline-block text-accent-primary hover:underline"
+              className="mt-1 inline-block text-foreground hover:underline"
               href={`/documents/${encodeURIComponent(r.document_id)}?page=${r.page}&highlight=${r.char_start}`}
             >
               View in document →
@@ -173,7 +173,7 @@ export function GraphSelectionPanel({
 
   if (error && !detail) {
     return (
-      <aside className="border-l border-border-subtle bg-surface/90 p-3 text-caption text-red-300">
+      <aside className="border-l border-border bg-card/90 p-3 text-caption text-red-300">
         {error}
         <button type="button" className="ml-2 underline" onClick={onClose}>
           Close
@@ -183,7 +183,7 @@ export function GraphSelectionPanel({
   }
   if (!detail) {
     return (
-      <aside className="border-l border-border-subtle bg-surface/90 p-3 text-caption text-muted">
+      <aside className="border-l border-border bg-card/90 p-3 text-caption text-muted-foreground">
         Loading…
       </aside>
     );
@@ -202,37 +202,37 @@ export function GraphSelectionPanel({
         }}
       />
       <aside
-      className="max-h-[min(70vh,560px)] w-full overflow-y-auto rounded-md border border-border-subtle bg-surface/95 p-3 text-caption xl:max-w-sm xl:rounded-none xl:border-0 xl:border-l"
+      className="max-h-[min(70vh,560px)] w-full overflow-y-auto rounded-md border border-border bg-card/95 p-3 text-caption xl:max-w-sm xl:rounded-none xl:border-0 xl:border-l"
       aria-label="Entity details"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="text-body font-medium text-secondary">{detail.name}</p>
-          <p className="text-muted">
+          <p className="text-p font-medium text-muted-foreground">{detail.name}</p>
+          <p className="text-muted-foreground">
             {detail.type}
             {detail.is_user_edited ? " · edited" : ""}
           </p>
         </div>
-        <button type="button" className="text-muted underline" onClick={onClose}>
+        <button type="button" className="text-muted-foreground underline" onClick={onClose}>
           Close
         </button>
       </div>
       {error ? <p className="mt-2 text-red-300">{error}</p> : null}
-      <p className="mt-2 text-secondary">{detail.summary || "—"}</p>
+      <p className="mt-2 text-muted-foreground">{detail.summary || "—"}</p>
       {detail.aliases?.length ? (
-        <p className="mt-1 text-muted">Aliases: {detail.aliases.join(", ")}</p>
+        <p className="mt-1 text-muted-foreground">Aliases: {detail.aliases.join(", ")}</p>
       ) : null}
 
       <section className="mt-4">
-        <p className="font-medium text-secondary">Source notes</p>
-        <ul className="mt-1 list-inside list-disc space-y-1 text-muted">
+        <p className="font-medium text-muted-foreground">Source notes</p>
+        <ul className="mt-1 list-inside list-disc space-y-1 text-muted-foreground">
           {detail.source_notes?.length ? (
             detail.source_notes.map((n) => (
               <li key={n.id}>
-                <Link className="text-accent-primary hover:underline" href={`/notes?note=${encodeURIComponent(n.id)}`}>
+                <Link className="text-primary hover:underline" href={`/notes?note=${encodeURIComponent(n.id)}`}>
                   {n.title}
                 </Link>{" "}
-                <span className="text-muted">({n.origin})</span>
+                <span className="text-muted-foreground">({n.origin})</span>
               </li>
             ))
           ) : (
@@ -244,12 +244,12 @@ export function GraphSelectionPanel({
       <EvidenceSection workspaceId={workspaceId} entityId={entityId} />
 
       <section className="mt-4">
-        <p className="font-medium text-secondary">Source documents / pages</p>
-        <ul className="mt-1 space-y-2 text-muted">
+        <p className="font-medium text-muted-foreground">Source documents / pages</p>
+        <ul className="mt-1 space-y-2 text-muted-foreground">
           {detail.source_episodes?.length ? (
             detail.source_episodes.map((ep) => (
               <li key={ep.id}>
-                <span className="text-secondary">{ep.document_name}</span>
+                <span className="text-muted-foreground">{ep.document_name}</span>
                 {ep.page_start != null ? (
                   <span>
                     {" "}
@@ -266,12 +266,12 @@ export function GraphSelectionPanel({
       </section>
 
       <section className="mt-4">
-        <p className="font-medium text-secondary">Neighbors</p>
-        <ul className="mt-1 list-inside list-disc text-muted">
+        <p className="font-medium text-muted-foreground">Neighbors</p>
+        <ul className="mt-1 list-inside list-disc text-muted-foreground">
           {detail.neighbors_summary?.length ? (
             detail.neighbors_summary.map((n) => (
               <li key={n.id}>
-                {n.name} <span className="text-muted">({n.type})</span>
+                {n.name} <span className="text-muted-foreground">({n.type})</span>
               </li>
             ))
           ) : (
@@ -290,15 +290,15 @@ export function GraphSelectionPanel({
         }}
       />
 
-      <div className="mt-4 flex flex-col gap-2 border-t border-border-subtle pt-3">
+      <div className="mt-4 flex flex-col gap-2 border-t border-border pt-3">
         <button
           type="button"
-          className="rounded border border-border-strong px-2 py-1 text-left text-secondary hover:bg-surface"
+          className="rounded border border-input px-2 py-1 text-left text-muted-foreground hover:bg-card"
           onClick={() => setMergeOpen(true)}
         >
           Merge with another entity…
         </button>
-        <p className="text-muted">Ask about this — Sprint 6</p>
+        <p className="text-muted-foreground">Ask about this — Sprint 6</p>
       </div>
     </aside>
     </>

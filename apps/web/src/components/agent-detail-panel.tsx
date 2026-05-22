@@ -107,20 +107,20 @@ function ConversationAction({
     return (
       <Link
         href={`/notes?agentId=${encodeURIComponent(agentId)}`}
-        className="shrink-0 text-caption text-muted hover:text-primary"
+        className="shrink-0 text-caption text-muted-foreground hover:text-foreground"
       >
         Notes
       </Link>
     );
   }
   if (status === "syncing") {
-    return <span className="shrink-0 text-caption text-muted">Importing…</span>;
+    return <span className="shrink-0 text-caption text-muted-foreground">Importing…</span>;
   }
   const label = status === "outdated" ? "Re-import" : "Import";
   return (
     <button
       type="button"
-      className="shrink-0 rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface-raised hover:text-primary disabled:opacity-50"
+      className="shrink-0 rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
       disabled={busy}
       onClick={onImport}
     >
@@ -321,17 +321,17 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
 
   return (
     <div className="flex flex-col gap-4">
-      <Link href="/agents" className="inline-flex items-center gap-1 text-caption text-muted hover:text-primary">
+      <Link href="/agents" className="inline-flex items-center gap-1 text-caption text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" strokeWidth={1.5} aria-hidden />
         All agents
       </Link>
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-title-2 text-primary">Agent conversations</h1>
+        <h1 className="text-h4 text-foreground">Agent conversations</h1>
         <button
           type="button"
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border border-border-subtle px-3 py-1.5 text-body text-secondary",
-            "hover:bg-surface-raised hover:text-primary disabled:opacity-50",
+            "inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-p text-muted-foreground",
+            "hover:bg-secondary hover:text-foreground disabled:opacity-50",
           )}
           onClick={() => {
             setBusy("refresh");
@@ -343,9 +343,9 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
           Refresh from North
         </button>
       </div>
-      <div className="rounded-lg border border-border-subtle bg-surface-raised/60 px-3 py-3">
+      <div className="rounded-lg border border-border bg-secondary/60 px-3 py-3">
         {statsLoading ? (
-          <p className="text-caption text-muted" role="status">
+          <p className="text-caption text-muted-foreground" role="status">
             Loading memory stats…
           </p>
         ) : statsError ? (
@@ -353,22 +353,22 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
             {statsError}
           </p>
         ) : stats ? (
-          <div className="flex flex-wrap items-center gap-3 text-caption text-secondary">
+          <div className="flex flex-wrap items-center gap-3 text-caption text-muted-foreground">
             <span>
-              <strong className="text-primary">{stats.imported_documents}</strong> imported
+              <strong className="text-foreground">{stats.imported_documents}</strong> imported
             </span>
             <span>
-              <strong className="text-primary">{stats.derived_notes}</strong> notes
+              <strong className="text-foreground">{stats.derived_notes}</strong> notes
             </span>
             <span>
-              <strong className="text-primary">{stats.cached_conversations}</strong> cached
+              <strong className="text-foreground">{stats.cached_conversations}</strong> cached
             </span>
             <span>
-              <strong className="text-primary">{stats.note_amem_embeddings}</strong> A-MEM indexed
+              <strong className="text-foreground">{stats.note_amem_embeddings}</strong> A-MEM indexed
             </span>
             {stats.import_digest ? (
               <span
-                className="font-mono text-muted"
+                className="font-mono text-muted-foreground"
                 title="Rollup of imported conversation checksums for this agent"
               >
                 digest {stats.import_digest.slice(0, 12)}…
@@ -376,25 +376,25 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
             ) : null}
             <Link
               href={`/notes?agentId=${encodeURIComponent(agentId)}`}
-              className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
+              className="rounded border border-border px-2 py-0.5 hover:bg-card hover:text-foreground"
             >
               View notes
             </Link>
             <Link
               href={`/graph?agent_id=${encodeURIComponent(agentId)}`}
-              className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
+              className="rounded border border-border px-2 py-0.5 hover:bg-card hover:text-foreground"
             >
               View graph
             </Link>
             <Link
               href={`/chat?agent_id=${encodeURIComponent(agentId)}`}
-              className="rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary"
+              className="rounded border border-border px-2 py-0.5 hover:bg-card hover:text-foreground"
             >
               Open in chat
             </Link>
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded border border-border-subtle px-2 py-0.5 hover:bg-surface hover:text-primary disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 hover:bg-card hover:text-foreground disabled:opacity-50"
               disabled={dreamBusy}
               onClick={async () => {
                 setDreamBusy(true);
@@ -428,21 +428,21 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
       </div>
       <DreamJobStatus workspaceId={workspaceId} agentId={agentId} jobId={dreamJobId} />
       {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-p text-destructive">
           {error}
         </p>
       ) : null}
       {importNotice ? (
-        <p className="rounded-md border border-border-subtle bg-surface-raised px-3 py-2 text-body text-secondary">
+        <p className="rounded-md border border-border bg-secondary px-3 py-2 text-p text-muted-foreground">
           {importNotice}
         </p>
       ) : null}
       {listLoading && rows.length === 0 ? (
-        <p className="text-caption text-muted" role="status">
+        <p className="text-caption text-muted-foreground" role="status">
           Loading conversations…
         </p>
       ) : null}
-      <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface">
+      <ul className="divide-y divide-border-subtle rounded-lg border border-border bg-card">
         {rows.map((r) => {
           const open = expandedId === r.north_conversation_id;
           const preview = previewById[r.north_conversation_id];
@@ -453,7 +453,7 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                 <div className="flex min-w-0 flex-1 items-start gap-2">
                   <button
                     type="button"
-                    className="mt-0.5 shrink-0 rounded p-1 text-muted hover:bg-surface-raised hover:text-primary"
+                    className="mt-0.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
                     aria-expanded={open}
                     aria-controls={panelId}
                     title={open ? "Collapse preview" : "Expand preview"}
@@ -467,9 +467,9 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                   </button>
                   <div className="min-w-0 flex-1">
                     {r.title ? (
-                      <div className="truncate text-body text-primary">{r.title}</div>
+                      <div className="truncate text-p text-foreground">{r.title}</div>
                     ) : null}
-                    <p className="truncate font-mono text-caption text-muted">{r.north_conversation_id}</p>
+                    <p className="truncate font-mono text-caption text-muted-foreground">{r.north_conversation_id}</p>
                     <ConversationMemoryTelemetry
                       memory={
                         r.memory
@@ -496,12 +496,12 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
               {open ? (
                 <div
                   id={panelId}
-                  className="border-t border-border-subtle bg-surface-raised px-3 py-3 pl-10"
+                  className="border-t border-border bg-secondary px-3 py-3 pl-10"
                   role="region"
                   aria-label="Conversation preview"
                 >
                   {!preview || preview.status === "loading" ? (
-                    <p className="text-caption text-muted" role="status">
+                    <p className="text-caption text-muted-foreground" role="status">
                       Loading preview…
                     </p>
                   ) : null}
@@ -510,7 +510,7 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                       <p className="text-caption text-destructive">{preview.message}</p>
                       <button
                         type="button"
-                        className="rounded-md border border-border-subtle px-2 py-1 text-caption text-secondary hover:bg-surface hover:text-primary"
+                        className="rounded-md border border-border px-2 py-1 text-caption text-muted-foreground hover:bg-card hover:text-foreground"
                         onClick={() => void loadPreview(r.north_conversation_id)}
                       >
                         Retry preview
@@ -520,8 +520,8 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                   {preview?.status === "ready" ? (
                     <div className="flex max-h-[min(28rem,55vh)] flex-col gap-2 overflow-y-auto pr-1">
                       {(preview.title || preview.message_count > 0) && (
-                        <div className="text-caption text-muted">
-                          {preview.title ? <span className="text-secondary">{preview.title}</span> : null}
+                        <div className="text-caption text-muted-foreground">
+                          {preview.title ? <span className="text-muted-foreground">{preview.title}</span> : null}
                           {preview.title && preview.message_count > 0 ? " · " : null}
                           {preview.message_count > 0 ? (
                             <span>
@@ -536,21 +536,21 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                           <div
                             key={`${r.north_conversation_id}-${i}-${m.role}`}
                             className={cn(
-                              "rounded-md border border-border-subtle px-3 py-2",
+                              "rounded-md border border-border px-3 py-2",
                               m.role === "user" && "border-primary/25 bg-primary/5",
-                              m.role === "assistant" && "bg-surface",
-                              m.role !== "user" && m.role !== "assistant" && "bg-surface opacity-90",
+                              m.role === "assistant" && "bg-card",
+                              m.role !== "user" && m.role !== "assistant" && "bg-card opacity-90",
                             )}
                           >
-                            <div className="mb-1 text-caption font-medium uppercase tracking-wide text-muted">
+                            <div className="mb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground">
                               {m.role}
                             </div>
                             {m.excerpt ? (
-                              <pre className="whitespace-pre-wrap break-words font-sans text-body text-primary">
+                              <pre className="whitespace-pre-wrap break-words font-regular text-p text-foreground">
                                 {m.excerpt}
                               </pre>
                             ) : (
-                              <p className="text-caption italic text-muted">No text content</p>
+                              <p className="text-caption italic text-muted-foreground">No text content</p>
                             )}
                           </div>
                         ))}
@@ -564,7 +564,7 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
         })}
       </ul>
       {rows.length === 0 && !error && !listLoading ? (
-        <p className="text-caption text-muted">No cached conversations — click refresh to pull from North.</p>
+        <p className="text-caption text-muted-foreground">No cached conversations — click refresh to pull from North.</p>
       ) : null}
     </div>
   );

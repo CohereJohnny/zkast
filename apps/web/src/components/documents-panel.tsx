@@ -112,7 +112,7 @@ function statusStyles(status: string): string {
     case "building_graph":
       return "bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/35";
     default:
-      return "bg-white/10 text-muted ring-1 ring-border-subtle";
+      return "bg-white/10 text-muted-foreground ring-1 ring-border-subtle";
   }
 }
 
@@ -425,10 +425,10 @@ export function DocumentsPanel({
       {isPdfLibrary ? (
         <section aria-label="Upload PDFs">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-title-3 text-secondary">{listHeading}</p>
+            <p className="text-h5 text-muted-foreground">{listHeading}</p>
             <button
               type="button"
-              className="rounded-md bg-accent-primary px-3 py-1.5 text-body font-medium text-canvas"
+              className="rounded-md bg-primary px-3 py-1.5 text-p font-medium text-primary-foreground"
               onClick={() => inputRef.current?.click()}
             >
               Choose PDFs
@@ -450,7 +450,7 @@ export function DocumentsPanel({
             role="button"
             tabIndex={0}
             className={`${dropZoneClass} mt-3 flex cursor-pointer flex-col items-center justify-center gap-2 text-center text-caption outline-none transition-colors ${
-              dragOver ? "border-accent-primary bg-accent-primary/10" : "border-border-strong bg-surface/60"
+              dragOver ? "border-primary bg-primary/10" : "border-input bg-card/60"
             }`}
             onDragOver={(e) => {
               e.preventDefault();
@@ -466,8 +466,8 @@ export function DocumentsPanel({
             }}
             onClick={() => inputRef.current?.click()}
           >
-            <span className="text-body text-secondary">Drop PDFs here or click to browse</span>
-            <span className="text-caption text-muted">Max {Math.round(uploadLimit / (1024 * 1024))} MB per file</span>
+            <span className="text-p text-muted-foreground">Drop PDFs here or click to browse</span>
+            <span className="text-caption text-muted-foreground">Max {Math.round(uploadLimit / (1024 * 1024))} MB per file</span>
           </div>
           {uploadError ? (
             <p className="mt-2 text-caption text-red-300" role="alert">
@@ -477,10 +477,10 @@ export function DocumentsPanel({
         </section>
       ) : (
         <section aria-label="Imported conversations">
-          <p className="text-title-3 text-secondary">{listHeading}</p>
-          <p className="mt-2 text-caption text-muted">
+          <p className="text-h5 text-muted-foreground">{listHeading}</p>
+          <p className="mt-2 text-caption text-muted-foreground">
             Transcripts imported from{" "}
-            <Link href="/agents" className="text-secondary underline hover:text-primary">
+            <Link href="/agents" className="text-muted-foreground underline hover:text-foreground">
               Agents
             </Link>{" "}
             appear here. PDFs stay under Documents.
@@ -490,7 +490,7 @@ export function DocumentsPanel({
 
       <section aria-label="Document list" className="min-h-0 flex-1 overflow-auto">
         {loading ? (
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             {library === "conversations" ? "Loading conversations…" : "Loading documents…"}
           </p>
         ) : listError ? (
@@ -498,7 +498,7 @@ export function DocumentsPanel({
             {listError}
           </p>
         ) : docs.length === 0 ? (
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             {library === "conversations"
               ? "No imported conversations yet. Open an agent under Agents and import from North."
               : "No PDFs uploaded yet."}
@@ -510,35 +510,35 @@ export function DocumentsPanel({
               return (
                 <section
                   key={sec.key}
-                  className="overflow-hidden rounded-lg border border-border-subtle bg-surface/40"
+                  className="overflow-hidden rounded-lg border border-border bg-card/40"
                   aria-label={`Conversations — ${sec.label}`}
                 >
                   <button
                     type="button"
                     className={cn(
-                      "flex w-full items-start gap-2 bg-surface/80 px-3 py-2.5 text-left transition-colors hover:bg-surface/95",
-                      expanded ? "border-b border-border-subtle" : "",
+                      "flex w-full items-start gap-2 bg-card/80 px-3 py-2.5 text-left transition-colors hover:bg-card/95",
+                      expanded ? "border-b border-border" : "",
                     )}
                     aria-expanded={expanded}
                     onClick={() => toggleAgentSectionCollapsed(sec.key)}
                   >
                     <ChevronRight
                       className={cn(
-                        "mt-0.5 h-4 w-4 shrink-0 text-muted transition-transform duration-200",
+                        "mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
                         expanded && "rotate-90",
                       )}
                       strokeWidth={1.5}
                       aria-hidden
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-body font-semibold text-primary">{sec.label}</span>
-                      <span className="mt-0.5 block text-caption text-muted">
+                      <span className="block text-p font-semibold text-foreground">{sec.label}</span>
+                      <span className="mt-0.5 block text-caption text-muted-foreground">
                         {sec.rows.length} imported conversation{sec.rows.length === 1 ? "" : "s"}
                       </span>
                     </span>
                   </button>
                   {expanded ? (
-                    <ul className="ml-4 border-l-2 border-border-subtle pl-3 pr-2">
+                    <ul className="ml-4 border-l-2 border-border pl-3 pr-2">
                       {sec.rows.map((d: DocRow) => {
                         const jobId = activeJobs[d.id];
                         const livePct = progressByDoc[d.id];
@@ -559,25 +559,25 @@ export function DocumentsPanel({
                         const whenIso = d.conversation_activity_at ?? d.created_at;
                         const whenLabel = d.conversation_activity_at ? "Conversation" : "Imported";
                         return (
-                          <li key={d.id} className="border-b border-border-subtle last:border-b-0">
+                          <li key={d.id} className="border-b border-border last:border-b-0">
                             <button
                               type="button"
-                              className="flex w-full flex-col gap-1 py-3 pl-1 pr-1 text-left hover:bg-surface/70"
+                              className="flex w-full flex-col gap-1 py-3 pl-1 pr-1 text-left hover:bg-card/70"
                               onClick={() => setSelectedId(d.id)}
                             >
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className="line-clamp-2 text-body font-medium text-secondary">{title}</span>
+                                <span className="line-clamp-2 text-p font-medium text-muted-foreground">{title}</span>
                                 <span
                                   className={`shrink-0 rounded-full px-2 py-0.5 text-caption capitalize ${statusStyles(d.status)}`}
                                 >
                                   {d.status.replace(/_/g, " ")}
                                 </span>
                               </div>
-                              <p className="text-caption text-muted">
-                                <span className="text-secondary/90">{whenLabel}: </span>
+                              <p className="text-caption text-muted-foreground">
+                                <span className="text-muted-foreground/90">{whenLabel}: </span>
                                 {formatLocalTs(whenIso)}
                                 {d.page_count != null ? (
-                                  <span className="text-muted">
+                                  <span className="text-muted-foreground">
                                     {" "}
                                     · {d.page_count} episode{d.page_count === 1 ? "" : "s"}
                                   </span>
@@ -590,7 +590,7 @@ export function DocumentsPanel({
                               />
                               {d.north_conversation_id ? (
                                 <p
-                                  className="truncate font-mono text-[11px] text-muted/80"
+                                  className="truncate font-mono text-[11px] text-muted-foreground/80"
                                   title={d.north_conversation_id}
                                 >
                                   {d.north_conversation_id}
@@ -599,7 +599,7 @@ export function DocumentsPanel({
                               {showBar ? (
                                 <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" aria-hidden>
                                   <div
-                                    className="h-full bg-accent-primary transition-[width] duration-300"
+                                    className="h-full bg-primary transition-[width] duration-300"
                                     style={{ width: `${barPct}%` }}
                                   />
                                 </div>
@@ -618,7 +618,7 @@ export function DocumentsPanel({
             })}
           </div>
         ) : (
-          <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface/40">
+          <ul className="divide-y divide-border-subtle rounded-lg border border-border bg-card/40">
             {docs.map((d) => {
               const jobId = activeJobs[d.id];
               const livePct = progressByDoc[d.id];
@@ -638,24 +638,24 @@ export function DocumentsPanel({
                 <li key={d.id}>
                   <button
                     type="button"
-                    className="flex w-full flex-col gap-1 px-3 py-3 text-left hover:bg-surface/80"
+                    className="flex w-full flex-col gap-1 px-3 py-3 text-left hover:bg-card/80"
                     onClick={() => setSelectedId(d.id)}
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-body font-medium text-secondary">{d.original_filename}</span>
+                      <span className="text-p font-medium text-muted-foreground">{d.original_filename}</span>
                       <span
                         className={`rounded-full px-2 py-0.5 text-caption capitalize ${statusStyles(d.status)}`}
                       >
                         {d.status.replace(/_/g, " ")}
                       </span>
                       {d.page_count != null ? (
-                        <span className="text-caption text-muted">{d.page_count} pages</span>
+                        <span className="text-caption text-muted-foreground">{d.page_count} pages</span>
                       ) : null}
                     </div>
                     {showBar ? (
                       <div className="h-1.5 w-full overflow-hidden rounded bg-white/10" aria-hidden>
                         <div
-                          className="h-full bg-accent-primary transition-[width] duration-300"
+                          className="h-full bg-primary transition-[width] duration-300"
                           style={{ width: `${barPct}%` }}
                         />
                       </div>

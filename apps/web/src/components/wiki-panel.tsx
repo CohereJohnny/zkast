@@ -297,27 +297,27 @@ export function WikiPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <header className="flex flex-wrap items-center gap-2">
-        <BookOpen className="h-5 w-5 text-muted" strokeWidth={1.5} aria-hidden />
-        <h1 className="text-title-2 text-primary">Wiki</h1>
-        <p className="text-caption text-muted">
+        <BookOpen className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} aria-hidden />
+        <h1 className="text-h4 text-foreground">Wiki</h1>
+        <p className="text-caption text-muted-foreground">
           LLM-generated, citation-backed pages compiled from your atomic notes.
         </p>
       </header>
 
       {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-body text-destructive">
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-p text-destructive">
           {error}
         </p>
       ) : null}
 
       <section
-        className="flex flex-wrap items-end gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-2"
+        className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-card px-3 py-2"
         aria-label="Wiki scope and actions"
       >
-        <label className="block text-caption text-muted">
+        <label className="block text-caption text-muted-foreground">
           Wiki space
           <select
-            className="mt-1 block w-64 rounded-md border border-border-strong bg-surface px-2 py-1 text-body text-secondary"
+            className="mt-1 block w-64 rounded-md border border-input bg-card px-2 py-1 text-p text-muted-foreground"
             value={activeSpaceId ?? ""}
             onChange={(e) => setActiveSpaceId(e.target.value || null)}
           >
@@ -344,8 +344,8 @@ export function WikiPanel({
           onClick={() => void onGenerate()}
           disabled={generating}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border border-border-subtle px-3 py-1.5 text-body text-secondary",
-            "hover:bg-surface-raised hover:text-primary disabled:opacity-50",
+            "inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-p text-muted-foreground",
+            "hover:bg-secondary hover:text-foreground disabled:opacity-50",
           )}
         >
           <Sparkles className="h-4 w-4" strokeWidth={1.5} aria-hidden />
@@ -357,7 +357,7 @@ export function WikiPanel({
             void reloadSpaces();
             if (activeSpaceId) void reloadPages(activeSpaceId);
           }}
-          className="inline-flex items-center gap-1 rounded-md border border-border-subtle px-3 py-1.5 text-body text-secondary hover:bg-surface-raised hover:text-primary"
+          className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-p text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
           <RefreshCw className="h-4 w-4" strokeWidth={1.5} aria-hidden />
           Refresh
@@ -371,13 +371,13 @@ export function WikiPanel({
       />
 
       {spacesLoading ? (
-        <p className="text-caption text-muted" role="status">
+        <p className="text-caption text-muted-foreground" role="status">
           Loading wiki spaces…
         </p>
       ) : null}
 
       {!spacesLoading && spaces.length === 0 ? (
-        <div className="rounded-lg border border-border-subtle bg-surface px-4 py-6 text-body text-muted">
+        <div className="rounded-lg border border-border bg-card px-4 py-6 text-p text-muted-foreground">
           <p>
             No wiki spaces yet. Click <strong>Create and generate</strong> to
             compile a workspace-wide wiki from your atomic notes, or pick a
@@ -390,13 +390,13 @@ export function WikiPanel({
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[260px_1fr]">
           <aside
             aria-label="Wiki page list"
-            className="min-h-0 overflow-auto rounded-lg border border-border-subtle bg-surface px-2 py-2"
+            className="min-h-0 overflow-auto rounded-lg border border-border bg-card px-2 py-2"
           >
             {pagesLoading ? (
-              <p className="px-2 py-1 text-caption text-muted">Loading pages…</p>
+              <p className="px-2 py-1 text-caption text-muted-foreground">Loading pages…</p>
             ) : null}
             {pages.length === 0 && !pagesLoading ? (
-              <p className="px-2 py-1 text-caption text-muted">
+              <p className="px-2 py-1 text-caption text-muted-foreground">
                 No pages yet. Generate to populate.
               </p>
             ) : null}
@@ -405,7 +405,7 @@ export function WikiPanel({
               if (group.length === 0) return null;
               return (
                 <section key={pt} className="mb-2">
-                  <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted">
+                  <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                     {PAGE_TYPE_LABELS[pt]}
                   </p>
                   <ul>
@@ -419,19 +419,19 @@ export function WikiPanel({
                             className={cn(
                               "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-caption",
                               active
-                                ? "bg-accent-primary/15 text-primary"
-                                : "text-secondary hover:bg-surface-raised hover:text-primary",
+                                ? "bg-primary/15 text-foreground"
+                                : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                             )}
                           >
                             <FileText
-                              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted"
+                              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
                               strokeWidth={1.5}
                               aria-hidden
                             />
                             <span className="min-w-0">
-                              <span className="block truncate text-body">{p.title}</span>
+                              <span className="block truncate text-p">{p.title}</span>
                               {p.summary ? (
-                                <span className="block truncate text-caption text-muted">
+                                <span className="block truncate text-caption text-muted-foreground">
                                   {p.summary}
                                 </span>
                               ) : null}
@@ -448,49 +448,49 @@ export function WikiPanel({
 
           <section
             aria-label="Wiki page reader"
-            className="min-h-0 overflow-auto rounded-lg border border-border-subtle bg-surface px-4 py-4"
+            className="min-h-0 overflow-auto rounded-lg border border-border bg-card px-4 py-4"
           >
             {!selectedPage ? (
-              <p className="text-caption text-muted">
+              <p className="text-caption text-muted-foreground">
                 Select a page on the left to read its content.
               </p>
             ) : (
               <div className="grid min-h-0 grid-cols-1 gap-4 xl:grid-cols-[1fr_240px]">
                 <article className="prose prose-invert max-w-none">
                   <header className="mb-3">
-                    <p className="text-caption uppercase tracking-wider text-muted">
+                    <p className="text-caption uppercase tracking-wider text-muted-foreground">
                       {PAGE_TYPE_LABELS[selectedPage.page_type] ?? selectedPage.page_type}
                     </p>
-                    <h2 className="text-title-2 text-primary">{selectedPage.title}</h2>
+                    <h2 className="text-h4 text-foreground">{selectedPage.title}</h2>
                     {selectedPage.summary ? (
-                      <p className="text-caption text-muted">{selectedPage.summary}</p>
+                      <p className="text-caption text-muted-foreground">{selectedPage.summary}</p>
                     ) : null}
                   </header>
-                  <pre className="whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-canvas px-3 py-3 text-body text-primary">
+                  <pre className="whitespace-pre-wrap break-words rounded-md border border-border bg-background px-3 py-3 text-p text-foreground">
                     {selectedPage.body ?? ""}
                   </pre>
                 </article>
                 <aside
                   aria-label="Page citations"
-                  className="rounded-md border border-border-subtle bg-canvas px-3 py-3 text-caption"
+                  className="rounded-md border border-border bg-background px-3 py-3 text-caption"
                 >
-                  <p className="text-[10px] uppercase tracking-wider text-muted">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Citations ({selectedSources.length})
                   </p>
                   {selectedSources.length === 0 ? (
-                    <p className="mt-2 text-muted">No citations recorded.</p>
+                    <p className="mt-2 text-muted-foreground">No citations recorded.</p>
                   ) : (
                     <ul className="mt-2 space-y-2">
                       {selectedSources.map((src) => (
-                        <li key={src.id} className="rounded border border-border-subtle bg-surface px-2 py-1.5">
-                          <p className="font-mono text-[10px] uppercase text-muted">
+                        <li key={src.id} className="rounded border border-border bg-card px-2 py-1.5">
+                          <p className="font-mono text-[10px] uppercase text-muted-foreground">
                             {src.source_kind}
                           </p>
-                          <p className="truncate font-mono text-caption text-secondary" title={src.source_id}>
+                          <p className="truncate font-mono text-caption text-muted-foreground" title={src.source_id}>
                             {src.source_id}
                           </p>
                           {src.quote ? (
-                            <p className="mt-1 text-caption text-muted">{src.quote}</p>
+                            <p className="mt-1 text-caption text-muted-foreground">{src.quote}</p>
                           ) : null}
                         </li>
                       ))}

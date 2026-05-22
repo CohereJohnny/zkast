@@ -105,7 +105,7 @@ export function AgentPicker({
         : "";
 
   return (
-    <label className="relative block text-caption text-muted">
+    <label className="relative block text-caption text-muted-foreground">
       {label}
       <div ref={wrapperRef} className="relative mt-1">
         <input
@@ -135,12 +135,12 @@ export function AgentPicker({
               setOpen(false);
             }
           }}
-          className="w-full rounded-md border border-border-strong bg-surface px-2 py-1 text-body text-secondary"
+          className="w-full rounded-md border border-input bg-card px-2 py-1 text-p text-muted-foreground"
         />
         {allowClear && value ? (
           <button
             type="button"
-            className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-caption text-muted hover:text-secondary"
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-caption text-muted-foreground hover:text-muted-foreground"
             onClick={() => pick("")}
             aria-label="Clear agent filter"
           >
@@ -150,16 +150,16 @@ export function AgentPicker({
         {open && filtered.length > 0 ? (
           <ul
             role="listbox"
-            className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-md border border-border-strong bg-surface py-1 shadow-lg"
+            className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-md border border-input bg-card py-1 shadow-lg"
           >
             {filtered.map((a, idx) => (
               <li key={a.id} role="option" aria-selected={idx === activeIdx}>
                 <button
                   type="button"
-                  className={`flex w-full flex-col px-2 py-1.5 text-left text-body ${
+                  className={`flex w-full flex-col px-2 py-1.5 text-left text-p ${
                     idx === activeIdx
-                      ? "bg-accent-primary/15 text-primary"
-                      : "text-secondary hover:bg-surface-raised"
+                      ? "bg-primary/15 text-foreground"
+                      : "text-muted-foreground hover:bg-secondary"
                   }`}
                   onMouseDown={(e) => {
                     e.preventDefault();
@@ -167,7 +167,7 @@ export function AgentPicker({
                   }}
                 >
                   <span className="truncate">{a.display_name || a.external_agent_id}</span>
-                  <span className="truncate font-mono text-[10px] text-muted">
+                  <span className="truncate font-mono text-[10px] text-muted-foreground">
                     {a.external_agent_id}
                   </span>
                 </button>
@@ -176,7 +176,7 @@ export function AgentPicker({
           </ul>
         ) : null}
         {open && agents && filtered.length === 0 ? (
-          <p className="absolute z-20 mt-1 w-full rounded-md border border-border-subtle bg-surface px-2 py-2 text-caption text-muted">
+          <p className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card px-2 py-2 text-caption text-muted-foreground">
             {loadError ?? "No matching agents"}
           </p>
         ) : null}

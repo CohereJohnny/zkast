@@ -101,7 +101,7 @@ export function ChatScopePicker({
           label="North agent scope (optional)"
           placeholder="All agents — leave empty for workspace-wide retrieval"
         />
-        <p className="mt-1 text-caption text-muted">
+        <p className="mt-1 text-caption text-muted-foreground">
           When set, retrieval (graph, hybrid, A-MEM lite, zettel notes) restricts to this
           agent&apos;s documents and notes only.
         </p>
@@ -118,11 +118,11 @@ export function ChatScopePicker({
         onChange={(tag) => patch({ tags: tag ? [tag] : [] })}
         label="Restrict to tag"
       />
-      <label className="text-caption text-muted">
+      <label className="text-caption text-muted-foreground">
         As-of timestamp (optional)
         <input
           type="datetime-local"
-          className="mt-1 w-full rounded border border-border-strong bg-surface px-2 py-1 text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          className="mt-1 w-full rounded border border-input bg-card px-2 py-1 text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           value={value.valid_at ?? ""}
           onChange={(e) =>
             patch({ valid_at: e.target.value || undefined })
@@ -143,10 +143,10 @@ export function ChatScopePicker({
         onChange={(csv) => patch({ edge_types: fromCsv(csv) })}
         label="Edge types"
       />
-      <label className="text-caption text-muted sm:col-span-2">
+      <label className="text-caption text-muted-foreground sm:col-span-2">
         Pin to snapshot (optional)
         <select
-          className="mt-1 w-full cursor-pointer rounded border border-border-strong bg-surface px-2 py-1 text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          className="mt-1 w-full cursor-pointer rounded border border-input bg-card px-2 py-1 text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           value={value.pinned_snapshot_id ?? ""}
           onChange={(e) =>
             patch({

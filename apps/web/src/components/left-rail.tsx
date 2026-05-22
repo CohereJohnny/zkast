@@ -40,11 +40,11 @@ export function LeftRail({ workspaceName }: { workspaceName: string }) {
   return (
     <aside
       aria-label="Primary navigation"
-      className="fixed left-4 top-4 bottom-4 z-40 flex w-52 flex-col rounded-lg border border-border-subtle bg-surface py-3 shadow-modal"
+      className="fixed left-4 top-4 bottom-4 z-40 flex w-52 flex-col rounded-lg border border-border bg-card py-3 shadow-lg"
     >
-      <div className="border-b border-border-subtle px-3 pb-3">
-        <p className="truncate text-caption text-muted">Workspace</p>
-        <p className="truncate text-title-3 text-primary">{workspaceName}</p>
+      <div className="border-b border-border px-3 pb-3">
+        <p className="truncate text-caption text-muted-foreground">Workspace</p>
+        <p className="truncate text-h5 text-foreground">{workspaceName}</p>
       </div>
       <nav className="mt-2 flex flex-1 flex-col gap-0.5 px-2">
         {items.map(({ href, label, Icon }) => {
@@ -54,8 +54,8 @@ export function LeftRail({ workspaceName }: { workspaceName: string }) {
               key={href}
               href={href}
               className={cn(
-                "flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-body text-secondary transition hover:bg-surface-raised hover:text-primary",
-                active && "bg-surface-raised text-primary",
+                "flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-p text-muted-foreground transition hover:bg-secondary hover:text-foreground",
+                active && "bg-secondary text-foreground",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" strokeWidth={1.5} aria-hidden />

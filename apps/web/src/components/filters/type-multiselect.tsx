@@ -82,16 +82,16 @@ export function TypeMultiselect({
 
   if (options === null) {
     return (
-      <div className="text-caption text-muted">
+      <div className="text-caption text-muted-foreground">
         <p>{label}</p>
-        <p className="mt-1 text-muted">Loading…</p>
+        <p className="mt-1 text-muted-foreground">Loading…</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="text-caption text-muted">
+      <div className="text-caption text-muted-foreground">
         <p>{label}</p>
         <p className="mt-1 text-red-300">{error}</p>
       </div>
@@ -100,9 +100,9 @@ export function TypeMultiselect({
 
   if (options.length === 0) {
     return (
-      <div className="text-caption text-muted">
+      <div className="text-caption text-muted-foreground">
         <p>{label}</p>
-        <p className="mt-1 text-muted/80">
+        <p className="mt-1 text-muted-foreground/80">
           No {kind === "entity_types" ? "entity" : "edge"} types yet. Ingest a document to populate.
         </p>
       </div>
@@ -110,7 +110,7 @@ export function TypeMultiselect({
   }
 
   return (
-    <fieldset className="text-caption text-muted">
+    <fieldset className="text-caption text-muted-foreground">
       <legend className="float-none mb-1 inline-block">{label}</legend>
       <ul className="flex flex-wrap gap-1.5" role="listbox" aria-multiselectable="true">
         {options.map((opt) => {
@@ -122,14 +122,14 @@ export function TypeMultiselect({
                 role="option"
                 aria-selected={active}
                 onClick={() => toggle(opt.name)}
-                className={`flex cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-caption transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary ${
+                className={`flex cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-caption transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   active
-                    ? "border-accent-primary bg-accent-primary/15 text-secondary"
-                    : "border-border-strong bg-surface text-muted hover:border-border-strong/80 hover:bg-surface-raised hover:text-secondary"
+                    ? "border-primary bg-primary/15 text-muted-foreground"
+                    : "border-input bg-card text-muted-foreground hover:border-input/80 hover:bg-secondary hover:text-muted-foreground"
                 }`}
               >
                 <span>{opt.name}</span>
-                <span className="text-[10px] text-muted">{opt.count}</span>
+                <span className="text-[10px] text-muted-foreground">{opt.count}</span>
               </button>
             </li>
           );

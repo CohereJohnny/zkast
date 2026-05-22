@@ -14,7 +14,7 @@ export type ConversationMemoryStats = {
 function TelemetryLine({ parts }: { parts: ReactNode[] }) {
   if (parts.length === 0) return null;
   return (
-    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted">
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted-foreground">
       {parts.map((part, i) => (
         <span key={i} className="inline-flex items-center gap-2">
           {i > 0 ? <span aria-hidden>·</span> : null}
@@ -38,10 +38,10 @@ export function ConversationMemoryTelemetry({
   importing?: boolean;
 }) {
   if (importing) {
-    return <p className="text-caption text-muted">Import in progress…</p>;
+    return <p className="text-caption text-muted-foreground">Import in progress…</p>;
   }
   if (notImported) {
-    return <p className="text-caption text-muted">Cached from North · not imported</p>;
+    return <p className="text-caption text-muted-foreground">Cached from North · not imported</p>;
   }
 
   const mem = memory ?? {};
@@ -49,14 +49,14 @@ export function ConversationMemoryTelemetry({
   if (typeof mem.notes === "number") {
     parts.push(
       <span key="notes">
-        <strong className="text-secondary">{mem.notes}</strong> notes
+        <strong className="text-muted-foreground">{mem.notes}</strong> notes
       </span>,
     );
   }
   if (typeof mem.amem_embeddings === "number") {
     parts.push(
       <span key="amem">
-        <strong className="text-secondary">{mem.amem_embeddings}</strong> A-MEM indexed
+        <strong className="text-muted-foreground">{mem.amem_embeddings}</strong> A-MEM indexed
       </span>,
     );
   }
@@ -73,7 +73,7 @@ export function ConversationMemoryTelemetry({
   }
   if (mem.outdated) {
     parts.push(
-      <span key="outdated" className="text-secondary">
+      <span key="outdated" className="text-muted-foreground">
         update available
       </span>,
     );

@@ -1,0 +1,27 @@
+/**
+ * Minimal globals.css integration for external Next.js apps.
+ * Merge into src/app/globals.css (or src/styles/globals.css).
+ */
+@import 'tailwindcss';
+@custom-variant dark (&:where(.dark, .dark *));
+@import 'tw-animate-css';
+@import './tailwind-tokens.css';
+@import './theme.css';
+
+@layer base {
+  button:not(:disabled),
+  a:not(:disabled),
+  [aria-role='button']:not(:disabled),
+  [href]:not(:disabled) {
+    @apply cursor-pointer;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    height: 100%;
+    width: 100%;
+  }
+}

@@ -165,21 +165,21 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
       // so the three answer columns aren't squeezed.
       className="flex w-full flex-col gap-3"
     >
-      <header className="flex flex-col gap-1 border-b border-border-subtle pb-2">
-        <h2 className="text-body font-medium text-primary">
+      <header className="flex flex-col gap-1 border-b border-border pb-2">
+        <h2 className="text-p font-medium text-foreground">
           Compare retrieval strategies
         </h2>
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           Submit one question and see how Naive RAG, GraphRAG, and Hybrid
           answer side by side. Each card streams its own answer; the
           retrieval mode is locked per column.
         </p>
       </header>
 
-      <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface/40 p-3">
+      <div className="flex flex-col gap-2 rounded-md border border-border bg-card/40 p-3">
         <label
           htmlFor="compare-question"
-          className="text-caption font-medium text-secondary"
+          className="text-caption font-medium text-muted-foreground"
         >
           Question
         </label>
@@ -192,10 +192,10 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
           rows={2}
           placeholder="e.g. How many Locations are mentioned in this workspace?"
           disabled={submitting}
-          className="w-full resize-y rounded border border-border-strong bg-surface px-2 py-2 text-secondary placeholder:text-muted/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50"
+          className="w-full resize-y rounded border border-input bg-card px-2 py-2 text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         />
         <div className="flex items-center justify-between">
-          <span className="text-caption text-muted">
+          <span className="text-caption text-muted-foreground">
             {question.length}/{MAX_INPUT_LEN}
           </span>
           <div className="flex items-center gap-2">
@@ -203,7 +203,7 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
               type="button"
               onClick={reset}
               disabled={submitting}
-              className="cursor-pointer rounded border border-border-strong px-3 py-1 text-caption text-secondary transition-colors duration-150 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded border border-input px-3 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               Clear
             </button>
@@ -220,7 +220,7 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
                 });
               }}
               disabled={!question.trim() || submitting}
-              className="cursor-pointer rounded-md bg-accent-primary px-3 py-1 text-caption font-medium text-canvas transition-colors duration-150 hover:bg-accent-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded-md bg-primary px-3 py-1 text-caption font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? "Running…" : "Compare"}
             </button>
@@ -310,26 +310,26 @@ function CompareColumn({
   return (
     <article
       aria-label={`${meta.label} answer`}
-      className="flex min-h-[260px] min-w-0 flex-col gap-2 rounded-md border border-border-subtle bg-canvas/60 p-3"
+      className="flex min-h-[260px] min-w-0 flex-col gap-2 rounded-md border border-border bg-background/60 p-3"
     >
       <header className="flex items-start justify-between">
         <div>
-          <h3 className="text-caption font-semibold uppercase tracking-wider text-secondary">
+          <h3 className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
             {meta.label}
           </h3>
-          <p className="text-[10px] uppercase tracking-wider text-muted">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
             {meta.tagline}
           </p>
         </div>
         <StatusBadge status={column.status} />
       </header>
-      <div className="min-h-0 flex-1 overflow-auto rounded border border-border-subtle/60 bg-surface/40 p-2 text-body text-primary whitespace-pre-wrap break-words">
+      <div className="min-h-0 flex-1 overflow-auto rounded border border-border/60 bg-card/40 p-2 text-p text-foreground whitespace-pre-wrap break-words">
         {column.status === "idle" ? (
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Submit a question to see this strategy&rsquo;s answer.
           </p>
         ) : column.status === "starting" ? (
-          <p className="text-caption text-muted">Starting session…</p>
+          <p className="text-caption text-muted-foreground">Starting session…</p>
         ) : column.status === "failed" ? (
           <p className="text-caption text-red-300">
             {column.errorMessage || "Failed."}
@@ -342,7 +342,7 @@ function CompareColumn({
           <p>{column.text || "…"}</p>
         )}
       </div>
-      <footer className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-wider text-muted">
+      <footer className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-wider text-muted-foreground">
         <span>citations: {column.citations.length}</span>
         <span>
           latency:{" "}
@@ -361,11 +361,11 @@ function CompareColumn({
 
 function StatusBadge({ status }: { status: ColumnState["status"] }) {
   const map: Record<ColumnState["status"], { label: string; cls: string }> = {
-    idle: { label: "Idle", cls: "text-muted bg-surface" },
-    starting: { label: "Starting", cls: "text-accent-primary bg-accent-primary/10" },
+    idle: { label: "Idle", cls: "text-muted-foreground bg-card" },
+    starting: { label: "Starting", cls: "text-primary bg-primary/10" },
     streaming: {
       label: "Streaming",
-      cls: "text-accent-primary bg-accent-primary/10",
+      cls: "text-primary bg-primary/10",
     },
     complete: {
       label: "Complete",

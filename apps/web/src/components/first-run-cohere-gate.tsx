@@ -68,41 +68,41 @@ export function FirstRunCohereGate({ workspaceId, children }: Props) {
       {children}
       {open ? (
         <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-[var(--bg-canvas)]/85 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-[var(--bg-background)]/85 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="first-run-cohere-title"
         >
-          <div className="w-full max-w-lg rounded-lg border border-border-strong bg-surface p-6 shadow-xl">
-            <h2 id="first-run-cohere-title" className="text-title-2 text-primary">
+          <div className="w-full max-w-lg rounded-lg border border-input bg-card p-6 shadow-xl">
+            <h2 id="first-run-cohere-title" className="text-h4 text-foreground">
               Connect Cohere
             </h2>
-            <p className="mt-3 text-body text-secondary">
+            <p className="mt-3 text-p text-muted-foreground">
               zkast uses your Cohere production API key for Command (chat / extraction), Embed v3,
               and Rerank v3. The key is encrypted locally (AES-256-GCM); it is never sent back from
               the API after save. Only Cohere is contacted when you test or run graph jobs.
             </p>
-            <p className="mt-2 text-caption text-muted">
+            <p className="mt-2 text-caption text-muted-foreground">
               PDF upload and parsing do not require this key — choose Later if you only want to try
               ingestion first.
             </p>
             <form className="mt-6 flex flex-col gap-4" onSubmit={save}>
-              <label className="flex flex-col gap-1 text-caption text-secondary">
+              <label className="flex flex-col gap-1 text-caption text-muted-foreground">
                 Label
                 <input
-                  className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-body text-primary"
+                  className="rounded-md border border-input bg-secondary px-3 py-2 text-p text-foreground"
                   value={label}
                   onChange={(ev) => setLabel(ev.target.value)}
                   required
                   maxLength={80}
                 />
               </label>
-              <label className="flex flex-col gap-1 text-caption text-secondary">
+              <label className="flex flex-col gap-1 text-caption text-muted-foreground">
                 API key
                 <input
                   type="password"
                   autoComplete="off"
-                  className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+                  className="rounded-md border border-input bg-secondary px-3 py-2 font-mono text-p text-foreground"
                   value={secret}
                   onChange={(ev) => setSecret(ev.target.value)}
                   required
@@ -118,7 +118,7 @@ export function FirstRunCohereGate({ workspaceId, children }: Props) {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  className="rounded-md border border-border-strong px-4 py-2 text-body text-secondary hover:bg-surface-raised"
+                  className="rounded-md border border-input px-4 py-2 text-p text-muted-foreground hover:bg-secondary"
                   onClick={() => setOpen(false)}
                 >
                   Later
@@ -126,7 +126,7 @@ export function FirstRunCohereGate({ workspaceId, children }: Props) {
                 <button
                   type="submit"
                   disabled={busy}
-                  className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+                  className="rounded-md bg-primary px-4 py-2 text-p font-medium text-[var(--bg-background)] hover:bg-primary/90 disabled:opacity-50"
                 >
                   {busy ? "Saving…" : "Save encrypted key"}
                 </button>

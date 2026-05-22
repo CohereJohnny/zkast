@@ -156,18 +156,18 @@ export function GraphFilterBar({
   }, [documentId, agentId, tag, entityTypes, edgeTypes, view, seeds]);
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border-subtle pb-3">
+    <div className="flex flex-col gap-2 border-b border-border pb-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-caption font-medium text-secondary">Graph filters</span>
+        <span className="text-caption font-medium text-muted-foreground">Graph filters</span>
         {chips.length ? (
-          <span className="text-caption text-muted">({chips.join(" · ")})</span>
+          <span className="text-caption text-muted-foreground">({chips.join(" · ")})</span>
         ) : null}
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="text-caption text-muted">
+        <label className="text-caption text-muted-foreground">
           View
           <select
-            className="mt-1 w-full cursor-pointer rounded border border-border-strong bg-surface px-2 py-1 text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+            className="mt-1 w-full cursor-pointer rounded border border-input bg-card px-2 py-1 text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             value={view}
             onChange={(e) => setView(e.target.value)}
           >
@@ -182,22 +182,22 @@ export function GraphFilterBar({
             onChange={setSeeds}
           />
         ) : (
-          <p className="text-caption text-muted">Seed entities (workspace loading…)</p>
+          <p className="text-caption text-muted-foreground">Seed entities (workspace loading…)</p>
         )}
         {workspaceId ? (
           <SourcePicker workspaceId={workspaceId} value={documentId} onChange={setDocumentId} />
         ) : (
-          <p className="text-caption text-muted">Sources (workspace loading…)</p>
+          <p className="text-caption text-muted-foreground">Sources (workspace loading…)</p>
         )}
         {workspaceId ? (
           <AgentPicker workspaceId={workspaceId} value={agentId} onChange={setAgentId} />
         ) : (
-          <p className="text-caption text-muted">Agent (workspace loading…)</p>
+          <p className="text-caption text-muted-foreground">Agent (workspace loading…)</p>
         )}
         {workspaceId ? (
           <TagPicker workspaceId={workspaceId} value={tag} onChange={setTag} />
         ) : (
-          <p className="text-caption text-muted">Tag (workspace loading…)</p>
+          <p className="text-caption text-muted-foreground">Tag (workspace loading…)</p>
         )}
         {workspaceId ? (
           <TypeMultiselect
@@ -221,14 +221,14 @@ export function GraphFilterBar({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="rounded-md bg-accent-primary px-3 py-1 text-caption font-medium text-canvas"
+          className="rounded-md bg-primary px-3 py-1 text-caption font-medium text-primary-foreground"
           onClick={() => void apply()}
         >
           Apply filters
         </button>
         <button
           type="button"
-          className="rounded-md border border-border-strong px-3 py-1 text-caption text-secondary"
+          className="rounded-md border border-input px-3 py-1 text-caption text-muted-foreground"
           onClick={() => void clear()}
         >
           Clear
@@ -238,7 +238,7 @@ export function GraphFilterBar({
             type="button"
             disabled={cleanupBusy}
             title="Remove entities and relationships with no remaining document or note provenance"
-            className="ml-auto rounded-md border border-border-subtle px-3 py-1 text-caption text-muted transition-colors duration-150 hover:bg-surface-raised hover:text-secondary disabled:opacity-50"
+            className="ml-auto rounded-md border border-border px-3 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-muted-foreground disabled:opacity-50"
             onClick={() => void cleanupOrphans()}
           >
             {cleanupBusy ? "Cleaning…" : "Clean orphan rows"}

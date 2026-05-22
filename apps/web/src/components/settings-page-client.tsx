@@ -299,40 +299,40 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="flex flex-col gap-8 p-6">
       <header>
-        <h1 className="text-title-1 text-primary">Settings</h1>
-        <p className="mt-2 max-w-2xl text-body text-secondary">
+        <h1 className="text-h3 text-foreground">Settings</h1>
+        <p className="mt-2 max-w-2xl text-p text-muted-foreground">
           Manage encrypted credentials and review pipeline defaults. API responses never include
           secrets (FR-30).
         </p>
       </header>
 
       {settingsLoading ? (
-        <p className="text-caption text-muted" role="status">
+        <p className="text-caption text-muted-foreground" role="status">
           Loading workspace settings…
         </p>
       ) : null}
 
       <section
-        className="rounded-lg border border-border-strong bg-surface p-5"
+        className="rounded-lg border border-input bg-card p-5"
         aria-labelledby="north-integration-title"
       >
-        <h2 id="north-integration-title" className="text-title-3 text-primary">
+        <h2 id="north-integration-title" className="text-h5 text-foreground">
           North integration
         </h2>
-        <p className="mt-2 text-caption text-muted">
-          Configure the North Agents API for conversation import (see <span className="font-medium text-primary">Agents</span>{" "}
+        <p className="mt-2 text-caption text-muted-foreground">
+          Configure the North Agents API for conversation import (see <span className="font-medium text-foreground">Agents</span>{" "}
           in the sidebar). Base URL lives in pipeline settings; bearer token is encrypted like other API keys and never
-          returned on read. For <span className="font-mono text-secondary">demo.north.cohere.com</span>, the pipeline
-          adds <span className="font-mono text-secondary">/api</span> when you save only the origin (so requests hit{" "}
-          <span className="font-mono text-secondary">…/api/v1/…</span>). Use a <span className="font-medium text-secondary">North</span> API token for this host — a
+          returned on read. For <span className="font-mono text-muted-foreground">demo.north.cohere.com</span>, the pipeline
+          adds <span className="font-mono text-muted-foreground">/api</span> when you save only the origin (so requests hit{" "}
+          <span className="font-mono text-muted-foreground">…/api/v1/…</span>). Use a <span className="font-medium text-muted-foreground">North</span> API token for this host — a
           Cohere Command/Embed production key is different. If Test North reports a login redirect, rotate the token and
           try again.
         </p>
         <form className="mt-4 flex max-w-xl flex-col gap-3" onSubmit={saveNorthUrl}>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             North API base URL
             <input
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              className="rounded-md border border-input bg-secondary px-3 py-2 font-mono text-p text-foreground"
               value={northUrlDraft}
               onChange={(ev) => setNorthUrlDraft(ev.target.value)}
               placeholder="https://demo.north.cohere.com/api"
@@ -342,32 +342,32 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
           <button
             type="submit"
             disabled={busy}
-            className="w-fit rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+            className="w-fit rounded-md bg-primary px-4 py-2 text-p font-medium text-[var(--bg-background)] hover:bg-primary/90 disabled:opacity-50"
           >
             {busy ? "Working…" : "Save North URL"}
           </button>
         </form>
 
         <form className="mt-8 flex max-w-xl flex-col gap-3" onSubmit={saveNorthKey}>
-          <h3 className="text-body font-medium text-primary">
+          <h3 className="text-p font-medium text-foreground">
             {northKey ? "Rotate North bearer token" : "Add North bearer token"}
           </h3>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Label
             <input
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-body text-primary"
+              className="rounded-md border border-input bg-secondary px-3 py-2 text-p text-foreground"
               value={northLabel}
               onChange={(ev) => setNorthLabel(ev.target.value)}
               required
               maxLength={80}
             />
           </label>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Bearer token
             <input
               type="password"
               autoComplete="off"
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              className="rounded-md border border-input bg-secondary px-3 py-2 font-mono text-p text-foreground"
               value={northSecret}
               onChange={(ev) => setNorthSecret(ev.target.value)}
               required={!northKey}
@@ -383,7 +383,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
                 (!northKey && northSecret.length < 8) ||
                 (northSecret.length > 0 && northSecret.length < 8)
               }
-              className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+              className="rounded-md bg-primary px-4 py-2 text-p font-medium text-[var(--bg-background)] hover:bg-primary/90 disabled:opacity-50"
             >
               {busy ? "Working…" : northKey ? "Rotate token" : "Save token"}
             </button>
@@ -391,7 +391,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
               type="button"
               disabled={busy || northTestBusy || !northKey}
               onClick={() => void testNorth()}
-              className="rounded-md border border-border-strong px-4 py-2 text-body text-secondary hover:bg-surface-raised disabled:opacity-50"
+              className="rounded-md border border-input px-4 py-2 text-p text-muted-foreground hover:bg-secondary disabled:opacity-50"
             >
               {northTestBusy ? "Testing…" : "Test North"}
             </button>
@@ -400,7 +400,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
                 type="button"
                 disabled={busy}
                 onClick={() => void removeNorthKey()}
-                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-body text-[color:var(--semantic-danger)] hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-p text-[color:var(--semantic-danger)] hover:bg-secondary disabled:opacity-50"
               >
                 Remove token
               </button>
@@ -409,11 +409,11 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
         </form>
       </section>
 
-      <section className="rounded-lg border border-border-strong bg-surface p-5" aria-labelledby="api-keys-title">
-        <h2 id="api-keys-title" className="text-title-3 text-primary">
+      <section className="rounded-lg border border-input bg-card p-5" aria-labelledby="api-keys-title">
+        <h2 id="api-keys-title" className="text-h5 text-foreground">
           API keys
         </h2>
-        <p className="mt-2 text-caption text-muted">
+        <p className="mt-2 text-caption text-muted-foreground">
           Cohere production key powers Command (via OpenAI-compat), Embed v3, and Rerank v3.
         </p>
 
@@ -421,40 +421,40 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
           {keys.map((k) => (
             <li
               key={k.id}
-              className="rounded-md border border-border-subtle bg-surface-raised/60 px-4 py-3 text-caption text-secondary"
+              className="rounded-md border border-border bg-secondary/60 px-4 py-3 text-caption text-muted-foreground"
             >
-              <span className="font-medium text-primary">{k.label}</span>
-              <span className="mx-2 text-muted">·</span>
+              <span className="font-medium text-foreground">{k.label}</span>
+              <span className="mx-2 text-muted-foreground">·</span>
               <span>{k.kind}</span>
-              <span className="mx-2 text-muted">·</span>
+              <span className="mx-2 text-muted-foreground">·</span>
               <span>last used: {k.last_used_at ? new Date(k.last_used_at).toLocaleString() : "—"}</span>
             </li>
           ))}
           {keys.length === 0 ? (
-            <li className="text-caption text-muted">No keys stored yet.</li>
+            <li className="text-caption text-muted-foreground">No keys stored yet.</li>
           ) : null}
         </ul>
 
         <form className="mt-6 flex max-w-xl flex-col gap-3" onSubmit={saveKey}>
-          <h3 className="text-body font-medium text-primary">
+          <h3 className="text-p font-medium text-foreground">
             {cohereKey ? "Rotate Cohere key" : "Add Cohere key"}
           </h3>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Label
             <input
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-body text-primary"
+              className="rounded-md border border-input bg-secondary px-3 py-2 text-p text-foreground"
               value={label}
               onChange={(ev) => setLabel(ev.target.value)}
               required
               maxLength={80}
             />
           </label>
-          <label className="flex flex-col gap-1 text-caption text-secondary">
+          <label className="flex flex-col gap-1 text-caption text-muted-foreground">
             Secret
             <input
               type="password"
               autoComplete="off"
-              className="rounded-md border border-border-strong bg-surface-raised px-3 py-2 font-mono text-body text-primary"
+              className="rounded-md border border-input bg-secondary px-3 py-2 font-mono text-p text-foreground"
               value={secret}
               onChange={(ev) => setSecret(ev.target.value)}
               required={!cohereKey}
@@ -470,7 +470,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
                 (!cohereKey && secret.length < 8) ||
                 (secret.length > 0 && secret.length < 8)
               }
-              className="rounded-md bg-accent-primary px-4 py-2 text-body font-medium text-[var(--bg-canvas)] hover:bg-accent-primary-hover disabled:opacity-50"
+              className="rounded-md bg-primary px-4 py-2 text-p font-medium text-[var(--bg-background)] hover:bg-primary/90 disabled:opacity-50"
             >
               {busy ? "Working…" : cohereKey ? "Rotate key" : "Save key"}
             </button>
@@ -478,7 +478,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
               type="button"
               disabled={busy || !cohereKey}
               onClick={() => void testCohere()}
-              className="rounded-md border border-border-strong px-4 py-2 text-body text-secondary hover:bg-surface-raised disabled:opacity-50"
+              className="rounded-md border border-input px-4 py-2 text-p text-muted-foreground hover:bg-secondary disabled:opacity-50"
             >
               Test Cohere
             </button>
@@ -487,7 +487,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
                 type="button"
                 disabled={busy}
                 onClick={() => void removeKey()}
-                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-body text-[color:var(--semantic-danger)] hover:bg-surface-raised disabled:opacity-50"
+                className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-p text-[color:var(--semantic-danger)] hover:bg-secondary disabled:opacity-50"
               >
                 Remove
               </button>
@@ -497,48 +497,48 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
       </section>
 
       <section
-        className="rounded-lg border border-border-strong bg-surface p-5"
+        className="rounded-lg border border-input bg-card p-5"
         aria-labelledby="pipeline-title"
       >
-        <h2 id="pipeline-title" className="text-title-3 text-primary">
+        <h2 id="pipeline-title" className="text-h5 text-foreground">
           Pipeline
         </h2>
-        <p className="mt-2 text-caption text-muted">
+        <p className="mt-2 text-caption text-muted-foreground">
           Provider:{" "}
-          <span className="rounded bg-surface-raised px-2 py-0.5 text-secondary opacity-60">
+          <span className="rounded bg-secondary px-2 py-0.5 text-muted-foreground opacity-60">
             Cohere (locked in P0)
           </span>
           . More providers ship in a later release (US-5.2). Defaults below match techstack — edit via
           API if needed; UI stays read-only for models this sprint.
         </p>
-        <dl className="mt-4 grid grid-cols-1 gap-3 text-caption text-secondary sm:grid-cols-2">
+        <dl className="mt-4 grid grid-cols-1 gap-3 text-caption text-muted-foreground sm:grid-cols-2">
           <div>
-            <dt className="text-muted">Small model</dt>
-            <dd className="font-mono text-primary">{pipeline.small_model}</dd>
+            <dt className="text-muted-foreground">Small model</dt>
+            <dd className="font-mono text-foreground">{pipeline.small_model}</dd>
           </div>
           <div>
-            <dt className="text-muted">Large model</dt>
-            <dd className="font-mono text-primary">{pipeline.large_model}</dd>
+            <dt className="text-muted-foreground">Large model</dt>
+            <dd className="font-mono text-foreground">{pipeline.large_model}</dd>
           </div>
           <div>
-            <dt className="text-muted">Embed</dt>
-            <dd className="font-mono text-primary">{pipeline.embed_model}</dd>
+            <dt className="text-muted-foreground">Embed</dt>
+            <dd className="font-mono text-foreground">{pipeline.embed_model}</dd>
           </div>
           <div>
-            <dt className="text-muted">Rerank</dt>
-            <dd className="font-mono text-primary">{pipeline.rerank_model}</dd>
+            <dt className="text-muted-foreground">Rerank</dt>
+            <dd className="font-mono text-foreground">{pipeline.rerank_model}</dd>
           </div>
           <div>
-            <dt className="text-muted">Chunk size</dt>
-            <dd className="font-mono text-primary">{pipeline.chunk_size}</dd>
+            <dt className="text-muted-foreground">Chunk size</dt>
+            <dd className="font-mono text-foreground">{pipeline.chunk_size}</dd>
           </div>
           <div>
-            <dt className="text-muted">Max notes / document</dt>
-            <dd className="font-mono text-primary">{pipeline.max_notes_per_document}</dd>
+            <dt className="text-muted-foreground">Max notes / document</dt>
+            <dd className="font-mono text-foreground">{pipeline.max_notes_per_document}</dd>
           </div>
           <div>
-            <dt className="text-muted">North base URL</dt>
-            <dd className="font-mono text-primary break-all">
+            <dt className="text-muted-foreground">North base URL</dt>
+            <dd className="font-mono text-foreground break-all">
               {pipeline.north_base_url ? pipeline.north_base_url : "—"}
             </dd>
           </div>

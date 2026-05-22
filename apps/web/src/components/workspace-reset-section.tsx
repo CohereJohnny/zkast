@@ -115,32 +115,32 @@ export function WorkspaceResetSection({ workspaceId }: { workspaceId: string }) 
 
   return (
     <section
-      className="rounded-lg border border-[color:var(--semantic-danger)]/40 bg-surface p-5"
+      className="rounded-lg border border-[color:var(--semantic-danger)]/40 bg-card p-5"
       aria-labelledby="reset-title"
     >
       <h2
         id="reset-title"
-        className="flex items-center gap-2 text-title-3 text-[color:var(--semantic-danger)]"
+        className="flex items-center gap-2 text-h5 text-[color:var(--semantic-danger)]"
       >
         <AlertTriangle className="h-5 w-5 shrink-0" strokeWidth={1.5} aria-hidden />
         Baseline reset
       </h2>
-      <p className="mt-2 text-body text-secondary">
+      <p className="mt-2 text-p text-muted-foreground">
         Return this workspace to an empty slate for controlled end-to-end testing: no
         sources, notes, graph, jobs, chat, evals, or wiki. Keeps workspace settings and API
         keys.
       </p>
 
       {loading ? (
-        <p className="mt-4 text-caption text-muted">Loading preview…</p>
+        <p className="mt-4 text-caption text-muted-foreground">Loading preview…</p>
       ) : preview ? (
         <div className="mt-4 space-y-3">
           {preview.busy ? (
             <div
-              className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-caption text-secondary"
+              className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-caption text-muted-foreground"
               role="status"
             >
-              <p className="font-medium text-primary">Active work detected</p>
+              <p className="font-medium text-foreground">Active work detected</p>
               <ul className="mt-1 list-inside list-disc">
                 {preview.busy_reasons.map((r) => (
                   <li key={r}>{r}</li>
@@ -151,7 +151,7 @@ export function WorkspaceResetSection({ workspaceId }: { workspaceId: string }) 
                   type="checkbox"
                   checked={force}
                   onChange={(e) => setForce(e.target.checked)}
-                  className="rounded border-border-subtle"
+                  className="rounded border-border"
                 />
                 <span>Force cancel active jobs and reset anyway</span>
               </label>
@@ -162,20 +162,20 @@ export function WorkspaceResetSection({ workspaceId }: { workspaceId: string }) 
             {Object.entries(preview.counts)
               .filter(([, n]) => n > 0)
               .map(([key, n]) => (
-                <div key={key} className="rounded-md bg-surface-raised px-2 py-1.5">
-                  <dt className="text-muted">{key.replace(/_/g, " ")}</dt>
-                  <dd className="font-mono text-primary">{n}</dd>
+                <div key={key} className="rounded-md bg-secondary px-2 py-1.5">
+                  <dt className="text-muted-foreground">{key.replace(/_/g, " ")}</dt>
+                  <dd className="font-mono text-foreground">{n}</dd>
                 </div>
               ))}
           </dl>
           {totalRows === 0 ? (
-            <p className="text-caption text-muted">Workspace content is already empty.</p>
+            <p className="text-caption text-muted-foreground">Workspace content is already empty.</p>
           ) : null}
         </div>
       ) : null}
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-        <label className="flex flex-1 flex-col gap-1 text-caption text-muted">
+        <label className="flex flex-1 flex-col gap-1 text-caption text-muted-foreground">
           Type RESET to confirm
           <input
             type="text"
@@ -183,7 +183,7 @@ export function WorkspaceResetSection({ workspaceId }: { workspaceId: string }) 
             onChange={(e) => setConfirmText(e.target.value)}
             placeholder="RESET"
             autoComplete="off"
-            className="rounded-md border border-border-subtle bg-surface-raised px-2 py-1.5 font-mono text-body text-primary"
+            className="rounded-md border border-border bg-secondary px-2 py-1.5 font-mono text-p text-foreground"
           />
         </label>
         <div className="flex gap-2">
@@ -191,7 +191,7 @@ export function WorkspaceResetSection({ workspaceId }: { workspaceId: string }) 
             type="button"
             disabled={resetBusy || loading}
             onClick={() => void loadPreview()}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border-subtle px-3 py-2 text-body text-secondary transition hover:bg-surface-raised disabled:opacity-50"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-p text-muted-foreground transition hover:bg-secondary disabled:opacity-50"
           >
             <RefreshCw className="h-4 w-4" aria-hidden />
             Refresh
@@ -200,18 +200,18 @@ export function WorkspaceResetSection({ workspaceId }: { workspaceId: string }) 
             type="button"
             disabled={resetBusy || loading || (preview?.busy && !force)}
             onClick={() => void runReset()}
-            className="rounded-md bg-[color:var(--semantic-danger)] px-4 py-2 text-body font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-md bg-[color:var(--semantic-danger)] px-4 py-2 text-p font-medium text-white transition hover:opacity-90 disabled:opacity-50"
           >
             {resetBusy ? "Resetting…" : "Reset to baseline"}
           </button>
         </div>
       </div>
 
-      <p className="mt-3 text-caption text-muted">
+      <p className="mt-3 text-caption text-muted-foreground">
         Suggested rebuild path: upload or import sources → wait for notes/graph → optional
         dream/wiki → backfill retrieval index (Diagnostics) → run evals. Use{" "}
-        <span className="font-mono text-secondary">oil_gas_v1</span> after the Oil &amp; Gas PDF
-        fixture; use <span className="font-mono text-secondary">memory_locomo_lite_v1</span> only
+        <span className="font-mono text-muted-foreground">oil_gas_v1</span> after the Oil &amp; Gas PDF
+        fixture; use <span className="font-mono text-muted-foreground">memory_locomo_lite_v1</span> only
         after you have ingested North/PDF content. If Graph eval still shows stale contexts, run
         reset again (FalkorDB must be reachable).
       </p>
