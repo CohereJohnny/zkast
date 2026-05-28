@@ -30,6 +30,7 @@ from app.internal_jobs import router as internal_jobs_router
 from app.internal_north import router as internal_north_router
 from app.internal_notes import router as internal_notes_router
 from app.internal_wiki import router as internal_wiki_router
+from app.internal_dashboard import router as internal_dashboard_router
 from app.internal_workspace import router as internal_workspace_router
 from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
@@ -101,6 +102,7 @@ app.include_router(internal_chat_router)
 app.include_router(internal_eval_router)
 app.include_router(internal_wiki_router)
 app.include_router(internal_workspace_router)
+app.include_router(internal_dashboard_router)
 
 
 @app.middleware("http")

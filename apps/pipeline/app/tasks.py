@@ -60,6 +60,8 @@ from app.documents_repo import (
 )
 from app.entities_repo import upsert_entity_from_graphiti
 from app.graphiti_factory import graphiti_for_workspace, resolve_cohere_api_key
+from app.memory_space import memory_space_graph_name
+from app.usage_events_repo import record_ingestion_tokens
 from app.job_redis import (
     job_hset,
     publish_job_event,
@@ -891,6 +893,18 @@ async def generate_atomic_notes(
                     value=tokens,
                     stage="generating_notes",
                 )
+                await asyncio.to_thread(
+                    record_ingestion_tokens,
+                    database_url,
+                    workspace_id=workspace_id,
+                    tokens=tokens,
+                    stage="generating_notes",
+                    agent_id=agent_scope,
+                    document_id=document_id,
+                    job_id=job_id,
+                    ingestion_run_id=ingestion_run_id,
+                    model=model,
+                )
 
             async def _warning_cb(message: str, data: dict[str, Any] | None) -> None:
                 # Surface notes_llm warnings (empty stream, unparseable
@@ -1185,7 +1199,16 @@ async def extract_graph(
             raise RuntimeError("Document no longer active (deleted or already failed)")
 
         async with _Heartbeat(database_url, ingestion_run_id):
-            graphiti = await graphiti_for_workspace(settings, workspace_id)
+            doc_row = await asyncio.to_thread(
+                fetch_document, database_url, document_id=document_id
+            )
+            agent_scope = (
+                str(doc_row.get("agent_id") or "").strip() if doc_row else None
+            ) or None
+            graph_group = memory_space_graph_name(workspace_id, agent_scope)
+            graphiti = await graphiti_for_workspace(
+                settings, workspace_id, agent_id=agent_scope
+            )
             episodes = await asyncio.to_thread(
                 list_episodes_for_ingestion_run,
                 database_url,
@@ -1236,9 +1259,7 @@ async def extract_graph(
                         source_description=f"PDF pages {ep.get('page_start')}-{ep.get('page_end')}",
                         reference_time=ref,
                         source=EpisodeType.text,
-                        group_id=workspace_id,
-                        # Sprint 5c — type-constrained extraction so we
-                        # stop collapsing every entity into "Concept".
+                        group_id=graph_group,
                         entity_types=ENTITY_TYPES,
                         edge_types=EDGE_TYPES,
                         edge_type_map=EDGE_TYPE_MAP,
@@ -1264,6 +1285,7 @@ async def extract_graph(
                             attributes=dict(node.attributes or {}),
                             episode_id=ep_id,
                             note_id=None,
+                            agent_id=agent_scope,
                         )
                         local_entities += 1
                         if eid:
@@ -1313,6 +1335,7 @@ async def extract_graph(
                             valid_to=edge.invalid_at,
                             episode_id=ep_id,
                             note_id=None,
+                            agent_id=agent_scope,
                         )
                         local_edges += 1
                     except psycopg.errors.ForeignKeyViolation:
@@ -1460,12 +1483,15 @@ async def extract_graph(
                         source_description="Atomic note",
                         reference_time=ref,
                         source=EpisodeType.text,
-                        group_id=workspace_id,
+                        group_id=graph_group,
                         entity_types=ENTITY_TYPES,
                         edge_types=EDGE_TYPES,
                         edge_type_map=EDGE_TYPE_MAP,
                         custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                     )
+                note_agent = (
+                    str(note_row.get("agent_id") or "").strip() if note_row else None
+                ) or agent_scope
                 local_entities = 0
                 local_edges = 0
                 for node in res.nodes:
@@ -1481,6 +1507,7 @@ async def extract_graph(
                             attributes=dict(node.attributes or {}),
                             episode_id=None,
                             note_id=nid,
+                            agent_id=note_agent,
                         )
                         local_entities += 1
                     except psycopg.errors.ForeignKeyViolation:
@@ -1513,6 +1540,7 @@ async def extract_graph(
                             valid_to=edge.invalid_at,
                             episode_id=None,
                             note_id=nid,
+                            agent_id=note_agent,
                         )
                         local_edges += 1
                     except psycopg.errors.ForeignKeyViolation:

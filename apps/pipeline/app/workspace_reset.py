@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 
 from app.documents_repo import fail_running_ingestion_runs_for_document
 from app.job_redis import JOB_HASH_PREFIX, job_stream_key
+from app.memory_space import list_memory_space_graph_names
 
 logger = structlog.get_logger(__name__)
 
@@ -345,26 +346,38 @@ async def purge_workspace_graphiti(
     falkordb_host: str,
     falkordb_port: int,
     workspace_id: str,
+    database_url: str | None = None,
 ) -> bool:
-    """Drop the FalkorDB graph named after the workspace UUID."""
+    """Drop FalkorDB graphs for workspace-global and per-agent memory spaces."""
     import redis.asyncio as aioredis
 
+    graph_names = [workspace_id]
+    if database_url:
+        graph_names = list_memory_space_graph_names(database_url, workspace_id=workspace_id)
+
     client = aioredis.Redis(host=falkordb_host, port=falkordb_port, decode_responses=True)
+    deleted_any = False
     try:
-        # FalkorDB: GRAPH.DELETE <graph_name> — idempotent when graph missing.
-        await client.execute_command("GRAPH.DELETE", workspace_id)
-        logger.info("workspace_reset_graphiti_deleted", workspace_id=workspace_id)
-        return True
-    except Exception as exc:  # noqa: BLE001
-        err = str(exc).lower()
-        if "empty" in err or "not exist" in err or "unknown graph" in err:
-            return False
-        logger.warning(
-            "workspace_reset_graphiti_failed",
-            workspace_id=workspace_id,
-            error=str(exc),
-        )
-        raise
+        for graph_name in graph_names:
+            try:
+                await client.execute_command("GRAPH.DELETE", graph_name)
+                deleted_any = True
+                logger.info(
+                    "workspace_reset_graphiti_deleted",
+                    workspace_id=workspace_id,
+                    graph_name=graph_name,
+                )
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc).lower()
+                if "empty" in err or "not exist" in err or "unknown graph" in err:
+                    continue
+                logger.warning(
+                    "workspace_reset_graphiti_failed",
+                    workspace_id=workspace_id,
+                    graph_name=graph_name,
+                    error=str(exc),
+                )
+        return deleted_any
     finally:
         await client.aclose()
 

@@ -14,6 +14,7 @@ from graphiti_core.nodes import EpisodeType
 
 from app.cohere_adapters import CohereCrossEncoder, CohereEmbedder
 from app.config import Settings
+from app.memory_space import falkor_database_for_memory_space, memory_space_graph_name
 from app.secrets import decrypt
 from app.workspace_repo import fetch_llm_cohere_secret_row, fetch_pipeline_settings
 
@@ -22,23 +23,9 @@ logger = structlog.get_logger(__name__)
 COHERE_COMPAT_BASE = "https://api.cohere.com/compatibility/v1"
 
 
-def falkor_database_for_workspace(workspace_id: str) -> str:
-    """One FalkorDB logical graph per workspace.
-
-    The database name **must equal the Graphiti ``group_id``** (workspace
-    UUID). Otherwise BUG-011 fires: graphiti-core 0.29.0's FalkorDB driver
-    silently calls ``driver.clone(database=group_id)`` inside
-    ``add_episode`` (see
-    [graphiti.py L1034](https://github.com/getzep/graphiti)) and writes
-    every node/edge to a graph named after the group_id, but ``search()``
-    reads from the originally-configured database — so ingestion succeeds
-    yet every retrieval returns zero hits.
-
-    Returning the workspace UUID keeps both writes and reads on the same
-    FalkorDB graph and is non-breaking for any data already ingested
-    against the same convention.
-    """
-    return workspace_id
+def falkor_database_for_workspace(workspace_id: str, agent_id: str | None = None) -> str:
+    """FalkorDB graph name; must match Graphiti ``group_id`` for reads/writes."""
+    return falkor_database_for_memory_space(workspace_id, agent_id)
 
 
 def resolve_stored_cohere_api_key(settings: Settings, workspace_id: str) -> str | None:
@@ -62,6 +49,7 @@ def build_graphiti(
     workspace_id: str,
     api_key: str,
     pipeline: dict[str, object],
+    agent_id: str | None = None,
     semaphore_limit: int | None = None,
 ) -> Graphiti:
     os.environ.setdefault("GRAPHITI_TELEMETRY_ENABLED", "false")
@@ -69,7 +57,7 @@ def build_graphiti(
     driver = FalkorDriver(
         host=settings.falkordb_host,
         port=settings.falkordb_port,
-        database=falkor_database_for_workspace(workspace_id),
+        database=falkor_database_for_workspace(workspace_id, agent_id),
     )
 
     llm_cfg = LLMConfig(
@@ -98,8 +86,6 @@ def build_graphiti(
         if raw.isdigit():
             max_coroutines = max(1, int(raw))
         else:
-            # Default below graphiti_core.helpers' import-time default (20): Cohere tiers
-            # often throttle burst embed + chat + rerank traffic during extract_graph.
             max_coroutines = 10
 
     return Graphiti(
@@ -111,24 +97,37 @@ def build_graphiti(
     )
 
 
-async def graphiti_for_workspace(settings: Settings, workspace_id: str) -> Graphiti:
+async def graphiti_for_workspace(
+    settings: Settings,
+    workspace_id: str,
+    agent_id: str | None = None,
+) -> Graphiti:
     api_key = resolve_cohere_api_key(settings, workspace_id)
     if not api_key:
         raise ValueError("No Cohere API key (set COHERE_API_KEY or save llm_cohere in workspace)")
     pipeline = fetch_pipeline_settings(settings.database_url, workspace_id)
-    g = build_graphiti(settings, workspace_id=workspace_id, api_key=api_key, pipeline=pipeline)
+    g = build_graphiti(
+        settings,
+        workspace_id=workspace_id,
+        api_key=api_key,
+        pipeline=pipeline,
+        agent_id=agent_id,
+    )
     await g.build_indices_and_constraints()
-    logger.info("graphiti_ready", workspace_id=workspace_id, falkor_db=falkor_database_for_workspace(workspace_id))
+    graph_name = memory_space_graph_name(workspace_id, agent_id)
+    logger.info(
+        "graphiti_ready",
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        falkor_db=graph_name,
+    )
     return g
 
 
-async def run_synthetic_episode_smoke(graphiti: Graphiti, *, group_id: str | None = None) -> None:
-    """Add one text episode and run a hybrid search (raises on Graphiti/provider errors).
-
-    FalkorDB's Graphiti driver defaults `group_id` to ``\\_``, which fails
-    ``validate_group_id`` (only ASCII alphanumeric, ``-``, ``_``). Always pass an
-    explicit partition id — use the workspace UUID string in production.
-    """
+async def run_synthetic_episode_smoke(
+    graphiti: Graphiti, *, group_id: str | None = None
+) -> None:
+    """Add one text episode and run a hybrid search (raises on Graphiti/provider errors)."""
     gid = group_id or "zkast-default"
     await graphiti.add_episode(
         name="zkast-synthetic-smoke",

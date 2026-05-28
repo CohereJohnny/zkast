@@ -28,6 +28,7 @@ from typing import Any
 from app.cohere_chat import ChatDocument
 from app.filter_options_repo import summarize_workspace_graph, workspace_graph_store_empty
 from app.graphiti_factory import graphiti_for_workspace
+from app.memory_space import memory_space_graph_name
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +233,13 @@ async def retrieve(
             type(exc).__name__,
         )
 
+    agent_scope = str(scope.get("agent_id") or "").strip() or None
+
     # ---- Graphiti hybrid search ------------------------------------------
     try:
-        graphiti = await graphiti_for_workspace(settings, workspace_id)
+        graphiti = await graphiti_for_workspace(
+            settings, workspace_id, agent_id=agent_scope
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "graph_retrieval_graphiti_unavailable workspace=%s err=%s",
@@ -247,9 +252,10 @@ async def retrieve(
             graph_context_item,
         )
 
+    graph_group = memory_space_graph_name(workspace_id, agent_scope)
     try:
         edges = await graphiti.search(
-            query=query_text, group_ids=[workspace_id], num_results=top_k
+            query=query_text, group_ids=[graph_group], num_results=top_k
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -276,7 +282,6 @@ async def retrieve(
     valid_at = _parse_iso(scope.get("valid_at"))
     seed_entity_ids = set(_str_list(scope.get("seed_entity_ids")))
 
-    agent_scope = str(scope.get("agent_id") or "").strip() or None
     if agent_scope:
         from app.documents_repo import list_document_ids_for_agent
 
