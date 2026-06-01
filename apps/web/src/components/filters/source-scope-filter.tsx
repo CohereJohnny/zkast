@@ -32,14 +32,22 @@ type DocRow = {
   agent_display_name?: string | null;
 };
 
+type OptionGroup = "channels" | "agents" | "documents";
+
 type Option = {
   kind: "agent" | "document";
   id: string;
   primary: string;
   secondary: string;
-  group: "spaces" | "documents";
+  group: OptionGroup;
   badge: string;
   badgeClass: string;
+};
+
+const GROUP_LABEL: Record<OptionGroup, string> = {
+  channels: "Slack channels (whole memory space)",
+  agents: "Agents (whole memory space)",
+  documents: "Documents (single source)",
 };
 
 function docPrimary(d: DocRow): string {
@@ -58,9 +66,9 @@ function buildOptions(agents: AgentRow[], docs: DocRow[]): Option[] {
       kind: "agent",
       id: a.id,
       primary: isSlack ? `#${name}` : name,
-      secondary: isSlack ? "Slack channel · whole space" : "Agent · whole space",
-      group: "spaces",
-      badge: isSlack ? "Slack" : "Agent",
+      secondary: isSlack ? "All notes & graph in this channel" : "All notes & graph for this agent",
+      group: isSlack ? "channels" : "agents",
+      badge: isSlack ? "Channel" : "Agent",
       badgeClass: isSlack ? "bg-fuchsia-500/15 text-fuchsia-200" : "bg-primary/15 text-foreground",
     });
   }
@@ -77,12 +85,12 @@ function buildOptions(agents: AgentRow[], docs: DocRow[]): Option[] {
           ? `Conversation${d.agent_display_name ? ` · ${d.agent_display_name}` : ""} · ${d.status}`
           : `PDF · ${d.status}`,
       group: "documents",
-      badge: d.source_kind === "pdf" ? "PDF" : isSlack ? "Slack" : "Conv",
+      badge: d.source_kind === "pdf" ? "PDF" : isSlack ? "Session" : "Conv",
       badgeClass:
         d.source_kind === "pdf"
           ? "bg-primary/15 text-foreground"
           : isSlack
-            ? "bg-fuchsia-500/15 text-fuchsia-200"
+            ? "bg-fuchsia-500/10 text-fuchsia-200/90"
             : "bg-amber-500/15 text-amber-100",
     });
   }
@@ -143,9 +151,12 @@ export function SourceScopeFilter({
     const match = (o: Option) =>
       !q || o.primary.toLowerCase().includes(q) || o.secondary.toLowerCase().includes(q);
     const list = q ? options.filter(match) : options;
-    const spaces = list.filter((o) => o.group === "spaces").slice(0, 40);
+    // Channels first (always visible), then agents, then documents — caps keep
+    // big workspaces responsive while guaranteeing memory spaces show.
+    const channels = list.filter((o) => o.group === "channels").slice(0, 40);
+    const agents = list.filter((o) => o.group === "agents").slice(0, 40);
     const docs = list.filter((o) => o.group === "documents").slice(0, 60);
-    return [...spaces, ...docs];
+    return [...channels, ...agents, ...docs];
   }, [options, query]);
 
   useEffect(() => {
@@ -187,7 +198,7 @@ export function SourceScopeFilter({
   };
 
   const listboxId = `source-scope-listbox-${workspaceId}`;
-  let renderedGroup: string | null = null;
+  let renderedGroup: OptionGroup | null = null;
 
   return (
     <div ref={wrapperRef} className="text-caption text-muted-foreground">
@@ -246,7 +257,7 @@ export function SourceScopeFilter({
                   <li key={`${o.kind}:${o.id}`}>
                     {showHeader ? (
                       <p className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                        {o.group === "spaces" ? "Memory spaces" : "Documents"}
+                        {GROUP_LABEL[o.group]}
                       </p>
                     ) : null}
                     <button
