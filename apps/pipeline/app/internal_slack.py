@@ -8,7 +8,9 @@ ingestion spine (parse → notes → graph). See specs/openspecs/slack-source.md
 from __future__ import annotations
 
 import json
+import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -41,6 +43,7 @@ from app.slack_repo import (
     delete_slack_oauth_token,
     list_slack_conversation_cache,
     store_slack_oauth_token,
+    update_source_sync_state,
     upsert_slack_connection,
     upsert_slack_conversation_cache,
 )
@@ -70,6 +73,44 @@ def _slack_source_or_404(settings: Settings, ws: str, source_id: str) -> dict[st
     return source
 
 
+_RANGE_DAYS: dict[str, int] = {
+    "last_30_days": 30,
+    "last_90_days": 90,
+    "last_180_days": 180,
+    "last_365_days": 365,
+}
+
+
+def _compute_oldest_ts(
+    *,
+    range_key: str,
+    cutoff_date: str | None,
+    sync_cursor: str | None,
+) -> str | None:
+    """Resolve an import range to a Slack ``oldest`` timestamp (epoch seconds).
+
+    - ``all`` → None (full history).
+    - ``since_last`` → the stored high-water mark (only newer messages).
+    - ``last_N_days`` → now − N days.
+    - ``custom`` → start of ``cutoff_date`` (YYYY-MM-DD).
+    """
+    key = (range_key or "last_90_days").strip().lower()
+    if key == "all":
+        return None
+    if key == "since_last":
+        return sync_cursor or None
+    if key == "custom" and cutoff_date:
+        try:
+            dt = datetime.fromisoformat(cutoff_date)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return f"{dt.timestamp():.6f}"
+        except ValueError:
+            return None
+    days = _RANGE_DAYS.get(key, 90)
+    return f"{time.time() - days * 86400:.6f}"
+
+
 async def _fetch_channel_units(
     client: SlackClient,
     *,
@@ -77,9 +118,12 @@ async def _fetch_channel_units(
     channel_name: str,
     history_limit: int,
     session_gap_seconds: int,
+    oldest: str | None = None,
 ) -> list[dict[str, Any]]:
     """Pull channel history + thread replies and segment into units."""
-    roots = await client.channel_history(channel_id=channel_id, limit=history_limit)
+    roots = await client.channel_history(
+        channel_id=channel_id, limit=history_limit, oldest=oldest
+    )
     user_names: dict[str, str] = {}
     try:
         user_names = build_user_name_map(await client.list_users())
@@ -330,24 +374,31 @@ async def get_slack_channels(workspace_id: uuid.UUID, request: Request) -> JSONR
             detail={"error": {"code": "slack_api", "message": str(exc)}},
         ) from exc
 
-    registered = {
-        a["external_agent_id"]
+    registered: dict[str, dict[str, Any]] = {
+        a["external_agent_id"]: a
         for a in list_north_agents(settings.database_url, workspace_id=ws)
         if a.get("provider") == SLACK_PROVIDER and a.get("external_agent_id")
     }
-    items = [
-        {
-            "channel_id": c.get("id"),
-            "name": c.get("name"),
-            "is_private": bool(c.get("is_private")),
-            "is_member": bool(c.get("is_member")),
-            "num_members": c.get("num_members"),
-            "topic": (c.get("topic") or {}).get("value") if isinstance(c.get("topic"), dict) else None,
-            "registered": c.get("id") in registered,
-        }
-        for c in channels
-        if c.get("id")
-    ]
+    items = []
+    for c in channels:
+        cid = c.get("id")
+        if not cid:
+            continue
+        src = registered.get(cid)
+        sync = src.get("provider_metadata") if src and isinstance(src.get("provider_metadata"), dict) else None
+        items.append(
+            {
+                "channel_id": cid,
+                "name": c.get("name"),
+                "is_private": bool(c.get("is_private")),
+                "is_member": bool(c.get("is_member")),
+                "num_members": c.get("num_members"),
+                "topic": (c.get("topic") or {}).get("value") if isinstance(c.get("topic"), dict) else None,
+                "registered": src is not None,
+                "source_id": src.get("id") if src else None,
+                "sync": sync or None,
+            }
+        )
     return JSONResponse(content={"items": items})
 
 
@@ -486,10 +537,17 @@ async def post_import_threads(
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
-    history_limit = int(body.get("history_limit") or 200)
+    history_limit = int(body.get("history_limit") or 500)
     history_limit = max(1, min(history_limit, 1000))
     session_gap = int(body.get("session_gap_seconds") or DEFAULT_SESSION_GAP_SECONDS)
     segmentation_mode = str(body.get("segmentation_mode") or "turn")
+    range_key = str(body.get("range") or "last_90_days")
+    cutoff_date = body.get("cutoff_date")
+    oldest = _compute_oldest_ts(
+        range_key=range_key,
+        cutoff_date=str(cutoff_date) if cutoff_date else None,
+        sync_cursor=source.get("sync_cursor"),
+    )
     channel_id = source["external_agent_id"]
     channel_name = source.get("display_name") or channel_id
 
@@ -501,6 +559,7 @@ async def post_import_threads(
             channel_name=channel_name,
             history_limit=history_limit,
             session_gap_seconds=session_gap,
+            oldest=oldest,
         )
     except SlackAuthError as exc:
         raise HTTPException(
@@ -618,12 +677,60 @@ async def post_import_threads(
             }
         )
 
+    # Compute message-ts coverage to remember how far we've imported.
+    all_ts: list[float] = []
+    for unit in units:
+        for m in unit["transcript"].get("messages") or []:
+            try:
+                all_ts.append(float(m.get("ts") or 0))
+            except (TypeError, ValueError):
+                continue
+    newest_ts = max(all_ts) if all_ts else None
+    oldest_ts = min(all_ts) if all_ts else None
+    now_iso = datetime.now(tz=UTC).isoformat()
+
+    def _iso(ts: float | None) -> str | None:
+        if not ts:
+            return None
+        return datetime.fromtimestamp(ts, tz=UTC).isoformat()
+
+    prior_meta = source.get("provider_metadata") if isinstance(source.get("provider_metadata"), dict) else {}
+    prior_oldest = prior_meta.get("oldest_message_ts")
+    # High-water mark only ever moves forward; oldest only moves backward.
+    new_cursor = source.get("sync_cursor")
+    if newest_ts and (not new_cursor or float(newest_ts) > float(new_cursor)):
+        new_cursor = f"{newest_ts:.6f}"
+    coverage_oldest = oldest_ts
+    if prior_oldest:
+        try:
+            coverage_oldest = min(float(oldest_ts or prior_oldest), float(prior_oldest))
+        except (TypeError, ValueError):
+            coverage_oldest = oldest_ts
+
+    sync_meta = {
+        "last_imported_at": now_iso,
+        "last_import_range": range_key,
+        "last_import_created": len(created),
+        "last_import_skipped": skipped,
+        "newest_message_ts": f"{newest_ts:.6f}" if newest_ts else None,
+        "newest_message_at": _iso(newest_ts),
+        "oldest_message_ts": f"{coverage_oldest:.6f}" if coverage_oldest else None,
+        "oldest_message_at": _iso(coverage_oldest),
+    }
+    update_source_sync_state(
+        db,
+        source_id=sid,
+        sync_cursor=new_cursor,
+        provider_metadata_merge=sync_meta,
+    )
+
     logger.info(
         "slack_import_enqueued",
         workspace_id=ws,
         source_id=sid,
         created=len(created),
         skipped=skipped,
+        range=range_key,
     )
     return JSONResponse(
         status_code=202,
@@ -632,5 +739,6 @@ async def post_import_threads(
             "created": len(created),
             "skipped": skipped,
             "documents": created,
+            "sync": sync_meta,
         },
     )

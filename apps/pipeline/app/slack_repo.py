@@ -115,6 +115,42 @@ def upsert_slack_connection(
     return _serialize_connection(dict(row))
 
 
+def update_source_sync_state(
+    database_url: str,
+    *,
+    source_id: str,
+    sync_cursor: str | None = None,
+    provider_metadata_merge: dict[str, Any] | None = None,
+) -> None:
+    """Update a Slack channel source's incremental sync state.
+
+    ``sync_cursor`` holds the newest imported message ts (high-water mark);
+    ``provider_metadata`` accumulates window/coverage info for the UI.
+    """
+    with psycopg.connect(database_url) as conn:
+        if provider_metadata_merge:
+            conn.execute(
+                """
+                UPDATE north_agents
+                SET provider_metadata = COALESCE(provider_metadata, '{}'::jsonb) || %s::jsonb,
+                    sync_cursor = COALESCE(%s, sync_cursor),
+                    updated_at = now()
+                WHERE id = %s::uuid
+                """,
+                (Json(provider_metadata_merge), sync_cursor, source_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE north_agents
+                SET sync_cursor = COALESCE(%s, sync_cursor), updated_at = now()
+                WHERE id = %s::uuid
+                """,
+                (sync_cursor, source_id),
+            )
+        conn.commit()
+
+
 def fetch_slack_connection(
     database_url: str, *, workspace_id: str
 ) -> dict[str, Any] | None:
