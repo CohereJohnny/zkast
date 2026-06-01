@@ -7,8 +7,14 @@ import re
 import psycopg
 from psycopg.rows import dict_row
 
-# Graphiti group_id: alphanumeric, hyphen, underscore only.
-_AGENT_SUFFIX_RE = re.compile(r"[^a-zA-Z0-9_-]")
+# FalkorDB fulltext (RediSearch) treats hyphens as NOT operators inside group_id
+# filters. Graphiti passes group_id into @group_id:"..." queries, so graph names
+# must be alphanumeric + underscore only (no hyphens).
+_GRAPH_ID_SAFE_RE = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _safe_graph_token(value: str) -> str:
+    return _GRAPH_ID_SAFE_RE.sub("_", value.strip())
 
 
 def memory_space_graph_name(workspace_id: str, agent_id: str | None = None) -> str:
@@ -16,12 +22,15 @@ def memory_space_graph_name(workspace_id: str, agent_id: str | None = None) -> s
 
     - ``agent_id`` None → workspace-global graph (PDFs, shared ingestion).
     - ``agent_id`` set → per-agent isolated graph.
+
+    UUIDs are normalized (hyphens → underscores) so RediSearch fulltext queries
+    issued by Graphiti do not fail with syntax errors.
     """
-    ws = workspace_id.strip()
+    ws = _safe_graph_token(workspace_id)
     if not agent_id or not str(agent_id).strip():
         return ws
-    safe = _AGENT_SUFFIX_RE.sub("_", str(agent_id).strip())[:80]
-    return f"{ws}__a__{safe}"
+    aid = _safe_graph_token(str(agent_id).strip())[:80]
+    return f"{ws}_a_{aid}"
 
 
 def falkor_database_for_memory_space(workspace_id: str, agent_id: str | None = None) -> str:

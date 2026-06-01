@@ -42,7 +42,11 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
   const [error, setError] = useState<string | null>(null);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [indexStatus, setIndexStatus] = useState<{
-    raw_chunk?: { indexed?: number; total?: number };
+    raw_chunk?: {
+      embeddings_total?: number;
+      episodes_total?: number;
+      missing?: number;
+    };
     by_kind?: Record<string, number>;
   } | null>(null);
   const [indexBusy, setIndexBusy] = useState<string | null>(null);
@@ -80,7 +84,11 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
         { cache: "no-store" },
       );
       const body = (await res.json()) as {
-        raw_chunk?: { indexed?: number; total?: number };
+        raw_chunk?: {
+          embeddings_total?: number;
+          episodes_total?: number;
+          missing?: number;
+        };
         by_kind?: Record<string, number>;
         error?: { message?: string };
       };
@@ -117,13 +125,43 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
             body: JSON.stringify({ kinds }),
           },
         );
-        const body = (await res.json()) as { error?: { message?: string } };
+        const body = (await res.json()) as {
+          error?: { message?: string };
+          detail?: { error?: { message?: string } };
+          summary?: {
+            raw_chunk?: { processed?: number; skipped?: number; errors?: number; total?: number };
+            notes?: { processed?: number; errors?: number };
+          };
+        };
         if (!res.ok) {
-          setIndexError(body.error?.message ?? "Backfill failed");
-          toast({ variant: "error", message: "Backfill failed" });
+          const err =
+            body.error?.message ??
+            body.detail?.error?.message ??
+            "Backfill failed";
+          setIndexError(err);
+          toast({ variant: "error", message: err });
           return;
         }
-        toast({ variant: "success", message: `Backfill started: ${kinds.join(", ")}` });
+        const rc = body.summary?.raw_chunk;
+        const notes = body.summary?.notes;
+        const parts: string[] = [];
+        if (rc) {
+          parts.push(
+            `raw chunks: ${rc.processed ?? 0} embedded` +
+              (rc.errors ? `, ${rc.errors} error(s)` : "") +
+              (rc.skipped ? `, ${rc.skipped} already indexed` : ""),
+          );
+        }
+        if (notes) {
+          parts.push(
+            `notes: ${notes.processed ?? 0} embedded` +
+              (notes.errors ? `, ${notes.errors} error(s)` : ""),
+          );
+        }
+        toast({
+          variant: "success",
+          message: parts.length ? parts.join("; ") : `Backfill finished: ${kinds.join(", ")}`,
+        });
         await loadIndexStatus();
       } catch {
         setIndexError("Backfill request failed");
@@ -285,7 +323,14 @@ export function DiagnosticsPageClient({ workspaceId }: { workspaceId: string }) 
               <dl className="mt-2 grid grid-cols-2 gap-2 text-caption text-muted-foreground">
                 <dt>Raw chunks indexed</dt>
                 <dd className="text-muted-foreground">
-                  {indexStatus.raw_chunk?.indexed ?? "—"} / {indexStatus.raw_chunk?.total ?? "—"}
+                  {indexStatus.raw_chunk?.embeddings_total ?? "—"} /{" "}
+                  {indexStatus.raw_chunk?.episodes_total ?? "—"}
+                  {typeof indexStatus.raw_chunk?.missing === "number" &&
+                  indexStatus.raw_chunk.missing > 0 ? (
+                    <span className="ml-1 text-amber-600 dark:text-amber-400">
+                      ({indexStatus.raw_chunk.missing} missing)
+                    </span>
+                  ) : null}
                 </dd>
                 <dt>note_zettel</dt>
                 <dd className="text-muted-foreground">{indexStatus.by_kind?.note_zettel ?? 0}</dd>

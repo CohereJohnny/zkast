@@ -284,6 +284,101 @@ def search_by_kind(
     return out
 
 
+def delete_for_atomic_notes(
+    database_url: str,
+    *,
+    workspace_id: str,
+    note_ids: list[str],
+    index_kinds: tuple[str, ...] | None = ("note_zettel", "note_amem"),
+) -> int:
+    """Delete embeddings keyed to atomic note ids (zettel + amem by default)."""
+    if not note_ids:
+        return 0
+    kinds = index_kinds or ("note_zettel", "note_amem")
+    with _connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM retrieval_embeddings
+                WHERE workspace_id = %s::uuid
+                  AND source_kind = 'atomic_note'
+                  AND source_id = ANY(%s::text[])
+                  AND index_kind = ANY(%s::text[])
+                """,
+                (workspace_id, note_ids, list(kinds)),
+            )
+            count = cur.rowcount or 0
+            conn.commit()
+    return int(count)
+
+
+def purge_orphaned_note_embeddings(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str | None = None,
+) -> int:
+    """Remove note_zettel / note_amem rows whose atomic_note no longer exists."""
+    params: list[Any] = [workspace_id]
+    agent_filter = ""
+    if agent_id:
+        agent_filter = " AND re.agent_id = %s::uuid"
+        params.append(agent_id)
+    with _connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                DELETE FROM retrieval_embeddings re
+                WHERE re.workspace_id = %s::uuid
+                  AND re.index_kind IN ('note_zettel', 'note_amem')
+                  AND re.source_kind = 'atomic_note'
+                  {agent_filter}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM atomic_notes n
+                    WHERE n.workspace_id = re.workspace_id
+                      AND n.id::text = re.source_id
+                  )
+                """,
+                params,
+            )
+            count = cur.rowcount or 0
+            conn.commit()
+    return int(count)
+
+
+def count_orphaned_note_embeddings(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str | None = None,
+    index_kind: str = INDEX_KIND_NOTE_AMEM,
+) -> int:
+    """Count note embeddings with no backing atomic_note row."""
+    params: list[Any] = [workspace_id, index_kind]
+    agent_filter = ""
+    if agent_id:
+        agent_filter = " AND re.agent_id = %s::uuid"
+        params.append(agent_id)
+    with _connect(database_url) as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*)::int AS c
+            FROM retrieval_embeddings re
+            WHERE re.workspace_id = %s::uuid
+              AND re.index_kind = %s
+              AND re.source_kind = 'atomic_note'
+              {agent_filter}
+              AND NOT EXISTS (
+                SELECT 1 FROM atomic_notes n
+                WHERE n.workspace_id = re.workspace_id
+                  AND n.id::text = re.source_id
+              )
+            """,
+            params,
+        ).fetchone()
+    return int(row["c"]) if row else 0
+
+
 def delete_for_document(
     database_url: str,
     *,

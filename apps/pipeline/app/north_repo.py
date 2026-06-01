@@ -136,10 +136,33 @@ def fetch_agent_stats(
         amem_row = conn.execute(
             """
             SELECT count(*)::int AS c
-            FROM retrieval_embeddings
-            WHERE workspace_id = %s::uuid
-              AND agent_id = %s::uuid
-              AND index_kind = 'note_amem'
+            FROM retrieval_embeddings re
+            WHERE re.workspace_id = %s::uuid
+              AND re.agent_id = %s::uuid
+              AND re.index_kind = 'note_amem'
+              AND re.source_kind = 'atomic_note'
+              AND EXISTS (
+                SELECT 1 FROM atomic_notes n
+                WHERE n.workspace_id = re.workspace_id
+                  AND n.id::text = re.source_id
+                  AND n.agent_id = re.agent_id
+              )
+            """,
+            (workspace_id, agent_id),
+        ).fetchone()
+        orphan_row = conn.execute(
+            """
+            SELECT count(*)::int AS c
+            FROM retrieval_embeddings re
+            WHERE re.workspace_id = %s::uuid
+              AND re.agent_id = %s::uuid
+              AND re.index_kind = 'note_amem'
+              AND re.source_kind = 'atomic_note'
+              AND NOT EXISTS (
+                SELECT 1 FROM atomic_notes n
+                WHERE n.workspace_id = re.workspace_id
+                  AND n.id::text = re.source_id
+              )
             """,
             (workspace_id, agent_id),
         ).fetchone()
@@ -148,6 +171,7 @@ def fetch_agent_stats(
         "derived_notes": int(note_row["c"]) if note_row else 0,
         "cached_conversations": int(cache_row["c"]) if cache_row else 0,
         "note_amem_embeddings": int(amem_row["c"]) if amem_row else 0,
+        "note_amem_orphaned": int(orphan_row["c"]) if orphan_row else 0,
     }
 
 
@@ -192,6 +216,7 @@ def fetch_conversation_memory_stats_by_agent(
                 ON re.workspace_id = %s::uuid
                AND re.index_kind = 'note_amem'
                AND re.source_kind = 'atomic_note'
+               AND n.id IS NOT NULL
                AND re.source_id = n.id::text
               GROUP BY ld.north_conversation_id
             )

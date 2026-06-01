@@ -1004,7 +1004,10 @@ export function GraphCanvas({
     return <p className="text-caption text-muted-foreground">Loading graph…</p>;
   }
   if (data.nodes.length === 0) {
-    return <p className="text-caption text-muted-foreground">No entities in this workspace yet.</p>;
+    const agentHint = filters.agent_id
+      ? "No entities for this agent with the current filters. Try clearing entity-type chips or re-import the conversation."
+      : "No entities in this workspace yet.";
+    return <p className="text-caption text-muted-foreground">{agentHint}</p>;
   }
 
   return (

@@ -72,16 +72,27 @@ def _filter_entity_ids_sql(
         )
         params.append(document_id)
     if agent_id:
+        # Agent-isolated graph rows set ``entities.agent_id`` directly; many
+        # note-derived entities only have ``entity_notes`` provenance (no
+        # ``entity_episodes``), so match all three paths.
         parts.append(
             """
-            EXISTS (
-              SELECT 1 FROM entity_episodes ee
-              JOIN episodes ep ON ep.id = ee.episode_id
-              WHERE ee.entity_id = e.id AND ep.agent_id = %s::uuid
+            (
+              e.agent_id = %s::uuid
+              OR EXISTS (
+                SELECT 1 FROM entity_episodes ee
+                JOIN episodes ep ON ep.id = ee.episode_id
+                WHERE ee.entity_id = e.id AND ep.agent_id = %s::uuid
+              )
+              OR EXISTS (
+                SELECT 1 FROM entity_notes en
+                JOIN atomic_notes n ON n.id = en.note_id
+                WHERE en.entity_id = e.id AND n.agent_id = %s::uuid
+              )
             )
             """
         )
-        params.append(agent_id)
+        params.extend([agent_id, agent_id, agent_id])
     if tag:
         parts.append(
             """

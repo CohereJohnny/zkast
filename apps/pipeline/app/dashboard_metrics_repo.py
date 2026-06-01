@@ -16,13 +16,19 @@ from app.north_repo import (
 )
 from app.raw_chunk_index import count_raw_chunks
 from app.retrieval_embeddings_repo import count_by_kind
+from app.retrieval_embeddings_repo import (
+    count_orphaned_note_embeddings,
+    purge_orphaned_note_embeddings,
+)
 from app.usage_events_repo import usage_totals_by_source, usage_totals_workspace
 from app.workspace_reset import preview_workspace_reset
 
 
 def _count(conn: psycopg.Connection, sql: str, *params: Any) -> int:
     row = conn.execute(sql, params).fetchone()
-    return int(row[0]) if row else 0
+    if not row:
+        return 0
+    return int(next(iter(row.values())))
 
 
 def _documents_by_source(conn: psycopg.Connection, workspace_id: str) -> dict[str, int]:
@@ -301,6 +307,15 @@ def fetch_dashboard_metrics(
 ) -> dict[str, Any]:
     """Build full dashboard payload for workspace (optional agent/conversation filter)."""
     preview = preview_workspace_reset(database_url, workspace_id=workspace_id)
+    drift_warnings: list[str] = []
+    orphaned_embeddings = count_orphaned_note_embeddings(
+        database_url, workspace_id=workspace_id
+    )
+    if orphaned_embeddings:
+        removed = purge_orphaned_note_embeddings(database_url, workspace_id=workspace_id)
+        drift_warnings.append(
+            f"Removed {removed} orphaned note embedding(s) left after note deletion or re-ingestion"
+        )
     raw_chunk = count_raw_chunks(database_url, workspace_id=workspace_id)
     embeddings_by_kind = count_by_kind(database_url, workspace_id=workspace_id)
     usage_workspace = usage_totals_workspace(database_url, workspace_id=workspace_id)
@@ -344,7 +359,6 @@ def fetch_dashboard_metrics(
         except Exception:  # noqa: BLE001
             falkor_counts = {}
 
-    drift_warnings: list[str] = []
     pg_global_entities = postgres_extra["global_graph"]["entities"]
     pg_global_maps = postgres_extra["global_graph"]["graphiti_entity_maps"]
     global_graph = memory_space_graph_name(workspace_id, None)
