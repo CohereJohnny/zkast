@@ -87,7 +87,8 @@ from app.note_embedding_index import (
 )
 from app.north_repo import fetch_north_agent
 from app.transcript_episodes import build_episode_rows_from_transcript
-from app import entities_repo
+from app.slack_transcript import build_episode_rows_from_slack_unit
+from app import entities_repo, raw_chunk_index
 
 logger = structlog.get_logger(__name__)
 
@@ -513,6 +514,136 @@ async def _parse_north_transcript(
     )
 
 
+async def _parse_slack_conversation(
+    ctx: dict[str, Any],
+    *,
+    workspace_id: str,
+    document_id: str,
+    ingestion_run_id: str,
+    job_id: str,
+    doc: dict[str, Any],
+) -> None:
+    """Parse a stored Slack conversation unit into episodes (source-scoped).
+
+    The import step already normalized + segmented the unit and stored it on
+    ``documents.raw_transcript_json``; here we just turn it into episodes
+    (offline, no Slack calls) and hand off to the shared notes/graph spine.
+    """
+    redis = ctx["redis"]
+    database_url: str = ctx["database_url"]
+
+    raw: Any = doc.get("raw_transcript_json")
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    transcript: dict[str, Any] = raw if isinstance(raw, dict) else {"messages": []}
+
+    agent_id = doc.get("agent_id")
+    if not agent_id:
+        raise RuntimeError("slack document missing agent_id (channel source)")
+
+    source_meta = doc.get("source_metadata") if isinstance(doc.get("source_metadata"), dict) else {}
+    segmentation_mode = str((source_meta or {}).get("segmentation_mode") or "turn")
+
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="parsing",
+        message="Parsing Slack conversation into episodes",
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+
+    await asyncio.to_thread(delete_episodes_for_document, database_url, document_id=document_id)
+
+    rows = build_episode_rows_from_slack_unit(
+        transcript=transcript,
+        agent_id=str(agent_id),
+        segmentation_mode=segmentation_mode,
+    )
+    if not rows:
+        raise RuntimeError("Slack conversation produced zero episodes (empty after filters)")
+
+    await asyncio.to_thread(
+        insert_episodes,
+        database_url,
+        workspace_id=workspace_id,
+        document_id=document_id,
+        ingestion_run_id=ingestion_run_id,
+        rows=rows,
+    )
+    chunk_count = len(rows)
+    settings = get_settings()
+    await _index_raw_chunk_embeddings(
+        redis=redis,
+        database_url=database_url,
+        workspace_id=workspace_id,
+        settings=settings,
+        job_id=job_id,
+        ingestion_run_id=ingestion_run_id,
+        stage="parsing",
+    )
+    await asyncio.to_thread(
+        merge_run_stats_incremental,
+        database_url,
+        run_id=ingestion_run_id,
+        extra={"chunk_count": chunk_count, "page_count": chunk_count, "stage": "parsing_done"},
+    )
+    await asyncio.to_thread(
+        update_document,
+        database_url,
+        document_id=document_id,
+        page_count=chunk_count,
+    )
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="parsing",
+        message=f"Parsed Slack conversation into {chunk_count} episodes",
+        data={"chunk_count": chunk_count},
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+    await publish_job_event(redis, job_id, "stage_completed", stage="parsing")
+
+    pool = await _ensure_arq_pool(ctx)
+    enqueued = await pool.enqueue_job(
+        "generate_atomic_notes",
+        workspace_id=workspace_id,
+        document_id=document_id,
+        ingestion_run_id=ingestion_run_id,
+        job_id=job_id,
+        _job_id=f"{job_id}:notes",
+    )
+    if enqueued is None:
+        raise RuntimeError(
+            "Failed to enqueue generate_atomic_notes — arq returned None "
+            "(stage may already be queued/in-flight)."
+        )
+    await asyncio.to_thread(
+        update_document,
+        database_url,
+        document_id=document_id,
+        status="generating_notes",
+    )
+    await job_hset(
+        redis,
+        job_id,
+        status="running",
+        progress=json.dumps(
+            {"percent": 5, "stage": "generating_notes", "message": "queued_notes"}
+        ),
+    )
+    await publish_job_event(
+        redis,
+        job_id,
+        "stage_progress",
+        stage="generating_notes",
+        percent=5,
+    )
+
+
 async def parse_document(
     ctx: dict[str, Any],
     *,
@@ -557,6 +688,17 @@ async def parse_document(
 
             if str(doc.get("source_kind") or "pdf") == "north_conversation":
                 await _parse_north_transcript(
+                    ctx,
+                    workspace_id=workspace_id,
+                    document_id=document_id,
+                    ingestion_run_id=ingestion_run_id,
+                    job_id=job_id,
+                    doc=doc,
+                )
+                return
+
+            if str(doc.get("source_kind") or "pdf") == "slack_conversation":
+                await _parse_slack_conversation(
                     ctx,
                     workspace_id=workspace_id,
                     document_id=document_id,
