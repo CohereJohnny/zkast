@@ -70,6 +70,7 @@ type AgentSummary = {
   agent_id: string;
   display_name: string;
   external_agent_id?: string;
+  provider?: string;
   stats?: {
     imported_documents: number;
     derived_notes: number;
@@ -369,61 +370,101 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
             </div>
           </div>
 
-          <div className="rounded-lg border border-border bg-card p-4">
-            <h2 className="text-h5 font-semibold text-foreground">Agents (isolated memory spaces)</h2>
-            <p className="mt-1 text-caption text-muted-foreground">
-              Each agent has its own Falkor graph, scoped entities, and filtered embeddings.
-            </p>
-            <ScrollRegion className="mt-4 max-h-[min(50vh,420px)]">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-left text-caption">
-                <thead>
-                  <tr className="border-b border-border text-muted-foreground">
-                    <th className="py-2 pr-4">Agent</th>
-                    <th className="py-2 pr-4">Docs</th>
-                    <th className="py-2 pr-4">Notes</th>
-                    <th className="py-2 pr-4">A-MEM</th>
-                    <th className="py-2 pr-4">Graph (PG)</th>
-                    <th className="py-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data.agents ?? []).map((a) => (
-                    <tr
-                      key={a.agent_id}
-                      className={cn(
-                        "border-b border-border/60",
-                        agentFilter === a.agent_id && "bg-secondary/80",
-                      )}
-                    >
-                      <td className="py-2 pr-4 font-medium text-foreground">{a.display_name}</td>
-                      <td className="py-2 pr-4 tabular-nums">{a.stats?.imported_documents ?? 0}</td>
-                      <td className="py-2 pr-4 tabular-nums">{a.notes ?? a.stats?.derived_notes ?? 0}</td>
-                      <td className="py-2 pr-4 tabular-nums">
-                        {a.stats?.note_amem_embeddings ?? 0}
-                        {(a.stats?.note_amem_orphaned ?? 0) > 0 ? (
-                          <span className="ml-1 text-caution" title="Orphaned embeddings pending cleanup">
-                            (+{a.stats?.note_amem_orphaned})
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="py-2 pr-4 tabular-nums">{a.graph?.entities ?? 0}</td>
-                      <td className="py-2">
-                        <button
-                          type="button"
-                          className="text-link hover:underline"
-                          onClick={() => setAgentFilter(a.agent_id)}
+          {(() => {
+            const allAgents = data.agents ?? [];
+            const slackChannels = allAgents.filter((a) => a.provider === "slack");
+            const agents = allAgents.filter((a) => a.provider !== "slack");
+
+            const MemorySpaceTable = ({
+              rows,
+              firstColLabel,
+            }: {
+              rows: AgentSummary[];
+              firstColLabel: string;
+            }) => (
+              <ScrollRegion className="mt-4 max-h-[min(50vh,420px)]">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[640px] text-left text-caption">
+                    <thead>
+                      <tr className="border-b border-border text-muted-foreground">
+                        <th className="py-2 pr-4">{firstColLabel}</th>
+                        <th className="py-2 pr-4">Docs</th>
+                        <th className="py-2 pr-4">Notes</th>
+                        <th className="py-2 pr-4">A-MEM</th>
+                        <th className="py-2 pr-4">Graph (PG)</th>
+                        <th className="py-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((a) => (
+                        <tr
+                          key={a.agent_id}
+                          className={cn(
+                            "border-b border-border/60",
+                            agentFilter === a.agent_id && "bg-secondary/80",
+                          )}
                         >
-                          Drill down
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            </ScrollRegion>
-          </div>
+                          <td className="py-2 pr-4 font-medium text-foreground">{a.display_name}</td>
+                          <td className="py-2 pr-4 tabular-nums">{a.stats?.imported_documents ?? 0}</td>
+                          <td className="py-2 pr-4 tabular-nums">{a.notes ?? a.stats?.derived_notes ?? 0}</td>
+                          <td className="py-2 pr-4 tabular-nums">
+                            {a.stats?.note_amem_embeddings ?? 0}
+                            {(a.stats?.note_amem_orphaned ?? 0) > 0 ? (
+                              <span className="ml-1 text-caution" title="Orphaned embeddings pending cleanup">
+                                (+{a.stats?.note_amem_orphaned})
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="py-2 pr-4 tabular-nums">{a.graph?.entities ?? 0}</td>
+                          <td className="py-2">
+                            <button
+                              type="button"
+                              className="text-link hover:underline"
+                              onClick={() => setAgentFilter(a.agent_id)}
+                            >
+                              Drill down
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {rows.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-3 text-muted-foreground">
+                            None yet.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </ScrollRegion>
+            );
+
+            return (
+              <>
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <h2 className="text-h5 font-semibold text-foreground">
+                    Agents (isolated memory spaces)
+                  </h2>
+                  <p className="mt-1 text-caption text-muted-foreground">
+                    Each agent has its own Falkor graph, scoped entities, and filtered embeddings.
+                  </p>
+                  <MemorySpaceTable rows={agents} firstColLabel="Agent" />
+                </div>
+
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <h2 className="text-h5 font-semibold text-foreground">
+                    Slack channels (isolated memory spaces)
+                  </h2>
+                  <p className="mt-1 text-caption text-muted-foreground">
+                    Each imported Slack channel is its own memory space — own Falkor graph, scoped
+                    entities, notes, and embeddings.
+                  </p>
+                  <MemorySpaceTable rows={slackChannels} firstColLabel="Channel" />
+                </div>
+              </>
+            );
+          })()}
 
           {selectedAgent ? (
             <div

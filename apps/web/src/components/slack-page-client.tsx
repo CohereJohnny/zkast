@@ -60,6 +60,7 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
   const [addId, setAddId] = useState("");
   const [addName, setAddName] = useState("");
   const [adding, setAdding] = useState(false);
+  const [dreaming, setDreaming] = useState<string | null>(null);
 
   const [showBrowse, setShowBrowse] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -179,6 +180,36 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
       }
     },
     [base, workspaceId, registerActiveJob, requestOpenLogConsole, toast, loadSources],
+  );
+
+  const dreamChannel = useCallback(
+    async (sourceId: string, name: string) => {
+      setDreaming(sourceId);
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${workspaceId}/north/agents/${encodeURIComponent(sourceId)}/dream`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+        );
+        const body = (await res.json().catch(() => ({}))) as {
+          job_id?: string;
+          error?: { message?: string };
+        };
+        if (!res.ok) {
+          toast({ variant: "error", message: body.error?.message ?? "Dream failed to start" });
+          return;
+        }
+        if (body.job_id) {
+          registerActiveJob(body.job_id, workspaceId, null, "dreaming");
+          requestOpenLogConsole();
+        }
+        toast({ variant: "success", message: `Dreaming started for #${name}` });
+      } catch {
+        toast({ variant: "error", message: "Dream request failed" });
+      } finally {
+        setDreaming(null);
+      }
+    },
+    [workspaceId, registerActiveJob, requestOpenLogConsole, toast],
   );
 
   const addByIdHandler = useCallback(async () => {
@@ -325,6 +356,34 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
                             "not imported yet"
                           )}
                         </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-caption">
+                          <Link
+                            href={`/notes?agentId=${encodeURIComponent(s.source_id)}`}
+                            className="text-link hover:underline"
+                          >
+                            Notes
+                          </Link>
+                          <Link
+                            href={`/graph?agent_id=${encodeURIComponent(s.source_id)}`}
+                            className="text-link hover:underline"
+                          >
+                            Graph
+                          </Link>
+                          <Link
+                            href={`/chat?agent_id=${encodeURIComponent(s.source_id)}`}
+                            className="text-link hover:underline"
+                          >
+                            Chat
+                          </Link>
+                          <button
+                            type="button"
+                            disabled={dreaming === s.source_id}
+                            onClick={() => void dreamChannel(s.source_id, s.name)}
+                            className="text-link hover:underline disabled:opacity-50"
+                          >
+                            {dreaming === s.source_id ? "Dreaming…" : "Dream"}
+                          </button>
+                        </div>
                       </div>
                       <select
                         value={range}
