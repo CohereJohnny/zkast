@@ -57,6 +57,13 @@ router = APIRouter(tags=["internal-slack"])
 
 SLACK_PROVIDER = "slack"
 
+# In-process TTL cache for the (slow, rate-limited) Slack channel listing.
+# Keyed by workspace id -> (fetched_at_epoch, raw_channels). Registered state
+# is merged fresh from Postgres on every request, so only the Slack API result
+# is cached.
+_CHANNELS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_CHANNELS_CACHE_TTL_S = 300.0
+
 
 def _slack_source_or_404(settings: Settings, ws: str, source_id: str) -> dict[str, Any]:
     sources = {
@@ -356,23 +363,64 @@ async def delete_slack_connection_route(
 # --------------------------------------------------------------------------- #
 # Channels (memory sources, provider='slack')
 # --------------------------------------------------------------------------- #
-@router.get("/internal/v1/workspaces/{workspace_id}/slack/channels")
-async def get_slack_channels(workspace_id: uuid.UUID, request: Request) -> JSONResponse:
+def _serialize_slack_source(src: dict[str, Any]) -> dict[str, Any]:
+    sync = src.get("provider_metadata") if isinstance(src.get("provider_metadata"), dict) else None
+    return {
+        "source_id": src.get("id"),
+        "channel_id": src.get("external_agent_id"),
+        "name": src.get("display_name"),
+        "sync": sync or None,
+    }
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/slack/sources")
+async def get_slack_sources(workspace_id: uuid.UUID, request: Request) -> JSONResponse:
+    """Registered Slack channels for this workspace (fast — Postgres only).
+
+    Lets the UI show importable channels + sync coverage without the slow,
+    rate-limited full channel listing.
+    """
     settings: Settings = request.app.state.settings
     ws = str(workspace_id)
-    client = _slack_client(settings, ws)
-    try:
-        channels = await client.list_channels()
-    except SlackAuthError as exc:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": {"code": "slack_auth", "message": str(exc)}},
-        ) from exc
-    except SlackApiError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"error": {"code": "slack_api", "message": str(exc)}},
-        ) from exc
+    sources = [
+        _serialize_slack_source(a)
+        for a in list_north_agents(settings.database_url, workspace_id=ws)
+        if a.get("provider") == SLACK_PROVIDER
+    ]
+    sources.sort(key=lambda s: str(s.get("name") or ""))
+    return JSONResponse(content={"items": sources})
+
+
+@router.get("/internal/v1/workspaces/{workspace_id}/slack/channels")
+async def get_slack_channels(
+    workspace_id: uuid.UUID,
+    request: Request,
+    refresh: bool = Query(default=False),
+) -> JSONResponse:
+    settings: Settings = request.app.state.settings
+    ws = str(workspace_id)
+
+    cached = _CHANNELS_CACHE.get(ws)
+    fresh = cached is not None and (time.time() - cached[0]) < _CHANNELS_CACHE_TTL_S
+    if fresh and not refresh:
+        channels = cached[1]
+        from_cache = True
+    else:
+        client = _slack_client(settings, ws)
+        try:
+            channels = await client.list_channels()
+        except SlackAuthError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": {"code": "slack_auth", "message": str(exc)}},
+            ) from exc
+        except SlackApiError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"error": {"code": "slack_api", "message": str(exc)}},
+            ) from exc
+        _CHANNELS_CACHE[ws] = (time.time(), channels)
+        from_cache = False
 
     registered: dict[str, dict[str, Any]] = {
         a["external_agent_id"]: a
@@ -399,7 +447,7 @@ async def get_slack_channels(workspace_id: uuid.UUID, request: Request) -> JSONR
                 "sync": sync or None,
             }
         )
-    return JSONResponse(content={"items": items})
+    return JSONResponse(content={"items": items, "from_cache": from_cache})
 
 
 @router.post("/internal/v1/workspaces/{workspace_id}/slack/channels/register")

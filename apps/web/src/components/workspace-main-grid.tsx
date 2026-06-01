@@ -96,12 +96,14 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
   const isAgentDetailRoute = /^\/agents\/[^/]+$/.test(pathname);
   const isWikiRoute = pathname === "/wiki" || pathname.startsWith("/wiki/");
   const isEvalsRoute = pathname === "/evals" || pathname.startsWith("/evals/");
+  const isSlackRoute = pathname === "/slack" || pathname.startsWith("/slack/");
   const dockJobLog =
     isConversationsRoute ||
     isJobsRoute ||
     isAgentDetailRoute ||
     isWikiRoute ||
-    isEvalsRoute;
+    isEvalsRoute ||
+    isSlackRoute;
   // The main column on /graph is already a full graph view; don't render the
   // right-rail mini graph next to it.
   const showRailGraph = pathname !== "/graph";
@@ -243,7 +245,9 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                       ? "Agent conversations"
                       : isWikiRoute
                         ? "Wiki"
-                        : "Main workspace panel"
+                        : isSlackRoute
+                          ? "Slack"
+                          : "Main workspace panel"
               }
               className={cn(
                 "flex min-h-0 flex-col rounded-lg border border-input bg-card outline-none",
