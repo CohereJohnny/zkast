@@ -1,15 +1,13 @@
-"""Internal HTTP API for Slack connect, channel registration, and thread listing.
+"""Internal HTTP API for Slack connect, channel registration, threads, and import.
 
-This is the Slack source backend skeleton (sprint: spec + scaffolding). The
-connect → list channels → register channel → list/cache threads surface is
-implemented end to end. Thread *import* (transcript adapter + arq enqueue) is
-intentionally deferred to the implementation sprint and returns 501 with a
-clear pointer rather than creating partial document state — see
-specs/openspecs/slack-source.md "Out of Scope (this sprint)".
+Connect → list channels → register channel → list/cache threads → import a
+channel's conversation units (threads + session windows) into the shared
+ingestion spine (parse → notes → graph). See specs/openspecs/slack-source.md.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -18,8 +16,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.config import Settings
+from app.documents_repo import (
+    fetch_document_by_checksum,
+    insert_document,
+    insert_ingestion_run,
+)
+from app.job_redis import job_hset
 from app.north_repo import list_north_agents, upsert_north_agent
 from app.secrets import decrypt, encrypt
+from app.slack_checksum import slack_unit_content_checksum, slack_unit_ingest_hash
 from app.slack_client import (
     DEFAULT_SLACK_BOT_SCOPES,
     SlackApiError,
@@ -39,12 +44,67 @@ from app.slack_repo import (
     upsert_slack_connection,
     upsert_slack_conversation_cache,
 )
+from app.slack_transcript import DEFAULT_SESSION_GAP_SECONDS, build_conversation_units
+from app.storage import LocalStorage
+from app.workspace_repo import fetch_pipeline_settings
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["internal-slack"])
 
 SLACK_PROVIDER = "slack"
+
+
+def _slack_source_or_404(settings: Settings, ws: str, source_id: str) -> dict[str, Any]:
+    sources = {
+        a["id"]: a
+        for a in list_north_agents(settings.database_url, workspace_id=ws)
+        if a.get("provider") == SLACK_PROVIDER
+    }
+    source = sources.get(source_id)
+    if not source:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "source_not_found", "message": "Slack channel source not found."}},
+        )
+    return source
+
+
+async def _fetch_channel_units(
+    client: SlackClient,
+    *,
+    channel_id: str,
+    channel_name: str,
+    history_limit: int,
+    session_gap_seconds: int,
+) -> list[dict[str, Any]]:
+    """Pull channel history + thread replies and segment into units."""
+    roots = await client.channel_history(channel_id=channel_id, limit=history_limit)
+    user_names: dict[str, str] = {}
+    try:
+        user_names = build_user_name_map(await client.list_users())
+    except (SlackAuthError, SlackApiError) as exc:
+        logger.info("slack_user_resolution_skipped", error=str(exc))
+
+    replies_by_thread_ts: dict[str, list[dict[str, Any]]] = {}
+    for msg in roots:
+        ts = str(msg.get("thread_ts") or msg.get("ts") or "")
+        if int(msg.get("reply_count") or 0) > 0 and ts:
+            try:
+                replies_by_thread_ts[ts] = await client.thread_replies(
+                    channel_id=channel_id, thread_ts=ts
+                )
+            except (SlackAuthError, SlackApiError) as exc:
+                logger.info("slack_thread_replies_skipped", thread_ts=ts, error=str(exc))
+
+    return build_conversation_units(
+        channel_id=channel_id,
+        channel_name=channel_name,
+        root_messages=roots,
+        replies_by_thread_ts=replies_by_thread_ts,
+        user_names=user_names,
+        session_gap_seconds=session_gap_seconds,
+    )
 
 
 def _require_slack_app(settings: Settings) -> tuple[str, str, str]:
@@ -402,7 +462,7 @@ async def get_channel_threads(
 
 
 # --------------------------------------------------------------------------- #
-# Import (deferred to implementation sprint)
+# Import — segment channel into documents and enqueue parse → notes → graph
 # --------------------------------------------------------------------------- #
 @router.post("/internal/v1/workspaces/{workspace_id}/slack/channels/{source_id}/import")
 async def post_import_threads(
@@ -410,19 +470,167 @@ async def post_import_threads(
     source_id: uuid.UUID,
     request: Request,
 ) -> JSONResponse:
-    # The shared spine (parse → notes → graph) is reused, but the Slack
-    # transcript→episode adapter, ingest-hash dedup, and arq enqueue land in
-    # the implementation sprint. We return 501 rather than create a dangling
-    # document. See specs/openspecs/slack-source.md FR-5/FR-10 and Out of Scope.
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "error": {
-                "code": "slack_import_not_implemented",
-                "message": (
-                    "Slack thread import is scaffolded but not yet wired. The "
-                    "implementation sprint adds the transcript adapter and pipeline enqueue."
-                ),
+    """Import a channel's conversation units (threads + session windows).
+
+    Each unit becomes a ``slack_conversation`` document scoped to the channel's
+    memory source, then runs the shared parse → notes → graph pipeline.
+    Idempotent per unit via a content checksum.
+    """
+    settings: Settings = request.app.state.settings
+    ws = str(workspace_id)
+    sid = str(source_id)
+    source = _slack_source_or_404(settings, ws, sid)
+
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    history_limit = int(body.get("history_limit") or 200)
+    history_limit = max(1, min(history_limit, 1000))
+    session_gap = int(body.get("session_gap_seconds") or DEFAULT_SESSION_GAP_SECONDS)
+    segmentation_mode = str(body.get("segmentation_mode") or "turn")
+    channel_id = source["external_agent_id"]
+    channel_name = source.get("display_name") or channel_id
+
+    client = _slack_client(settings, ws)
+    try:
+        units = await _fetch_channel_units(
+            client,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            history_limit=history_limit,
+            session_gap_seconds=session_gap,
+        )
+    except SlackAuthError as exc:
+        raise HTTPException(
+            status_code=401, detail={"error": {"code": "slack_auth", "message": str(exc)}}
+        ) from exc
+    except SlackApiError as exc:
+        raise HTTPException(
+            status_code=502, detail={"error": {"code": "slack_api", "message": str(exc)}}
+        ) from exc
+
+    if not units:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": {
+                    "code": "slack_empty_channel",
+                    "message": "No ingestible conversations after filtering (join/system/empty messages removed).",
+                }
+            },
+        )
+
+    db = settings.database_url
+    pipe = fetch_pipeline_settings(db, ws)
+    storage = LocalStorage(settings.zkast_storage_root)
+    redis = request.app.state.redis_async
+    pool = request.app.state.arq_pool
+
+    created: list[dict[str, Any]] = []
+    skipped = 0
+    for unit in units:
+        transcript = unit["transcript"]
+        checksum = slack_unit_content_checksum(transcript)
+        if fetch_document_by_checksum(db, workspace_id=ws, checksum=checksum):
+            skipped += 1
+            continue
+
+        external_conversation_id = unit["external_conversation_id"]
+        upsert_slack_conversation_cache(
+            db,
+            workspace_id=ws,
+            source_id=sid,
+            external_conversation_id=external_conversation_id,
+            payload=transcript,
+        )
+
+        doc_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        raw_bytes = json.dumps(transcript, ensure_ascii=False).encode("utf-8")
+        storage_uri, _chk, byte_size = await storage.write_north_transcript_json(
+            ws, doc_id, raw_bytes, max_bytes=settings.max_upload_bytes
+        )
+        source_metadata = {
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "unit_kind": unit["kind"],
+            "title": unit["title"],
+            "segmentation_mode": segmentation_mode,
+            "ingest_content_hash": slack_unit_ingest_hash(transcript),
+        }
+        doc_row = insert_document(
+            db,
+            document_id=doc_id,
+            workspace_id=ws,
+            original_filename=f"slack-{external_conversation_id}.json",
+            mime_type="application/json",
+            byte_size=byte_size,
+            storage_uri=storage_uri,
+            checksum=checksum,
+            replaces_document_id=None,
+            status="queued",
+            source_kind="slack_conversation",
+            agent_id=sid,
+            external_conversation_id=external_conversation_id,
+            source_metadata=source_metadata,
+            raw_transcript_json=transcript,
+        )
+        insert_ingestion_run(
+            db,
+            run_id=run_id,
+            document_id=doc_id,
+            status="running",
+            pipeline_version=settings.pipeline_version,
+            llm_provider=str(pipe.get("default_llm_provider") or "cohere"),
+            llm_model_small=str(pipe.get("small_model") or ""),
+            llm_model_large=str(pipe.get("large_model") or ""),
+            stats={"chunk_count": 0, "page_count": 0},
+        )
+        await job_hset(
+            redis,
+            job_id,
+            workspace_id=ws,
+            document_id=doc_id,
+            ingestion_run_id=run_id,
+            kind="document_parse",
+            status="queued",
+            progress='{"percent":0,"stage":"queued"}',
+        )
+        await pool.enqueue_job(
+            "parse_document",
+            workspace_id=ws,
+            document_id=doc_id,
+            ingestion_run_id=run_id,
+            job_id=job_id,
+            _job_id=f"{job_id}:parse",
+        )
+        created.append(
+            {
+                "document_id": doc_id,
+                "job_id": job_id,
+                "external_conversation_id": external_conversation_id,
+                "kind": unit["kind"],
+                "title": unit["title"],
             }
+        )
+
+    logger.info(
+        "slack_import_enqueued",
+        workspace_id=ws,
+        source_id=sid,
+        created=len(created),
+        skipped=skipped,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "units": len(units),
+            "created": len(created),
+            "skipped": skipped,
+            "documents": created,
         },
     )
