@@ -3,17 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Unified Notes "Sources" filter.
+ * Unified source/scope filter used by Notes and Graph.
  *
- * Collapses the old "Document id filter" + "North agent" pickers into one
- * combobox that lists:
- *  - Memory spaces: agents and Slack channels (filters notes by agent_id —
- *    everything in that space)
- *  - Documents: PDFs, agent conversations, and Slack sessions/threads
- *    (filters notes by document_id — just that source)
+ * One combobox that lists:
+ *  - Memory spaces: agents and Slack channels (scope by agent_id — everything
+ *    in that space)
+ *  - Documents: PDFs, agent conversations, and Slack sessions/threads (scope by
+ *    document_id — just that source)
+ *
+ * Emits a discriminated selection so callers map to the right query param.
  */
 
-export type NoteSourceSelection = { kind: "agent" | "document"; id: string };
+export type SourceScopeSelection = { kind: "agent" | "document"; id: string };
 
 type AgentRow = {
   id: string;
@@ -57,7 +58,7 @@ function buildOptions(agents: AgentRow[], docs: DocRow[]): Option[] {
       kind: "agent",
       id: a.id,
       primary: isSlack ? `#${name}` : name,
-      secondary: isSlack ? "Slack channel · all notes" : "Agent · all notes",
+      secondary: isSlack ? "Slack channel · whole space" : "Agent · whole space",
       group: "spaces",
       badge: isSlack ? "Slack" : "Agent",
       badgeClass: isSlack ? "bg-fuchsia-500/15 text-fuchsia-200" : "bg-primary/15 text-foreground",
@@ -88,14 +89,16 @@ function buildOptions(agents: AgentRow[], docs: DocRow[]): Option[] {
   return out;
 }
 
-export function NotesSourceFilter({
+export function SourceScopeFilter({
   workspaceId,
   value,
   onChange,
+  label = "Sources",
 }: {
   workspaceId: string;
-  value: NoteSourceSelection | null;
-  onChange: (next: NoteSourceSelection | null) => void;
+  value: SourceScopeSelection | null;
+  onChange: (next: SourceScopeSelection | null) => void;
+  label?: string;
 }) {
   const [options, setOptions] = useState<Option[] | null>(null);
   const [query, setQuery] = useState("");
@@ -140,7 +143,6 @@ export function NotesSourceFilter({
     const match = (o: Option) =>
       !q || o.primary.toLowerCase().includes(q) || o.secondary.toLowerCase().includes(q);
     const list = q ? options.filter(match) : options;
-    // Spaces first, then documents; cap for performance.
     const spaces = list.filter((o) => o.group === "spaces").slice(0, 40);
     const docs = list.filter((o) => o.group === "documents").slice(0, 60);
     return [...spaces, ...docs];
@@ -184,13 +186,13 @@ export function NotesSourceFilter({
     }
   };
 
-  const listboxId = `notes-source-listbox-${workspaceId}`;
+  const listboxId = `source-scope-listbox-${workspaceId}`;
   let renderedGroup: string | null = null;
 
   return (
     <div ref={wrapperRef} className="text-caption text-muted-foreground">
       <label className="block">
-        Sources
+        {label}
         <div className="relative mt-1">
           <input
             type="text"

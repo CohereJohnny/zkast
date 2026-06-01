@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/feedback-provider";
 import { NoteDetail } from "@/components/note-detail";
 import { NotesList, type NoteListItem } from "@/components/notes-list";
-import type { NoteSourceSelection } from "@/components/filters/notes-source-filter";
+import type { SourceScopeSelection } from "@/components/filters/source-scope-filter";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -21,7 +21,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
   const [qInput, setQInput] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [origin, setOrigin] = useState("");
-  const [source, setSource] = useState<NoteSourceSelection | null>(null);
+  const [source, setSource] = useState<SourceScopeSelection | null>(null);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);

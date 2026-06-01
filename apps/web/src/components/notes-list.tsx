@@ -1,9 +1,9 @@
 "use client";
 
 import {
-  NotesSourceFilter,
-  type NoteSourceSelection,
-} from "@/components/filters/notes-source-filter";
+  SourceScopeFilter,
+  type SourceScopeSelection,
+} from "@/components/filters/source-scope-filter";
 
 export type NoteListItem = {
   id: string;
@@ -35,10 +35,10 @@ export function NotesList({
   error: string | null;
   q: string;
   origin: string;
-  source: NoteSourceSelection | null;
+  source: SourceScopeSelection | null;
   onQChange: (v: string) => void;
   onOriginChange: (v: string) => void;
-  onSourceChange: (next: NoteSourceSelection | null) => void;
+  onSourceChange: (next: SourceScopeSelection | null) => void;
   onNewNote: () => void;
   workspaceId?: string;
 }) {
@@ -77,7 +77,7 @@ export function NotesList({
         </select>
       </label>
       {workspaceId ? (
-        <NotesSourceFilter
+        <SourceScopeFilter
           workspaceId={workspaceId}
           value={source}
           onChange={onSourceChange}
