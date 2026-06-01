@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -15,7 +16,39 @@ from app.ingestion_logs_repo import (
     list_logs_for_document,
     list_logs_for_run,
 )
-from app.job_redis import job_hgetall, list_workspace_jobs
+from app.job_redis import (
+    arq_queue_snapshot,
+    decode_job_hash,
+    enrich_pipeline_jobs,
+    job_hgetall,
+    list_workspace_jobs,
+)
+
+
+async def _merge_arq_in_progress_jobs(
+    redis: Any,
+    *,
+    workspace_id: str,
+    jobs: list[dict[str, Any]],
+    arq_in_progress: list[str],
+) -> list[dict[str, Any]]:
+    """Ensure worker-active arq tasks appear in the overview even if scan order missed them."""
+    known = {str(j.get("job_id") or "") for j in jobs}
+    merged = list(jobs)
+    for entry in arq_in_progress:
+        if ":" not in entry:
+            continue
+        job_id, _func = entry.rsplit(":", 1)
+        if not job_id or job_id in known:
+            continue
+        raw = await job_hgetall(redis, job_id)
+        if not raw or raw.get("workspace_id") != workspace_id:
+            continue
+        row = decode_job_hash(raw)
+        row["job_id"] = job_id
+        merged.append(row)
+        known.add(job_id)
+    return merged
 from app.jobs_stream import sse_job_events
 from app.north_repo import list_workspace_dream_jobs
 
@@ -59,24 +92,24 @@ async def get_workspace_jobs_overview(
     ws = str(workspace_id)
     redis = request.app.state.redis_async
 
-    try:
-        queue_depth = await redis.llen("arq:queue")
-    except Exception:  # noqa: BLE001
-        queue_depth = None
+    arq = await arq_queue_snapshot(redis)
 
-    try:
-        in_progress = await redis.zrange("arq:in_progress", 0, -1)
-        if in_progress and isinstance(in_progress[0], bytes):
-            in_progress = [v.decode() for v in in_progress]
-    except Exception:  # noqa: BLE001
-        in_progress = []
-
+    in_progress = arq.get("in_progress") or []
     pipeline_jobs = await list_workspace_jobs(redis, workspace_id=ws, limit=40)
+    pipeline_jobs = await _merge_arq_in_progress_jobs(
+        redis, workspace_id=ws, jobs=pipeline_jobs, arq_in_progress=in_progress
+    )
+    pipeline_jobs = await asyncio.to_thread(
+        enrich_pipeline_jobs,
+        settings.database_url,
+        pipeline_jobs,
+        arq_in_progress=in_progress,
+    )
     dream_jobs = list_workspace_dream_jobs(settings.database_url, workspace_id=ws, limit=30)
 
     return JSONResponse(
         content={
-            "arq": {"queue_depth": queue_depth, "in_progress": in_progress},
+            "arq": arq,
             "pipeline_jobs": pipeline_jobs,
             "dream_jobs": dream_jobs,
         }

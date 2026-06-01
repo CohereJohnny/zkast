@@ -87,9 +87,74 @@ from app.note_embedding_index import (
 )
 from app.north_repo import fetch_north_agent
 from app.transcript_episodes import build_episode_rows_from_transcript
-from app import entities_repo
+from app import entities_repo, raw_chunk_index
 
 logger = structlog.get_logger(__name__)
+
+
+async def _index_raw_chunk_embeddings(
+    *,
+    redis: Any,
+    database_url: str,
+    workspace_id: str,
+    settings: Any,
+    job_id: str,
+    ingestion_run_id: str,
+    stage: str = "parsing",
+) -> dict[str, int] | None:
+    """Embed parsed episode chunks for Naive RAG (``index_kind=raw_chunk``).
+
+    Ingestion used to leave this to a manual Diagnostics backfill; without
+    these rows, ``rag_raw_chunk_v1`` returns no grounding and refuses.
+    """
+    api_key = resolve_cohere_api_key(settings, workspace_id)
+    if not api_key:
+        await record_log(
+            redis,
+            job_id=job_id,
+            level="warning",
+            stage=stage,
+            message="Skipped raw_chunk embedding (no Cohere API key configured)",
+            database_url=database_url,
+            ingestion_run_id=ingestion_run_id,
+        )
+        return None
+    pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
+    embed_model = str(pipe.get("embed_model") or "embed-v4.0")
+    dim = int(os.environ.get("EMBEDDING_DIM", "1536"))
+    result = await raw_chunk_index.backfill_raw_chunks(
+        database_url,
+        workspace_id=workspace_id,
+        api_key=api_key,
+        embedding_model=embed_model,
+        embedding_dim=dim,
+    )
+    if result.get("errors"):
+        await record_log(
+            redis,
+            job_id=job_id,
+            level="warning",
+            stage=stage,
+            message=(
+                f"raw_chunk embedding: {result.get('processed', 0)} indexed, "
+                f"{result.get('errors', 0)} failed"
+            ),
+            data=result,
+            database_url=database_url,
+            ingestion_run_id=ingestion_run_id,
+        )
+    elif result.get("processed"):
+        await record_log(
+            redis,
+            job_id=job_id,
+            level="info",
+            stage=stage,
+            message=f"Indexed {result['processed']} episode chunk(s) for naive RAG",
+            data=result,
+            database_url=database_url,
+            ingestion_run_id=ingestion_run_id,
+        )
+    return result
 
 
 HEARTBEAT_INTERVAL_S = 10
@@ -442,6 +507,16 @@ async def _parse_north_transcript(
         rows=rows,
     )
     chunk_count = len(rows)
+    settings = get_settings()
+    await _index_raw_chunk_embeddings(
+        redis=redis,
+        database_url=database_url,
+        workspace_id=workspace_id,
+        settings=settings,
+        job_id=job_id,
+        ingestion_run_id=ingestion_run_id,
+        stage="parsing",
+    )
     await asyncio.to_thread(
         merge_run_stats_incremental,
         database_url,
@@ -683,6 +758,15 @@ async def parse_document(
                         ingestion_run_id=ingestion_run_id,
                         rows=episode_rows,
                     )
+                    await _index_raw_chunk_embeddings(
+                        redis=redis,
+                        database_url=database_url,
+                        workspace_id=workspace_id,
+                        settings=get_settings(),
+                        job_id=job_id,
+                        ingestion_run_id=ingestion_run_id,
+                        stage="parsing",
+                    )
 
                 chunk_count = len(episode_rows)
                 await asyncio.to_thread(
@@ -885,6 +969,56 @@ async def generate_atomic_notes(
                 ingestion_run_id=ingestion_run_id,
             )
 
+            token_budget = max(400, len(episodes) * 400, max_notes * 80)
+            notes_pct_last = 5
+
+            async def _emit_notes_progress(
+                *,
+                tokens: int = 0,
+                phase: str = "llm",
+                notes_saved: int = 0,
+                notes_total: int = 0,
+            ) -> None:
+                nonlocal notes_pct_last
+                if phase == "saving" and notes_total > 0:
+                    pct = min(48, 40 + int(8 * notes_saved / notes_total))
+                    current = notes_saved
+                    total = notes_total
+                    unit = "notes"
+                else:
+                    pct = min(40, 8 + int(32 * min(1.0, tokens / token_budget)))
+                    current = tokens
+                    total = token_budget
+                    unit = "tokens"
+                if phase == "llm" and pct <= notes_pct_last:
+                    return
+                notes_pct_last = pct
+                await job_hset(
+                    redis,
+                    job_id,
+                    status="running",
+                    progress=json.dumps(
+                        {
+                            "percent": pct,
+                            "stage": "generating_notes",
+                            "current": current,
+                            "total": total,
+                            "unit": unit,
+                        }
+                    ),
+                )
+                await publish_job_event(
+                    redis,
+                    job_id,
+                    "stage_progress",
+                    stage="generating_notes",
+                    percent=pct,
+                    current=current,
+                    total=total,
+                )
+
+            await _emit_notes_progress(tokens=0)
+
             async def _progress_cb(tokens: int) -> None:
                 await record_metric(
                     redis,
@@ -905,6 +1039,7 @@ async def generate_atomic_notes(
                     ingestion_run_id=ingestion_run_id,
                     model=model,
                 )
+                await _emit_notes_progress(tokens=tokens)
 
             async def _warning_cb(message: str, data: dict[str, Any] | None) -> None:
                 # Surface notes_llm warnings (empty stream, unparseable
@@ -936,7 +1071,8 @@ async def generate_atomic_notes(
 
             created_ids: list[str] = []
             skipped = 0
-            for payload in note_payloads:
+            notes_total = len(note_payloads)
+            for idx, payload in enumerate(note_payloads):
                 nid = str(uuid4())
                 try:
                     await asyncio.to_thread(
@@ -954,6 +1090,12 @@ async def generate_atomic_notes(
                         agent_id=agent_scope,
                     )
                     created_ids.append(nid)
+                    if notes_total and (idx == 0 or (idx + 1) % 3 == 0 or idx == notes_total - 1):
+                        await _emit_notes_progress(
+                            phase="saving",
+                            notes_saved=idx + 1,
+                            notes_total=notes_total,
+                        )
                 except psycopg.errors.ForeignKeyViolation as fk_exc:
                     # B2 — race: episodes were deleted between our list_*
                     # call and this insert. Skip this note rather than
@@ -1157,7 +1299,24 @@ async def extract_graph(
     database_url: str = ctx["database_url"]
     settings = get_settings()
 
+    await job_hset(
+        redis,
+        job_id,
+        status="running",
+        progress=json.dumps(
+            {"percent": 50, "stage": "extracting_graph", "current": 0, "total": 0}
+        ),
+    )
     await publish_job_event(redis, job_id, "stage_started", stage="extracting_graph")
+    await publish_job_event(
+        redis,
+        job_id,
+        "stage_progress",
+        stage="extracting_graph",
+        percent=50,
+        current=0,
+        total=0,
+    )
     _started_at = asyncio.get_event_loop().time()
     await asyncio.to_thread(
         update_document,
@@ -1200,7 +1359,10 @@ async def extract_graph(
 
         async with _Heartbeat(database_url, ingestion_run_id):
             doc_row = await asyncio.to_thread(
-                fetch_document, database_url, document_id=document_id
+                fetch_document,
+                database_url,
+                workspace_id=workspace_id,
+                document_id=document_id,
             )
             agent_scope = (
                 str(doc_row.get("agent_id") or "").strip() if doc_row else None
@@ -1226,6 +1388,34 @@ async def extract_graph(
             concurrency = max(1, min(8, concurrency))
 
             total_items = sum(1 for ep in episodes if (ep.get("text") or "").strip()) + len(note_ids)
+
+            async def _emit_graph_progress(*, items_done: int) -> None:
+                pct = 50 + int(45 * items_done / total_items) if total_items else 50
+                pct = min(95, max(50, pct))
+                await job_hset(
+                    redis,
+                    job_id,
+                    status="running",
+                    progress=json.dumps(
+                        {
+                            "percent": pct,
+                            "stage": "building_graph",
+                            "current": items_done,
+                            "total": total_items,
+                        }
+                    ),
+                )
+                await publish_job_event(
+                    redis,
+                    job_id,
+                    "stage_progress",
+                    stage="building_graph",
+                    percent=pct,
+                    current=items_done,
+                    total=total_items,
+                )
+
+            await _emit_graph_progress(items_done=0)
             await record_log(
                 redis,
                 job_id=job_id,
@@ -1452,19 +1642,7 @@ async def extract_graph(
                         stage="extracting_graph",
                     )
                 if total_items:
-                    pct = 50 + int(45 * items_done / total_items)
-                    await job_hset(
-                        redis,
-                        job_id,
-                        progress=json.dumps(
-                            {
-                                "percent": pct,
-                                "stage": "building_graph",
-                                "current": items_done,
-                                "total": total_items,
-                            }
-                        ),
-                    )
+                    await _emit_graph_progress(items_done=items_done)
 
             async def _process_note(nid: str) -> None:
                 note_row = await asyncio.to_thread(
@@ -1563,19 +1741,7 @@ async def extract_graph(
                     ingestion_run_id=ingestion_run_id,
                 )
                 if total_items:
-                    pct = 50 + int(45 * items_done / total_items)
-                    await job_hset(
-                        redis,
-                        job_id,
-                        progress=json.dumps(
-                            {
-                                "percent": pct,
-                                "stage": "building_graph",
-                                "current": items_done,
-                                "total": total_items,
-                            }
-                        ),
-                    )
+                    await _emit_graph_progress(items_done=items_done)
 
             # ``return_exceptions=True`` keeps a single transient Cohere /
             # Graphiti failure from killing the whole batch (BUG-008). We tally

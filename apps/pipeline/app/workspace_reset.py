@@ -69,7 +69,9 @@ class ResetResult:
 
 def _count(conn: psycopg.Connection, sql: str, workspace_id: str) -> int:
     row = conn.execute(sql, (workspace_id,)).fetchone()
-    return int(row[0]) if row else 0
+    if not row:
+        return 0
+    return int(next(iter(row.values())))
 
 
 def preview_workspace_reset(database_url: str, *, workspace_id: str) -> ResetPreview:

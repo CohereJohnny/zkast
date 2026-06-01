@@ -10,6 +10,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from app.retrieval_embeddings_repo import delete_for_atomic_notes
+
 
 def _norm_tags(tags: list[str]) -> list[str]:
     return sorted({t.strip().lower() for t in tags if t and t.strip()})
@@ -36,6 +38,7 @@ def clear_notes_for_ingestion_run(database_url: str, *, ingestion_run_id: str) -
             (ingestion_run_id,),
         )
         deleted = 0
+        removed_ids: list[str] = []
         for nid in touched_ids:
             cur = conn.execute(
                 """
@@ -45,7 +48,25 @@ def clear_notes_for_ingestion_run(database_url: str, *, ingestion_run_id: str) -
                 """,
                 (nid, nid),
             )
+            if cur.rowcount:
+                removed_ids.append(nid)
             deleted += cur.rowcount or 0
+        if removed_ids:
+            ws_row = conn.execute(
+                """
+                SELECT DISTINCT e.workspace_id::text AS workspace_id
+                FROM episodes e
+                WHERE e.ingestion_run_id = %s::uuid
+                LIMIT 1
+                """,
+                (ingestion_run_id,),
+            ).fetchone()
+            if ws_row:
+                delete_for_atomic_notes(
+                    database_url,
+                    workspace_id=str(ws_row["workspace_id"]),
+                    note_ids=removed_ids,
+                )
         conn.commit()
         return deleted
 
@@ -69,6 +90,7 @@ def clear_notes_for_episode_ids(database_url: str, *, episode_ids: list[str]) ->
             (episode_ids,),
         )
         deleted = 0
+        removed_ids: list[str] = []
         for nid in touched_ids:
             cur = conn.execute(
                 """
@@ -78,7 +100,25 @@ def clear_notes_for_episode_ids(database_url: str, *, episode_ids: list[str]) ->
                 """,
                 (nid, nid),
             )
+            if cur.rowcount:
+                removed_ids.append(nid)
             deleted += cur.rowcount or 0
+        if removed_ids:
+            ws_row = conn.execute(
+                """
+                SELECT DISTINCT e.workspace_id::text AS workspace_id
+                FROM episodes e
+                WHERE e.id = ANY(%s::uuid[])
+                LIMIT 1
+                """,
+                (episode_ids,),
+            ).fetchone()
+            if ws_row:
+                delete_for_atomic_notes(
+                    database_url,
+                    workspace_id=str(ws_row["workspace_id"]),
+                    note_ids=removed_ids,
+                )
         conn.commit()
         return deleted
 
@@ -435,8 +475,11 @@ def delete_note(database_url: str, *, workspace_id: str, note_id: str) -> bool:
             """,
             (note_id, workspace_id),
         )
+        deleted = cur.rowcount > 0
         conn.commit()
-        return cur.rowcount > 0
+    if deleted:
+        delete_for_atomic_notes(database_url, workspace_id=workspace_id, note_ids=[note_id])
+    return deleted
 
 
 def add_note_link(

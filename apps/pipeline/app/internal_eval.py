@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from app.eval.runner import (
 from app.graphiti_factory import resolve_cohere_api_key
 from app.note_embedding_index import backfill_note_embeddings
 from app.retrieval_embeddings_repo import count_by_kind
+from app.workspace_repo import fetch_pipeline_settings
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["internal-eval"])
@@ -69,7 +71,12 @@ async def get_index_status(
     )
     return JSONResponse(
         content={
-            "raw_chunk": raw_counts,
+            "raw_chunk": {
+                **raw_counts,
+                # Legacy aliases used by older web builds
+                "indexed": raw_counts.get("embeddings_total"),
+                "total": raw_counts.get("episodes_total"),
+            },
             "by_kind": by_kind,
         },
     )
@@ -96,7 +103,12 @@ async def post_backfill_index(
             },
         )
     ws = str(workspace_id)
-    embed_model = (body.embedding_model if body else None) or "embed-v4.0"
+    pipe = await asyncio.to_thread(fetch_pipeline_settings, settings.database_url, ws)
+    embed_model = (
+        (body.embedding_model if body else None)
+        or str(pipe.get("embed_model") or "embed-v4.0")
+    )
+    embedding_dim = int(os.environ.get("EMBEDDING_DIM", "1536"))
     kinds = (body.kinds if body and body.kinds else None) or ["raw_chunk"]
     agent_id = str(body.agent_id) if body and body.agent_id else None
     limit = body.limit if body and body.limit else 500
@@ -108,7 +120,24 @@ async def post_backfill_index(
             workspace_id=ws,
             api_key=api_key,
             embedding_model=embed_model,
+            embedding_dim=embedding_dim,
         )
+        rc = summary["raw_chunk"]
+        pending = int(rc.get("total", 0)) - int(rc.get("skipped", 0))
+        if pending and int(rc.get("processed", 0)) == 0 and int(rc.get("errors", 0)) > 0:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": {
+                        "code": "raw_chunk_backfill_failed",
+                        "message": (
+                            f"Failed to embed {rc['errors']} of {pending} episode chunk(s). "
+                            "Check Cohere API key and worker logs."
+                        ),
+                    },
+                    "summary": summary,
+                },
+            )
     note_kinds = [k for k in kinds if k in ("note_zettel", "note_amem")]
     if note_kinds:
         summary["notes"] = await backfill_note_embeddings(
