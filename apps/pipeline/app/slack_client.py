@@ -132,6 +132,23 @@ class SlackClient:
         """Verify the token; returns ``team_id``, ``team``, ``user_id``, etc."""
         return await self._get("auth.test")
 
+    async def list_users(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        """All users in the workspace (cursor-paginated). Used to resolve
+        message author ids (``U0…``) to display names for readable transcripts.
+        """
+        out: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"limit": limit}
+            if cursor:
+                params["cursor"] = cursor
+            body = await self._get("users.list", params)
+            out.extend([u for u in (body.get("members") or []) if isinstance(u, dict)])
+            cursor = (body.get("response_metadata") or {}).get("next_cursor") or ""
+            if not cursor:
+                break
+        return out
+
     async def list_channels(
         self,
         *,
@@ -203,3 +220,27 @@ class SlackClient:
             if not cursor:
                 break
         return out
+
+
+def user_display_name(user: dict[str, Any]) -> str:
+    """Best human label for a Slack user record."""
+    profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    for key in ("display_name", "real_name"):
+        val = (profile or {}).get(key)
+        if val and str(val).strip():
+            return str(val).strip()
+    for key in ("real_name", "name"):
+        val = user.get(key)
+        if val and str(val).strip():
+            return str(val).strip()
+    return str(user.get("id") or "")
+
+
+def build_user_name_map(users: list[dict[str, Any]]) -> dict[str, str]:
+    """Map Slack user id → display name."""
+    out: dict[str, str] = {}
+    for u in users:
+        uid = str(u.get("id") or "").strip()
+        if uid:
+            out[uid] = user_display_name(u)
+    return out

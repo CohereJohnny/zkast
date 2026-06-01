@@ -26,6 +26,7 @@ from app.slack_client import (
     SlackAuthError,
     SlackClient,
     build_authorize_url,
+    build_user_name_map,
     exchange_oauth_code,
 )
 from app.slack_repo import (
@@ -181,6 +182,63 @@ async def post_slack_oauth_callback(
     return JSONResponse(content={"connected": True, "connection": conn})
 
 
+@router.post("/internal/v1/workspaces/{workspace_id}/slack/connect-token")
+async def post_slack_connect_token(
+    workspace_id: uuid.UUID, request: Request
+) -> JSONResponse:
+    """Connect Slack with a bot token (``xoxb-…``) directly.
+
+    Local/self-hosted convenience that skips the OAuth redirect (which requires
+    HTTPS). Verifies the token via ``auth.test``, stores it encrypted, and
+    records the connection. Mirrors the North bearer-token path.
+    """
+    settings: Settings = request.app.state.settings
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    token = str(body.get("bot_token") or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "missing_bot_token", "message": "bot_token is required."}},
+        )
+
+    try:
+        info = await SlackClient(bot_token=token).auth_test()
+    except SlackAuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "slack_auth", "message": str(exc)}},
+        ) from exc
+    except SlackApiError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "slack_api", "message": str(exc)}},
+        ) from exc
+
+    team_id = str(info.get("team_id") or "").strip()
+    team_name = str(info.get("team") or "").strip() or None
+
+    enc = encrypt(settings.master_encryption_key_bytes, token.encode("utf-8"))
+    store_slack_oauth_token(
+        settings.database_url,
+        workspace_id=str(workspace_id),
+        encrypted_secret=enc,
+        label=f"Slack bot token ({team_name or team_id or 'workspace'})",
+        metadata={"team_id": team_id, "auth": "bot_token"},
+    )
+    conn = upsert_slack_connection(
+        settings.database_url,
+        workspace_id=str(workspace_id),
+        slack_team_id=team_id,
+        slack_team_name=team_name,
+        authed_scopes=[],
+    )
+    return JSONResponse(content={"connected": True, "connection": conn})
+
+
 @router.delete("/internal/v1/workspaces/{workspace_id}/slack/connection")
 async def delete_slack_connection_route(
     workspace_id: uuid.UUID, request: Request
@@ -309,12 +367,20 @@ async def get_channel_threads(
             detail={"error": {"code": "slack_api", "message": str(exc)}},
         ) from exc
 
+    # Best-effort author-name resolution (requires users:read). Never fatal.
+    user_names: dict[str, str] = {}
+    try:
+        user_names = build_user_name_map(await client.list_users())
+    except (SlackAuthError, SlackApiError) as exc:
+        logger.info("slack_user_resolution_skipped", error=str(exc))
+
     items: list[dict[str, Any]] = []
     for msg in roots[:limit]:
         ts = str(msg.get("thread_ts") or msg.get("ts") or "").strip()
         if not ts:
             continue
         external_conversation_id = f"{channel_id}:{ts}"
+        author = str(msg.get("user") or "").strip()
         upsert_slack_conversation_cache(
             settings.database_url,
             workspace_id=ws,
@@ -328,7 +394,8 @@ async def get_channel_threads(
                 "thread_ts": ts,
                 "reply_count": msg.get("reply_count", 0),
                 "text_preview": str(msg.get("text") or "")[:280],
-                "user": msg.get("user"),
+                "user": author or None,
+                "user_name": user_names.get(author) if author else None,
             }
         )
     return JSONResponse(content={"items": items, "from_cache": False})
