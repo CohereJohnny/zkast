@@ -28,6 +28,7 @@ from app.internal_graph import router as internal_graph_router
 from app.internal_ingestion import router as internal_ingestion_router
 from app.internal_jobs import router as internal_jobs_router
 from app.internal_north import router as internal_north_router
+from app.internal_slack import router as internal_slack_router
 from app.internal_notes import router as internal_notes_router
 from app.internal_wiki import router as internal_wiki_router
 from app.internal_dashboard import router as internal_dashboard_router
@@ -94,6 +95,7 @@ app = FastAPI(
 
 app.include_router(internal_ingestion_router)
 app.include_router(internal_north_router)
+app.include_router(internal_slack_router)
 app.include_router(internal_jobs_router)
 app.include_router(internal_notes_router)
 app.include_router(internal_graph_router)
