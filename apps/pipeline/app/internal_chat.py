@@ -33,6 +33,7 @@ from app.chat_repo import (
 )
 from app.config import Settings
 from app.job_redis import job_hset
+from app.queues import CHAT_QUEUE_NAME
 from app.retrieval_repo import fetch_retrieval_record_by_message
 
 logger = structlog.get_logger(__name__)
@@ -113,6 +114,7 @@ async def _enqueue_chat_turn(
         assistant_message_id=assistant_message_id,
         turn_id=turn_id,
         _job_id=f"chat:{turn_id}",
+        _queue_name=CHAT_QUEUE_NAME,
     )
     if enqueued is None:
         # Sprint 5b lesson — never trust arq's silent dedup-skip.

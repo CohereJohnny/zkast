@@ -130,6 +130,35 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Dedicated worker for interactive grounded-chat turns. Runs on its own arq
+  # queue so chat is never stuck behind bulk ingestion (Slack/PDF/North) jobs.
+  chat-worker:
+    build:
+      context: ./apps/pipeline
+      dockerfile: Dockerfile
+    command: ["arq", "app.tasks.ChatWorkerSettings"]
+    env_file: .env
+    environment:
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+      EMBEDDING_DIM: "1536"
+      SEMAPHORE_LIMIT: "6"
+      CHAT_WORKER_MAX_JOBS: "4"
+      DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
+      REDIS_URL: redis://redis:6379/0
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+    volumes:
+      - pipeline_storage:/var/zkast/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   web:
     build:
       context: .

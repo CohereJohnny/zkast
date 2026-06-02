@@ -82,6 +82,7 @@ from app.amem_enrich import enrich_notes_amem_batch
 from app.dreaming import run_dreaming_job
 from app.wiki_generation import run_wiki_generation_job
 from app.slack_ingest import import_slack_channel
+from app.queues import CHAT_QUEUE_NAME
 from app.note_embedding_index import (
     upsert_amem_embeddings_for_notes,
     upsert_zettel_embeddings_for_notes,
@@ -2105,8 +2106,25 @@ class WorkerSettings:
     on_startup = worker_startup
     on_shutdown = worker_shutdown
     # Cap concurrent jobs so a bulk import (e.g. a busy Slack channel = hundreds
-    # of graph-extraction jobs) doesn't fan out into a Cohere 429 storm that
-    # also starves grounded chat (run_chat_turn shares this worker). With
+    # of graph-extraction jobs) doesn't fan out into a Cohere 429 storm. With
     # SEMAPHORE_LIMIT per graph job, keep max_jobs * SEMAPHORE_LIMIT within
     # Cohere's rate budget. Override via WORKER_MAX_JOBS.
     max_jobs = int(os.getenv("WORKER_MAX_JOBS", "4"))
+
+
+class ChatWorkerSettings:
+    """Dedicated worker for interactive grounded-chat turns.
+
+    Runs on its own queue so a chat turn is never queued behind a bulk
+    ingestion backlog (which made scoped chat appear unresponsive during large
+    Slack imports). The web SSE stream is queue-agnostic, so moving the turn to
+    this worker is transparent to the client.
+    """
+
+    queue_name = CHAT_QUEUE_NAME
+    redis_settings = _redis_settings_for_worker()
+    functions = [arq_func(run_chat_turn, timeout=TIMEOUT_CHAT_TURN_S, max_tries=1)]
+    job_timeout = TIMEOUT_CHAT_TURN_S
+    max_jobs = int(os.getenv("CHAT_WORKER_MAX_JOBS", "4"))
+    on_startup = worker_startup
+    on_shutdown = worker_shutdown
