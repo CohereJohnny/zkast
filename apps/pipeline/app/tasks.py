@@ -81,6 +81,7 @@ from app.workspace_repo import fetch_pipeline_settings
 from app.amem_enrich import enrich_notes_amem_batch
 from app.dreaming import run_dreaming_job
 from app.wiki_generation import run_wiki_generation_job
+from app.slack_ingest import import_slack_channel
 from app.note_embedding_index import (
     upsert_amem_embeddings_for_notes,
     upsert_zettel_embeddings_for_notes,
@@ -177,6 +178,7 @@ TIMEOUT_NOTES_S = 1_200     # 20 min
 TIMEOUT_GRAPH_S = 2_400     # 40 min
 TIMEOUT_DREAM_S = 1_200     # 20 min — per-agent consolidation + LLM
 TIMEOUT_WIKI_S = 1_200      # 20 min — deterministic synthesis + future LLM page bodies
+TIMEOUT_SLACK_IMPORT_S = 1_800  # 30 min — busy channels: many thread-reply fetches
 # Used as the global ceiling; per-function settings override per task.
 TIMEOUT_WORKER_DEFAULT_S = TIMEOUT_GRAPH_S
 
@@ -2091,6 +2093,7 @@ class WorkerSettings:
         arq_func(run_chat_turn, timeout=TIMEOUT_CHAT_TURN_S, max_tries=1),
         arq_func(run_dreaming_job, timeout=TIMEOUT_DREAM_S, max_tries=1),
         arq_func(run_wiki_generation_job, timeout=TIMEOUT_WIKI_S, max_tries=1),
+        arq_func(import_slack_channel, timeout=TIMEOUT_SLACK_IMPORT_S, max_tries=1),
     ]
     # Global ceiling for any task that doesn't override (e.g. cron jobs).
     job_timeout = TIMEOUT_WORKER_DEFAULT_S

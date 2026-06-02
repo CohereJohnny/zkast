@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -18,15 +17,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.config import Settings
-from app.documents_repo import (
-    fetch_document_by_checksum,
-    insert_document,
-    insert_ingestion_run,
-)
 from app.job_redis import job_hset
 from app.north_repo import list_north_agents, upsert_north_agent
 from app.secrets import decrypt, encrypt
-from app.slack_checksum import slack_unit_content_checksum, slack_unit_ingest_hash
 from app.slack_client import (
     DEFAULT_SLACK_BOT_SCOPES,
     SlackApiError,
@@ -43,13 +36,10 @@ from app.slack_repo import (
     delete_slack_oauth_token,
     list_slack_conversation_cache,
     store_slack_oauth_token,
-    update_source_sync_state,
     upsert_slack_connection,
     upsert_slack_conversation_cache,
 )
-from app.slack_transcript import DEFAULT_SESSION_GAP_SECONDS, build_conversation_units
-from app.storage import LocalStorage
-from app.workspace_repo import fetch_pipeline_settings
+from app.slack_transcript import DEFAULT_SESSION_GAP_SECONDS
 
 logger = structlog.get_logger(__name__)
 
@@ -78,84 +68,6 @@ def _slack_source_or_404(settings: Settings, ws: str, source_id: str) -> dict[st
             detail={"error": {"code": "source_not_found", "message": "Slack channel source not found."}},
         )
     return source
-
-
-_RANGE_DAYS: dict[str, int] = {
-    "last_30_days": 30,
-    "last_90_days": 90,
-    "last_180_days": 180,
-    "last_365_days": 365,
-}
-
-
-def _compute_oldest_ts(
-    *,
-    range_key: str,
-    cutoff_date: str | None,
-    sync_cursor: str | None,
-) -> str | None:
-    """Resolve an import range to a Slack ``oldest`` timestamp (epoch seconds).
-
-    - ``all`` → None (full history).
-    - ``since_last`` → the stored high-water mark (only newer messages).
-    - ``last_N_days`` → now − N days.
-    - ``custom`` → start of ``cutoff_date`` (YYYY-MM-DD).
-    """
-    key = (range_key or "last_90_days").strip().lower()
-    if key == "all":
-        return None
-    if key == "since_last":
-        return sync_cursor or None
-    if key == "custom" and cutoff_date:
-        try:
-            dt = datetime.fromisoformat(cutoff_date)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
-            return f"{dt.timestamp():.6f}"
-        except ValueError:
-            return None
-    days = _RANGE_DAYS.get(key, 90)
-    return f"{time.time() - days * 86400:.6f}"
-
-
-async def _fetch_channel_units(
-    client: SlackClient,
-    *,
-    channel_id: str,
-    channel_name: str,
-    history_limit: int,
-    session_gap_seconds: int,
-    oldest: str | None = None,
-) -> list[dict[str, Any]]:
-    """Pull channel history + thread replies and segment into units."""
-    roots = await client.channel_history(
-        channel_id=channel_id, limit=history_limit, oldest=oldest
-    )
-    user_names: dict[str, str] = {}
-    try:
-        user_names = build_user_name_map(await client.list_users())
-    except (SlackAuthError, SlackApiError) as exc:
-        logger.info("slack_user_resolution_skipped", error=str(exc))
-
-    replies_by_thread_ts: dict[str, list[dict[str, Any]]] = {}
-    for msg in roots:
-        ts = str(msg.get("thread_ts") or msg.get("ts") or "")
-        if int(msg.get("reply_count") or 0) > 0 and ts:
-            try:
-                replies_by_thread_ts[ts] = await client.thread_replies(
-                    channel_id=channel_id, thread_ts=ts
-                )
-            except (SlackAuthError, SlackApiError) as exc:
-                logger.info("slack_thread_replies_skipped", thread_ts=ts, error=str(exc))
-
-    return build_conversation_units(
-        channel_id=channel_id,
-        channel_name=channel_name,
-        root_messages=roots,
-        replies_by_thread_ts=replies_by_thread_ts,
-        user_names=user_names,
-        session_gap_seconds=session_gap_seconds,
-    )
 
 
 def _require_slack_app(settings: Settings) -> tuple[str, str, str]:
@@ -569,11 +481,12 @@ async def post_import_threads(
     source_id: uuid.UUID,
     request: Request,
 ) -> JSONResponse:
-    """Import a channel's conversation units (threads + session windows).
+    """Kick off a channel import in the background and return a job to watch.
 
-    Each unit becomes a ``slack_conversation`` document scoped to the channel's
-    memory source, then runs the shared parse → notes → graph pipeline.
-    Idempotent per unit via a content checksum.
+    Busy channels have thousands of threads; fetching replies synchronously
+    would block for minutes. We enqueue a worker job that fetches + segments +
+    creates ``slack_conversation`` documents (then the normal parse → notes →
+    graph pipeline) and streams progress to the job log.
     """
     settings: Settings = request.app.state.settings
     ws = str(workspace_id)
@@ -585,208 +498,39 @@ async def post_import_threads(
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
-    history_limit = int(body.get("history_limit") or 500)
-    history_limit = max(1, min(history_limit, 1000))
+    history_limit = max(1, min(int(body.get("history_limit") or 1000), 1000))
     session_gap = int(body.get("session_gap_seconds") or DEFAULT_SESSION_GAP_SECONDS)
     segmentation_mode = str(body.get("segmentation_mode") or "turn")
     range_key = str(body.get("range") or "last_90_days")
     cutoff_date = body.get("cutoff_date")
-    oldest = _compute_oldest_ts(
-        range_key=range_key,
-        cutoff_date=str(cutoff_date) if cutoff_date else None,
-        sync_cursor=source.get("sync_cursor"),
-    )
     channel_id = source["external_agent_id"]
     channel_name = source.get("display_name") or channel_id
 
-    client = _slack_client(settings, ws)
-    try:
-        units = await _fetch_channel_units(
-            client,
-            channel_id=channel_id,
-            channel_name=channel_name,
-            history_limit=history_limit,
-            session_gap_seconds=session_gap,
-            oldest=oldest,
-        )
-    except SlackAuthError as exc:
-        raise HTTPException(
-            status_code=401, detail={"error": {"code": "slack_auth", "message": str(exc)}}
-        ) from exc
-    except SlackApiError as exc:
-        raise HTTPException(
-            status_code=502, detail={"error": {"code": "slack_api", "message": str(exc)}}
-        ) from exc
-
-    if not units:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": {
-                    "code": "slack_empty_channel",
-                    "message": "No ingestible conversations after filtering (join/system/empty messages removed).",
-                }
-            },
-        )
-
-    db = settings.database_url
-    pipe = fetch_pipeline_settings(db, ws)
-    storage = LocalStorage(settings.zkast_storage_root)
+    job_id = str(uuid.uuid4())
     redis = request.app.state.redis_async
     pool = request.app.state.arq_pool
-
-    created: list[dict[str, Any]] = []
-    skipped = 0
-    for unit in units:
-        transcript = unit["transcript"]
-        checksum = slack_unit_content_checksum(transcript)
-        if fetch_document_by_checksum(db, workspace_id=ws, checksum=checksum):
-            skipped += 1
-            continue
-
-        external_conversation_id = unit["external_conversation_id"]
-        upsert_slack_conversation_cache(
-            db,
-            workspace_id=ws,
-            source_id=sid,
-            external_conversation_id=external_conversation_id,
-            payload=transcript,
-        )
-
-        doc_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        job_id = str(uuid.uuid4())
-
-        raw_bytes = json.dumps(transcript, ensure_ascii=False).encode("utf-8")
-        storage_uri, _chk, byte_size = await storage.write_north_transcript_json(
-            ws, doc_id, raw_bytes, max_bytes=settings.max_upload_bytes
-        )
-        source_metadata = {
-            "channel_id": channel_id,
-            "channel_name": channel_name,
-            "unit_kind": unit["kind"],
-            "title": unit["title"],
-            "segmentation_mode": segmentation_mode,
-            "ingest_content_hash": slack_unit_ingest_hash(transcript),
-        }
-        doc_row = insert_document(
-            db,
-            document_id=doc_id,
-            workspace_id=ws,
-            original_filename=f"slack-{external_conversation_id}.json",
-            mime_type="application/json",
-            byte_size=byte_size,
-            storage_uri=storage_uri,
-            checksum=checksum,
-            replaces_document_id=None,
-            status="queued",
-            source_kind="slack_conversation",
-            agent_id=sid,
-            external_conversation_id=external_conversation_id,
-            source_metadata=source_metadata,
-            raw_transcript_json=transcript,
-        )
-        insert_ingestion_run(
-            db,
-            run_id=run_id,
-            document_id=doc_id,
-            status="running",
-            pipeline_version=settings.pipeline_version,
-            llm_provider=str(pipe.get("default_llm_provider") or "cohere"),
-            llm_model_small=str(pipe.get("small_model") or ""),
-            llm_model_large=str(pipe.get("large_model") or ""),
-            stats={"chunk_count": 0, "page_count": 0},
-        )
-        await job_hset(
-            redis,
-            job_id,
-            workspace_id=ws,
-            document_id=doc_id,
-            ingestion_run_id=run_id,
-            kind="document_parse",
-            status="queued",
-            progress='{"percent":0,"stage":"queued"}',
-        )
-        await pool.enqueue_job(
-            "parse_document",
-            workspace_id=ws,
-            document_id=doc_id,
-            ingestion_run_id=run_id,
-            job_id=job_id,
-            _job_id=f"{job_id}:parse",
-        )
-        created.append(
-            {
-                "document_id": doc_id,
-                "job_id": job_id,
-                "external_conversation_id": external_conversation_id,
-                "kind": unit["kind"],
-                "title": unit["title"],
-            }
-        )
-
-    # Compute message-ts coverage to remember how far we've imported.
-    all_ts: list[float] = []
-    for unit in units:
-        for m in unit["transcript"].get("messages") or []:
-            try:
-                all_ts.append(float(m.get("ts") or 0))
-            except (TypeError, ValueError):
-                continue
-    newest_ts = max(all_ts) if all_ts else None
-    oldest_ts = min(all_ts) if all_ts else None
-    now_iso = datetime.now(tz=UTC).isoformat()
-
-    def _iso(ts: float | None) -> str | None:
-        if not ts:
-            return None
-        return datetime.fromtimestamp(ts, tz=UTC).isoformat()
-
-    prior_meta = source.get("provider_metadata") if isinstance(source.get("provider_metadata"), dict) else {}
-    prior_oldest = prior_meta.get("oldest_message_ts")
-    # High-water mark only ever moves forward; oldest only moves backward.
-    new_cursor = source.get("sync_cursor")
-    if newest_ts and (not new_cursor or float(newest_ts) > float(new_cursor)):
-        new_cursor = f"{newest_ts:.6f}"
-    coverage_oldest = oldest_ts
-    if prior_oldest:
-        try:
-            coverage_oldest = min(float(oldest_ts or prior_oldest), float(prior_oldest))
-        except (TypeError, ValueError):
-            coverage_oldest = oldest_ts
-
-    sync_meta = {
-        "last_imported_at": now_iso,
-        "last_import_range": range_key,
-        "last_import_created": len(created),
-        "last_import_skipped": skipped,
-        "newest_message_ts": f"{newest_ts:.6f}" if newest_ts else None,
-        "newest_message_at": _iso(newest_ts),
-        "oldest_message_ts": f"{coverage_oldest:.6f}" if coverage_oldest else None,
-        "oldest_message_at": _iso(coverage_oldest),
-    }
-    update_source_sync_state(
-        db,
-        source_id=sid,
-        sync_cursor=new_cursor,
-        provider_metadata_merge=sync_meta,
+    await job_hset(
+        redis,
+        job_id,
+        workspace_id=ws,
+        kind="slack_import",
+        status="queued",
+        progress='{"percent":0,"stage":"queued"}',
     )
-
-    logger.info(
-        "slack_import_enqueued",
+    await pool.enqueue_job(
+        "import_slack_channel",
         workspace_id=ws,
         source_id=sid,
-        created=len(created),
-        skipped=skipped,
-        range=range_key,
+        channel_id=channel_id,
+        channel_name=channel_name,
+        range_key=range_key,
+        cutoff_date=str(cutoff_date) if cutoff_date else None,
+        history_limit=history_limit,
+        session_gap_seconds=session_gap,
+        segmentation_mode=segmentation_mode,
+        sync_cursor=source.get("sync_cursor"),
+        job_id=job_id,
+        _job_id=f"{job_id}:slack_import",
     )
-    return JSONResponse(
-        status_code=202,
-        content={
-            "units": len(units),
-            "created": len(created),
-            "skipped": skipped,
-            "documents": created,
-            "sync": sync_meta,
-        },
-    )
+    logger.info("slack_import_job_enqueued", workspace_id=ws, source_id=sid, job_id=job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "started"})

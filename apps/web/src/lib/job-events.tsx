@@ -27,7 +27,8 @@ export type ActiveJobKind =
   | "generate_atomic_notes"
   | "extract_graph"
   | "dreaming"
-  | "wiki_generation";
+  | "wiki_generation"
+  | "slack_import";
 
 export type ActiveJob = {
   jobId: string;
