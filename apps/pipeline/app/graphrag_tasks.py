@@ -20,6 +20,7 @@ from arq.worker import func as arq_func
 from app.config import get_settings
 from app.graphrag_index_repo import mark_failed, mark_ready, mark_running
 from app.graphrag_indexer import EMBED_DIM, export_corpus, run_graphrag_index
+from app.graphrag_reports_repo import persist_community_reports
 from app.queues import GRAPHRAG_QUEUE_NAME
 from app.secrets import decrypt
 from app.workspace_repo import fetch_llm_cohere_secret_row, fetch_pipeline_settings
@@ -89,8 +90,17 @@ async def run_graphrag_index_job(
             embed_dim=EMBED_DIM,
         )
         if result["ok"]:
+            n_reports = persist_community_reports(
+                db,
+                graphrag_index_id=index_id,
+                workspace_id=workspace_id,
+                agent_id=agent_id,
+                reports=result.get("community_reports", []),
+            )
             mark_ready(db, index_id=index_id, artifact_uri=result["artifact_uri"], stats=result["stats"])
-            logger.info("graphrag_index_ready", index_id=index_id, stats=result["stats"])
+            logger.info(
+                "graphrag_index_ready", index_id=index_id, reports=n_reports, stats=result["stats"]
+            )
         else:
             failed = ", ".join(result["stats"].get("failed_workflows", []))
             mark_failed(db, index_id=index_id, reason=f"GraphRAG workflows failed: {failed}")
