@@ -364,6 +364,14 @@ async def run_chat_turn(
             on_warning=on_warning,
         )
 
+        # When Cohere's *stream* returns no content, ``chat_stream_grounded``
+        # transparently falls back to a non-streaming call — but that path emits
+        # no ``token`` events, so the client (which renders from token deltas)
+        # would show an empty bubble / spinner forever. Push the whole answer as
+        # a single token so the UI renders the completed text.
+        if not accumulated_text_parts and (result.text or "").strip():
+            await on_token(result.text)
+
         # ---- Bulk-insert any citations the SDK emitted only on the final
         # (non-streaming) response. on_citation already accumulates the
         # streamed ones into citation_rows, but the non-streaming code path

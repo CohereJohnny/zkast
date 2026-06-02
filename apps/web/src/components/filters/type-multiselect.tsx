@@ -111,8 +111,15 @@ export function TypeMultiselect({
 
   return (
     <fieldset className="text-caption text-muted-foreground">
-      <legend className="float-none mb-1 inline-block">{label}</legend>
-      <ul className="flex flex-wrap gap-1.5" role="listbox" aria-multiselectable="true">
+      <legend className="float-none mb-1 inline-block">
+        {label}
+        <span className="ml-1 text-muted-foreground/70">({options.length})</span>
+      </legend>
+      <ul
+        className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-border/60 bg-card/40 p-2"
+        role="listbox"
+        aria-multiselectable="true"
+      >
         {options.map((opt) => {
           const active = selectedSet.has(opt.name);
           return (
