@@ -2104,3 +2104,9 @@ class WorkerSettings:
     cron_jobs = [cron(reconcile_stuck_documents, second=0)]
     on_startup = worker_startup
     on_shutdown = worker_shutdown
+    # Cap concurrent jobs so a bulk import (e.g. a busy Slack channel = hundreds
+    # of graph-extraction jobs) doesn't fan out into a Cohere 429 storm that
+    # also starves grounded chat (run_chat_turn shares this worker). With
+    # SEMAPHORE_LIMIT per graph job, keep max_jobs * SEMAPHORE_LIMIT within
+    # Cohere's rate budget. Override via WORKER_MAX_JOBS.
+    max_jobs = int(os.getenv("WORKER_MAX_JOBS", "4"))
