@@ -51,30 +51,32 @@ GRAPHRAG_API_KEY=<openai-key> .venv/bin/python run_spike.py openai
   `summarize_descriptions`, `cluster_graph`, and `community_reports` all completed against
   `command-a-plus-05-2026` via the compat endpoint (~76s for the 3-doc fixture). Produced
   the full entity/relationship/community/report artifact set.
-- **Embeddings via Cohere-compat work with one setting.** `generate_text_embeddings`
-  initially failed with `pyarrow ArrowInvalid: length ... must be a multiple of the list_size`;
-  the fix is `call_args.encoding_format: float` on the embedding model (graphrag issue #2194).
-  A transient run then showed a lancedb dim mismatch (column 3072 vs query 1536), but a
-  **direct probe of the compat `/embeddings` endpoint disproved a real incompatibility**:
-  embed-v4.0 returns **1536 dims by default** and **honors `dimensions`** (1024→1024). The 3072
-  came from a stale cache / vector-store dir, not the model. With caches cleared and
-  `encoding_format: float`, index and query both embed at 1536 and agree.
-- Do **not** set `call_args.dimensions` on this path — litellm rejects it for non
-  `text-embedding-3` models on the openai provider, and it isn't needed (default 1536 is
-  consistent).
+- **Embeddings (index) + global_search work on Cohere-compat.** A full uninterrupted run
+  confirmed: all index workflows `ok` (incl. `generate_text_embeddings`) → 54 entities,
+  61 relationships, 4 communities, 4 reports; **`global_search` returned a high-quality,
+  citation-backed answer** (the headline GraphRAG capability). `generate_text_embeddings`
+  requires `call_args.encoding_format: float` (graphrag issue #2194) — without it,
+  `pyarrow ArrowInvalid: length ... must be a multiple of the list_size`.
+- **`local_search` fails on an embedding-dim mismatch** (REAL, reproducible — not a cache
+  artifact, correcting an earlier note): the entity vector store column is **3072-dim** while
+  the query embeds at **1536** → `lance error: query dim(1536) doesn't match column vector
+  dim(3072)`. A direct single-call probe of the compat endpoint returns **1536** (and honors
+  `dimensions`), so the **index path produces 3072** — and `3072 = 2 × 1536` strongly suggests
+  graphrag concatenates/doubles vectors when building the entity_description embeddings (e.g.
+  name+description), or requests a different output size on that path. Global search is
+  unaffected because it operates over community reports, not entity-vector similarity.
 
 ### Recommendation for the real plugin (all-Cohere)
 - Keep everything on **Cohere's OpenAI-compatibility endpoint**: chat = `command-a-plus`,
   embeddings = `embed-v4.0` with `encoding_format: float`. No OpenAI dependency, no mixed
-  providers. The plugin resolves both models from the configured provider (`cohere_compat`),
-  injecting `encoding_format: float` for the embedding model.
-
-### Open item (run uninterrupted)
-- A full `index → global_search → local_search` run takes ~2–3 min on the fixture. The
-  chat-side index completed cleanly in-session; the end-to-end search run kept getting cut
-  off by editor restarts, so it's worth one clean local run:
-  `GRAPHRAG_API_KEY=<cohere-key> .venv/bin/python run_spike.py cohere`.
-  Based on the probe + chat-side success, no further config changes are expected.
+  providers. **Index + global_search are production-viable today.**
+- **Open item (local_search):** reconcile the 3072 (stored) vs 1536 (query) entity-embedding
+  dim. The compat endpoint honors `dimensions` directly (probe), so candidate fixes:
+  (a) pin a fixed `dimensions` on both index + query — needs litellm to actually send it for
+  embed-v4.0 (it blocks the param on the openai provider; investigate `litellm.drop_params` /
+  `register_model` model_info); (b) inspect graphrag's `embed_text`/entity-embedding workflow
+  to see where 3072 originates (likely a name+description concatenation) and align the query
+  path. The first plugin can ship with **global search** working and gate local search on this.
 
 ## Runtime decision (DECIDED): dedicated `graphrag-worker` container
 GraphRAG pulls **litellm → `openai>=2.20,<3`**, but the pipeline pins **`openai>=1.91,<2`**
