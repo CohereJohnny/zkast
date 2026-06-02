@@ -111,16 +111,61 @@ def _coerce_required_anchor(t: OntologyType, anchor: str) -> None:
         )
 
 
+def _dedupe_types(types: list[OntologyType]) -> list[OntologyType]:
+    seen: set[str] = set()
+    out: list[OntologyType] = []
+    for t in types:
+        if not (t.name or "").strip() or t.name in seen:
+            continue
+        seen.add(t.name)
+        out.append(t)
+    return out
+
+
+def _prune_edge_type_map(ont: Ontology) -> list[dict[str, Any]]:
+    """Drop edge_type_map entries that reference undefined types/edges.
+
+    LLMs frequently emit pairings using base/undefined type names; the map is
+    only an extraction hint, so pruning dangling entries keeps the ontology
+    valid without losing the well-formed pairings.
+    """
+    entity_names = {t.name for t in ont.entity_types}
+    edge_names = {t.name for t in ont.edge_types}
+    pruned: list[dict[str, Any]] = []
+    for entry in ont.edge_type_map:
+        subj = entry.get("subject")
+        obj = entry.get("object")
+        if subj not in entity_names or obj not in entity_names:
+            continue
+        kept = [e for e in (entry.get("edges") or []) if e in edge_names]
+        if kept:
+            pruned.append({"subject": subj, "object": obj, "edges": kept})
+    return pruned
+
+
 def coerce_proposed_ontology(doc: dict[str, Any], *, name: str, version: str) -> Ontology:
-    """Build an Ontology from an LLM doc, enforcing our invariants."""
+    """Build an Ontology from an LLM doc, enforcing our invariants so the result
+    always passes validate_ontology: dedupe types, backfill descriptions, ensure
+    a required anchor field per type, and prune dangling edge_type_map entries.
+    """
     doc = dict(doc)
     doc["name"] = name
     doc["version"] = version
     ont = ontology_from_doc(doc)
+
+    ont.entity_types = _dedupe_types(ont.entity_types)
+    ont.edge_types = _dedupe_types(ont.edge_types)
+
     for t in ont.entity_types:
+        if not (t.description or "").strip():
+            t.description = f"{t.name} (auto-proposed entity type)."
         _coerce_required_anchor(t, "description")
     for t in ont.edge_types:
+        if not (t.description or "").strip():
+            t.description = f"{t.name} (auto-proposed relationship)."
         _coerce_required_anchor(t, "rationale")
+
+    ont.edge_type_map = _prune_edge_type_map(ont)
     return ont
 
 

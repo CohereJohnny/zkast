@@ -44,6 +44,38 @@ def test_coerce_forces_existing_anchor_required() -> None:
     assert desc.optional is False
 
 
+def test_coerce_prunes_dangling_edge_type_map() -> None:
+    # Reproduces the observed failure: the LLM proposed domain entity types but
+    # an edge_type_map referencing base/undefined types (Person, Location, ...).
+    doc = {
+        "entity_types": [
+            {"name": "SolutionComponent", "description": "A component.",
+             "fields": [{"name": "description", "description": "d", "optional": False}]},
+            {"name": "Integration", "description": "An integration.",
+             "fields": [{"name": "description", "description": "d", "optional": False}]},
+        ],
+        "edge_types": [
+            {"name": "INTEGRATES_WITH", "title": "IntegratesWith", "description": "x integrates y",
+             "fields": [{"name": "rationale", "description": "why", "optional": False}]},
+            {"name": "RELATES_TO", "title": "RelatesTo", "description": "generic",
+             "fields": [{"name": "rationale", "description": "why", "optional": False}]},
+        ],
+        "edge_type_map": [
+            {"subject": "Person", "object": "Location", "edges": ["RELATES_TO"]},  # undefined types
+            {"subject": "SolutionComponent", "object": "Integration",
+             "edges": ["INTEGRATES_WITH", "NOPE"]},  # valid pair, one bad edge
+        ],
+        "instructions": "Prefer specific types.",
+    }
+    ont = coerce_proposed_ontology(doc, name="solution-architecture", version="v1")
+    # The whole ontology must be persistable.
+    assert validate_ontology(ont) == []
+    # Dangling entry dropped; valid entry kept with the bad edge filtered out.
+    assert ont.edge_type_map == [
+        {"subject": "SolutionComponent", "object": "Integration", "edges": ["INTEGRATES_WITH"]}
+    ]
+
+
 def test_build_user_content_includes_base_and_samples() -> None:
     base = load_ontology_file("generic", "v1")
     content = build_user_content(["alpha passage", "beta passage"], base)
