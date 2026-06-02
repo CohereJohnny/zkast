@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from app.pipeline_stages.base import PipelineConfiguration, compute_content_hash
@@ -75,6 +76,31 @@ def test_resolve_retriever_matches_prior_dispatch() -> None:
     # Unknown/empty falls back to graph, matching the prior `else` branch.
     assert resolve_retriever("") is chat_retrieval_graph.retrieve
     assert resolve_retriever("nonsense") is chat_retrieval_graph.retrieve
+
+
+def test_eval_adapter_routes_via_registry() -> None:
+    """eval/adapters.retrieval_module resolves through the same registry, incl.
+    alias normalization and the wiki stub; unknown modes raise."""
+    from app import chat_retrieval_graph, chat_retrieval_raw, chat_retrieval_wiki
+    from app.chat_retrieval_notes_vector import retrieve_zettel
+    from app.eval.adapters import retrieval_module
+
+    assert retrieval_module("graph").retrieve is chat_retrieval_graph.retrieve
+    assert retrieval_module("raw").retrieve is chat_retrieval_raw.retrieve  # alias -> rag
+    assert retrieval_module("zettel").retrieve is retrieve_zettel  # alias -> zettelkasten_notes
+    assert retrieval_module("wiki").retrieve is chat_retrieval_wiki.retrieve
+    with pytest.raises(ValueError):
+        retrieval_module("does_not_exist")
+
+
+def test_resolve_extractor() -> None:
+    from app.pipeline_stages.registry import resolve_extractor
+
+    assert resolve_extractor("graphiti").id == "graphiti"
+    with pytest.raises(NotImplementedError):
+        resolve_extractor("ms_graphrag")
+    with pytest.raises(ValueError):
+        resolve_extractor("nope")
 
 
 def test_builtin_default_matches_seed_yaml() -> None:

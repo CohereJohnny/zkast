@@ -131,6 +131,16 @@ RETRIEVERS: dict[str, StagePlugin] = {
         strategy="graph_ms_graphrag_v1",
         implemented=False,
     ),
+    "wiki": StagePlugin(
+        id="wiki",
+        kind=StageKind.RETRIEVE,
+        label="Wiki (eval stub)",
+        description="Eval-only placeholder until wiki pages are indexed for retrieval.",
+        module="app.chat_retrieval_wiki",
+        attr="retrieve",
+        strategy="wiki_stub",
+        implemented=True,
+    ),
 }
 
 
@@ -147,6 +157,21 @@ def resolve_retriever(retrieval_strategy: str) -> Callable[..., Any]:
         raise NotImplementedError(f"retriever '{plugin.id}' is registered but not implemented")
     module = importlib.import_module(plugin.module)
     return getattr(module, plugin.attr)
+
+
+def resolve_extractor(extractor_id: str) -> StagePlugin:
+    """Return the registered extractor plugin or raise.
+
+    Seam for the future multi-extractor dispatch (Graphiti vs MS GraphRAG vs
+    LangExtract). The heavy ``extract_graph`` body is rewired to call through
+    here once a second extractor exists; today only ``graphiti`` is implemented.
+    """
+    plugin = EXTRACTORS.get((extractor_id or "graphiti").strip().lower())
+    if plugin is None:
+        raise ValueError(f"unknown extractor: {extractor_id!r}")
+    if not plugin.implemented:
+        raise NotImplementedError(f"extractor '{plugin.id}' is registered but not implemented")
+    return plugin
 
 
 # --- Built-in default configuration (the current production pipeline) --------
