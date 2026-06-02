@@ -8,12 +8,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from app import (
-    chat_retrieval_graph,
-    chat_retrieval_hybrid,
-    chat_retrieval_raw,
-)
-from app.chat_retrieval_notes_vector import retrieve_amem, retrieve_zettel
+from app.pipeline_stages.registry import RETRIEVERS, resolve_retriever
 
 # Retrieval mode string -> memory-system label persisted on eval results.
 MEMORY_SYSTEM_BY_MODE: dict[str, str] = {
@@ -45,33 +40,14 @@ def memory_system_for_mode(mode: str) -> str:
     return MEMORY_SYSTEM_BY_MODE.get(normalize_mode(mode), normalize_mode(mode))
 
 
-async def _wiki_retrieve_empty(
-    _settings: Any,
-    _database_url: str,
-    *,
-    workspace_id: str,
-    query_text: str,
-    scope: dict[str, Any],
-    top_k: int,
-    doc_token_budget: int,
-) -> tuple[list[Any], list[Any], int, bool, str]:
-    """Placeholder until wiki pages are indexed for retrieval."""
-    _ = (workspace_id, query_text, scope, top_k, doc_token_budget)
-    return [], [], 0, False, "wiki_stub"
-
-
 def retrieval_module(mode: str) -> Any:
+    """Resolve a retrieval strategy via the shared stage registry.
+
+    Returns an object with a ``retrieve`` coroutine (the runner calls
+    ``retrieval_module(mode).retrieve(...)``). Aliases (raw/zettel/amem) are
+    normalized first; unknown modes raise, matching prior eval behavior.
+    """
     m = normalize_mode(mode)
-    if m in ("rag", "raw_transcript"):
-        return chat_retrieval_raw
-    if m == "graph":
-        return chat_retrieval_graph
-    if m == "hybrid":
-        return chat_retrieval_hybrid
-    if m in ("zettelkasten_notes", "zettelkasten"):
-        return SimpleNamespace(retrieve=retrieve_zettel)
-    if m in ("amem_lite", "amem"):
-        return SimpleNamespace(retrieve=retrieve_amem)
-    if m == "wiki":
-        return SimpleNamespace(retrieve=_wiki_retrieve_empty)
-    raise ValueError(f"unknown retrieval mode: {mode!r}")
+    if m not in RETRIEVERS:
+        raise ValueError(f"unknown retrieval mode: {mode!r}")
+    return SimpleNamespace(retrieve=resolve_retriever(m))
