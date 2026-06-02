@@ -69,6 +69,14 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
 
+  // Auto-tune state.
+  const [autotuneOpen, setAutotuneOpen] = useState(false);
+  const [atName, setAtName] = useState("");
+  const [atVersion, setAtVersion] = useState("v1");
+  const [atSample, setAtSample] = useState(40);
+  const [atBusy, setAtBusy] = useState(false);
+  const [atErrors, setAtErrors] = useState<string[]>([]);
+
   const loadList = useCallback(async () => {
     setLoading(true);
     try {
@@ -198,6 +206,67 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
     }
   }, [base, editBody, editName, editVersion, derivedFrom, toast, loadList, openDetail]);
 
+  const openAutotune = useCallback(() => {
+    setAtErrors([]);
+    setAtName("");
+    setAtVersion("v1");
+    setAtSample(40);
+    setEditorOpen(false);
+    setSelectedKey(null);
+    setDetail(null);
+    setAutotuneOpen(true);
+  }, []);
+
+  const submitAutotune = useCallback(async () => {
+    setAtErrors([]);
+    const name = atName.trim();
+    const version = atVersion.trim();
+    if (!name || !version) {
+      setAtErrors(["Name and version are required."]);
+      return;
+    }
+    setAtBusy(true);
+    try {
+      const res = await fetch(`${base}/autotune`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, version, sample_limit: atSample }),
+      });
+      const body = await res.json();
+      if (res.status === 201) {
+        toast({
+          variant: "success",
+          message: `Auto-tuned ${name}/${version} (${body?.stats?.entity_types ?? "?"} entity types)`,
+        });
+        setAutotuneOpen(false);
+        await loadList();
+        await openDetail(name, version);
+        return;
+      }
+      if (res.status === 422) {
+        setAtErrors([typeof body?.detail === "string" ? body.detail : "No corpus to sample."]);
+        return;
+      }
+      if (res.status === 502 && body?.detail?.errors) {
+        setAtErrors(["Auto-tuned ontology failed validation:", ...body.detail.errors]);
+        return;
+      }
+      if (res.status === 409) {
+        setAtErrors([typeof body?.detail === "string" ? body.detail : "Version already exists."]);
+        return;
+      }
+      if (res.status === 400) {
+        setAtErrors([typeof body?.detail === "string" ? body.detail : "No Cohere API key configured."]);
+        return;
+      }
+      setAtErrors([body?.detail?.message ?? body?.detail ?? body?.error?.message ?? "Auto-tune failed."]);
+    } catch {
+      setAtErrors(["Auto-tune failed."]);
+    } finally {
+      setAtBusy(false);
+    }
+  }, [base, atName, atVersion, atSample, toast, loadList, openDetail]);
+
   const grouped = useMemo(() => {
     const builtin = items.filter((i) => i.is_builtin);
     const custom = items.filter((i) => !i.is_builtin);
@@ -214,9 +283,14 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
             graph extraction stage. Versions are immutable — editing creates a new version.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void loadList()} disabled={loading}>
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={openAutotune} disabled={loading}>
+            Auto-tune from corpus
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void loadList()} disabled={loading}>
+            Refresh
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-[280px_1fr] gap-4">
@@ -240,9 +314,25 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
 
         {/* Detail / Editor */}
         <section className="min-h-[420px] rounded-lg border border-border bg-card p-4">
-          {!selectedKey && (
+          {autotuneOpen && (
+            <AutotuneForm
+              name={atName}
+              version={atVersion}
+              sample={atSample}
+              busy={atBusy}
+              errors={atErrors}
+              onName={setAtName}
+              onVersion={setAtVersion}
+              onSample={setAtSample}
+              onSubmit={() => void submitAutotune()}
+              onCancel={() => setAutotuneOpen(false)}
+            />
+          )}
+
+          {!autotuneOpen && !selectedKey && (
             <p className="text-p text-muted-foreground">
-              Select an ontology on the left to view it, or clone one to a new version.
+              Select an ontology on the left to view it, clone one to a new version, or auto-tune a
+              new ontology from your corpus.
             </p>
           )}
 
@@ -386,6 +476,82 @@ function TypeSection({ title, types }: { title: string; types: OntType[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function AutotuneForm({
+  name,
+  version,
+  sample,
+  busy,
+  errors,
+  onName,
+  onVersion,
+  onSample,
+  onSubmit,
+  onCancel,
+}: {
+  name: string;
+  version: string;
+  sample: number;
+  busy: boolean;
+  errors: string[];
+  onName: (v: string) => void;
+  onVersion: (v: string) => void;
+  onSample: (v: number) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-h4 text-foreground">Auto-tune from corpus</h2>
+      <p className="text-caption text-muted-foreground">
+        Samples raw chunks from this workspace and asks the LLM to propose a domain-adapted ontology
+        based on <span className="text-foreground">generic / v1</span>. Saved as a new immutable{" "}
+        <span className="text-foreground">auto</span> version. This runs an LLM call and may take up
+        to ~30s.
+      </p>
+
+      <div className="flex gap-3">
+        <label className="flex flex-1 flex-col gap-1">
+          <span className="text-caption text-muted-foreground">Name</span>
+          <Input value={name} onChange={(e) => onName(e.target.value)} placeholder="e.g. nuclear" />
+        </label>
+        <label className="flex flex-1 flex-col gap-1">
+          <span className="text-caption text-muted-foreground">Version</span>
+          <Input value={version} onChange={(e) => onVersion(e.target.value)} placeholder="e.g. v1" />
+        </label>
+        <label className="flex w-32 flex-col gap-1">
+          <span className="text-caption text-muted-foreground">Sample size</span>
+          <Input
+            type="number"
+            min={4}
+            max={200}
+            value={sample}
+            onChange={(e) => onSample(Number(e.target.value) || 40)}
+          />
+        </label>
+      </div>
+
+      {errors.length > 0 && (
+        <ul className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/10 p-2">
+          {errors.map((e, i) => (
+            <li key={i} className="text-caption text-destructive">
+              {e}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex gap-2">
+        <Button onClick={onSubmit} disabled={busy}>
+          {busy ? "Auto-tuning…" : "Auto-tune"}
+        </Button>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }
