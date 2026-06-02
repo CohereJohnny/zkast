@@ -1,0 +1,16 @@
+# Portable representation of the built-in default Pipeline Configuration.
+# This is the canonical config-as-code seed for the current production pipeline;
+# migration 0019 seeds the matching DB row (the runtime store of record).
+# See specs/openspecs/composable-eval-harness.md.
+name: builtin-default
+description: >-
+  Current production pipeline: Graphiti typed extraction (generic ontology)
+  + Graphiti/FalkorDB store + graph retrieval.
+is_builtin: true
+version: 1
+extractor: graphiti
+ontology_version: generic_v1
+graph_store: graphiti_falkor
+retrieval_strategy: graph
+provider: cohere_compat
+params: {}
