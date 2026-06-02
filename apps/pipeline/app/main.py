@@ -34,6 +34,7 @@ from app.internal_wiki import router as internal_wiki_router
 from app.internal_dashboard import router as internal_dashboard_router
 from app.internal_workspace import router as internal_workspace_router
 from app.internal_prompt_sets import router as internal_prompt_sets_router
+from app.internal_providers import router as internal_providers_router
 from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
 logger = structlog.get_logger(__name__)
@@ -107,6 +108,7 @@ app.include_router(internal_wiki_router)
 app.include_router(internal_workspace_router)
 app.include_router(internal_dashboard_router)
 app.include_router(internal_prompt_sets_router)
+app.include_router(internal_providers_router)
 
 
 @app.middleware("http")

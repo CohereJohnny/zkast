@@ -23,6 +23,18 @@ const postSchema = z.discriminatedUnion("kind", [
     secret: z.string().min(8),
     metadata: z.record(z.string(), z.unknown()).optional(),
   }),
+  z.object({
+    kind: z.literal("llm_openai"),
+    label: z.string().min(1).max(80),
+    secret: z.string().min(8),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("llm_azure_openai"),
+    label: z.string().min(1).max(80),
+    secret: z.string().min(8),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }),
 ]);
 
 export async function GET(

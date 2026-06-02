@@ -69,6 +69,37 @@ def touch_llm_cohere_last_used(database_url: str, workspace_id: str) -> None:
         conn.commit()
 
 
+def fetch_api_key_row(database_url: str, workspace_id: str, kind: str) -> dict[str, Any] | None:
+    """Return ``{encrypted_secret, metadata}`` for an api_keys row by kind, or None.
+
+    Generic accessor used by the provider abstraction (kinds like ``llm_openai``,
+    ``llm_azure_openai``); provider config (base_url, model overrides) rides in
+    the row's ``metadata`` JSON.
+    """
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT encrypted_secret, metadata FROM api_keys
+            WHERE workspace_id = %s AND kind = %s
+            LIMIT 1
+            """,
+            (workspace_id, kind),
+        ).fetchone()
+    if not row:
+        return None
+    return {"encrypted_secret": row["encrypted_secret"], "metadata": row.get("metadata") or {}}
+
+
+def touch_api_key_last_used(database_url: str, workspace_id: str, kind: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = now(), updated_at = now() "
+            "WHERE workspace_id = %s AND kind = %s",
+            (workspace_id, kind),
+        )
+        conn.commit()
+
+
 def fetch_north_bearer_secret_row(database_url: str, workspace_id: str) -> str | None:
     """Return encrypted_secret for ``north_bearer`` or None."""
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
