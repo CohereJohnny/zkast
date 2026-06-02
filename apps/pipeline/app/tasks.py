@@ -30,12 +30,7 @@ from graphiti_core.nodes import EpisodeType
 
 from app.chunking import chunk_page_text
 from app.config import get_settings
-from app.entity_schemas import (
-    CUSTOM_EXTRACTION_INSTRUCTIONS,
-    EDGE_TYPE_MAP,
-    EDGE_TYPES,
-    ENTITY_TYPES,
-)
+from app.prompt_sets_repo import resolve_ontology
 from app.evidence_extractor import (
     _normalize_name as _normalize_evidence_name,
     extract_evidence_spans,
@@ -1583,6 +1578,18 @@ async def extract_graph(
             sem = asyncio.Semaphore(concurrency)
             counters_lock = asyncio.Lock()
 
+            # Resolve the extraction ontology from the versioned prompt-set store.
+            # Defaults to the builtin generic/v1, which rebuilds the exact same
+            # entity/edge schemas, edge_type_map, and instructions as the former
+            # hardcoded entity_schemas (proven in tests/test_ontology.py). A later
+            # slice will select the version per Pipeline Configuration. Resolved
+            # once per run; closed over by the episode/note processors below.
+            _ontology = await asyncio.to_thread(resolve_ontology, database_url)
+            ontology_entity_types = _ontology.build_entity_types()
+            ontology_edge_types = _ontology.build_edge_types()
+            ontology_edge_type_map = _ontology.build_edge_type_map()
+            ontology_instructions = _ontology.instructions
+
             async def _process_episode(idx: int, ep: dict[str, Any]) -> None:
                 body = (ep.get("text") or "")[:50000]
                 if not body.strip():
@@ -1595,10 +1602,10 @@ async def extract_graph(
                         reference_time=ref,
                         source=EpisodeType.text,
                         group_id=graph_group,
-                        entity_types=ENTITY_TYPES,
-                        edge_types=EDGE_TYPES,
-                        edge_type_map=EDGE_TYPE_MAP,
-                        custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                        entity_types=ontology_entity_types,
+                        edge_types=ontology_edge_types,
+                        edge_type_map=ontology_edge_type_map,
+                        custom_extraction_instructions=ontology_instructions,
                     )
                 ep_id = str(ep["id"])
                 local_entities = 0
@@ -1807,10 +1814,10 @@ async def extract_graph(
                         reference_time=ref,
                         source=EpisodeType.text,
                         group_id=graph_group,
-                        entity_types=ENTITY_TYPES,
-                        edge_types=EDGE_TYPES,
-                        edge_type_map=EDGE_TYPE_MAP,
-                        custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                        entity_types=ontology_entity_types,
+                        edge_types=ontology_edge_types,
+                        edge_type_map=ontology_edge_type_map,
+                        custom_extraction_instructions=ontology_instructions,
                     )
                 note_agent = (
                     str(note_row.get("agent_id") or "").strip() if note_row else None

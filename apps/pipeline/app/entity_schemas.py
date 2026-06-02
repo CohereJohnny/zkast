@@ -1,5 +1,13 @@
 """Custom Pydantic schemas passed to ``graphiti.add_episode(entity_types=...)``.
 
+NOTE: As of the composable-harness work, the runtime extraction ontology is
+loaded from the versioned prompt-set store (``prompt_sets`` / the ``generic/v1``
+seed in ``app/ontologies/generic_v1.yaml``) via ``prompt_sets_repo.resolve_ontology``.
+This module is retained as the GOLDEN ORACLE that ``tests/test_ontology.py`` uses
+to assert the data-driven ontology rebuilds byte-identical schemas. Edit the
+ontology data, not these classes (changing these would break the equivalence test).
+
+
 Without these, Graphiti's default extractor labels every entity as the
 generic ``Entity`` and our canonical mirror collapses everything to a
 single ``"Concept"`` type. The result is a sea of same-colored nodes in
