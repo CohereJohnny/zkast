@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useToast } from "@/components/feedback-provider";
+import {
+  SourceScopeFilter,
+  type SourceScopeSelection,
+} from "@/components/filters/source-scope-filter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,6 +78,7 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
   const [atName, setAtName] = useState("");
   const [atVersion, setAtVersion] = useState("v1");
   const [atSample, setAtSample] = useState(40);
+  const [atScope, setAtScope] = useState<SourceScopeSelection | null>(null);
   const [atBusy, setAtBusy] = useState(false);
   const [atErrors, setAtErrors] = useState<string[]>([]);
 
@@ -211,6 +216,7 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
     setAtName("");
     setAtVersion("v1");
     setAtSample(40);
+    setAtScope(null);
     setEditorOpen(false);
     setSelectedKey(null);
     setDetail(null);
@@ -230,7 +236,13 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
       const res = await fetch(`${base}/autotune`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, version, sample_limit: atSample }),
+        body: JSON.stringify({
+          name,
+          version,
+          sample_limit: atSample,
+          agent_id: atScope?.kind === "agent" ? atScope.id : null,
+          document_id: atScope?.kind === "document" ? atScope.id : null,
+        }),
       });
       const body = await res.json();
       if (res.status === 201) {
@@ -265,7 +277,7 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
     } finally {
       setAtBusy(false);
     }
-  }, [base, atName, atVersion, atSample, toast, loadList, openDetail]);
+  }, [base, atName, atVersion, atSample, atScope, toast, loadList, openDetail]);
 
   const grouped = useMemo(() => {
     const builtin = items.filter((i) => i.is_builtin);
@@ -316,14 +328,17 @@ export function OntologiesPageClient({ workspaceId }: { workspaceId: string }) {
         <section className="min-h-[420px] rounded-lg border border-border bg-card p-4">
           {autotuneOpen && (
             <AutotuneForm
+              workspaceId={workspaceId}
               name={atName}
               version={atVersion}
               sample={atSample}
+              scope={atScope}
               busy={atBusy}
               errors={atErrors}
               onName={setAtName}
               onVersion={setAtVersion}
               onSample={setAtSample}
+              onScope={setAtScope}
               onSubmit={() => void submitAutotune()}
               onCancel={() => setAutotuneOpen(false)}
             />
@@ -481,25 +496,31 @@ function TypeSection({ title, types }: { title: string; types: OntType[] }) {
 }
 
 function AutotuneForm({
+  workspaceId,
   name,
   version,
   sample,
+  scope,
   busy,
   errors,
   onName,
   onVersion,
   onSample,
+  onScope,
   onSubmit,
   onCancel,
 }: {
+  workspaceId: string;
   name: string;
   version: string;
   sample: number;
+  scope: SourceScopeSelection | null;
   busy: boolean;
   errors: string[];
   onName: (v: string) => void;
   onVersion: (v: string) => void;
   onSample: (v: number) => void;
+  onScope: (v: SourceScopeSelection | null) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
@@ -507,11 +528,24 @@ function AutotuneForm({
     <div className="flex flex-col gap-3">
       <h2 className="text-h4 text-foreground">Auto-tune from corpus</h2>
       <p className="text-caption text-muted-foreground">
-        Samples raw chunks from this workspace and asks the LLM to propose a domain-adapted ontology
-        based on <span className="text-foreground">generic / v1</span>. Saved as a new immutable{" "}
-        <span className="text-foreground">auto</span> version. This runs an LLM call and may take up
-        to ~30s.
+        Samples raw chunks from the selected scope and asks the LLM to propose a domain-adapted
+        ontology based on <span className="text-foreground">generic / v1</span>. Saved as a new
+        immutable <span className="text-foreground">auto</span> version. This runs an LLM call and
+        may take up to ~30s.
       </p>
+
+      <div>
+        <SourceScopeFilter
+          workspaceId={workspaceId}
+          value={scope}
+          onChange={onScope}
+          label="Corpus scope (leave empty for the whole workspace)"
+        />
+        <p className="mt-1 text-caption text-muted-foreground">
+          Scope to an agent or Slack channel memory space, or a single document, to generate a more
+          bespoke ontology. Empty samples across the whole workspace.
+        </p>
+      </div>
 
       <div className="flex gap-3">
         <label className="flex flex-1 flex-col gap-1">

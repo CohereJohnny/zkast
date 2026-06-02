@@ -148,7 +148,10 @@ class AutotuneRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=64)
     version: str = Field(min_length=1, max_length=32)
+    # Corpus scope (most specific wins): a single document, else an agent / Slack
+    # channel memory space, else the whole workspace.
     agent_id: uuid.UUID | None = None
+    document_id: uuid.UUID | None = None
     base_name: str = "generic"
     base_version: str = "v1"
     sample_limit: int = Field(default=40, ge=4, le=200)
@@ -178,12 +181,16 @@ async def autotune_prompt_set_route(
         settings.database_url,
         workspace_id=ws,
         agent_id=str(body.agent_id) if body.agent_id else None,
+        document_id=str(body.document_id) if body.document_id else None,
         limit=body.sample_limit,
     )
     if not samples:
         raise HTTPException(
             status_code=422,
-            detail="No raw-chunk corpus to sample; ingest documents/conversations first",
+            detail=(
+                "No raw-chunk corpus to sample for the selected scope; "
+                "ingest documents/conversations first or widen the scope"
+            ),
         )
 
     pipe = await asyncio.to_thread(fetch_pipeline_settings, settings.database_url, ws)
@@ -225,8 +232,16 @@ async def autotune_prompt_set_route(
             detail=f"prompt set {body.name}/{body.version} already exists; bump the version",
         )
 
+    scope = (
+        f"document:{body.document_id}"
+        if body.document_id
+        else f"agent:{body.agent_id}"
+        if body.agent_id
+        else "workspace"
+    )
     created["stats"] = {
         "samples": len(samples),
+        "scope": scope,
         "entity_types": len(ontology.entity_types),
         "edge_types": len(ontology.edge_types),
         "edge_type_map": len(ontology.edge_type_map),

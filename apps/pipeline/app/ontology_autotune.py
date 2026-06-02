@@ -58,16 +58,25 @@ def sample_corpus_texts(
     *,
     workspace_id: str,
     agent_id: str | None = None,
+    document_id: str | None = None,
     limit: int = 40,
     max_chars: int = 2000,
 ) -> list[str]:
-    """Random sample of raw-chunk texts for the memory space (agent or whole ws)."""
+    """Random sample of raw-chunk texts, scoped to a memory space.
+
+    Scope precedence (most to least specific): a single ``document_id`` (one
+    source), an ``agent_id`` (an agent's / Slack channel's whole memory space),
+    or the whole workspace when neither is given.
+    """
     sql = [
         "SELECT text FROM retrieval_embeddings",
         "WHERE workspace_id = %s::uuid AND index_kind = 'raw_chunk'",
     ]
     args: list[Any] = [workspace_id]
-    if agent_id:
+    if document_id:
+        sql.append("AND document_id = %s::uuid")
+        args.append(document_id)
+    elif agent_id:
         sql.append("AND agent_id = %s::uuid")
         args.append(agent_id)
     sql.append("ORDER BY random() LIMIT %s")
