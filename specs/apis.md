@@ -1331,6 +1331,10 @@ Public web proxies expose the same shape under `/api/v1/...`. Dreaming events pu
 - Removing a field or changing the type of a field requires a new major version (`/v2`).
 - Error codes are stable across minor versions; new codes may be added.
 
+## Reconciliation status
+
+Several shipped route groups are not yet documented here (Slack, dashboard, diagnostics/retrieval-index, jobs overview, wiki, eval, reset, north stats/preview), and the chat section is stale: a turn is an arq job `run_chat_turn` on queue `arq:queue:chat`, streamed via `GET /api/v1/workspaces/{id}/chat/turns/{turnId}` (proxying `/internal/v1/jobs/{turnId}/events`), not a `POST .../chat/turns` SSE endpoint. The **authoritative routes** are `apps/pipeline/app/internal_*.py` (`@router`) and `apps/web/src/app/api/v1/**/route.ts`; current deltas are tracked in the [OpenSpecs reconciliation ledger](openspecs/README.md). Per the spec convention, API-affecting PRs update that ledger.
+
 ## Related Specifications
 
 - [datamodel.md](datamodel.md) — Underlying entities and constraints these APIs surface.

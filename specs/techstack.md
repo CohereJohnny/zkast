@@ -154,7 +154,9 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 **Concurrency (Graphiti × Cohere)**:
 
 - Graphiti schedules parallel LLM, embedding, and rerank work behind a semaphore (`max_coroutines` on `Graphiti`, surfaced internally via `graphiti_core.helpers.semaphore_gather`). The upstream library reads optional env **`SEMAPHORE_LIMIT`** at import time (default **20** in `graphiti_core.helpers`).
-- zkast’s **`build_graphiti`** passes an explicit `max_coroutines`: use **`SEMAPHORE_LIMIT`** from the environment when set (integer ≥ 1), otherwise **10** as a **default tuned for typical Cohere rate limits** during large `extract_graph` runs (many episode embeds plus extraction calls). Operators with higher quotas can set **16–20**; if **429** responses persist, try **4–6**. Docker Compose wires **`SEMAPHORE_LIMIT=10`** into **pipeline** and **worker** so self-hosted stacks behave consistently without editing code.
+- zkast’s **`build_graphiti`** passes an explicit `max_coroutines`: use **`SEMAPHORE_LIMIT`** from the environment when set (integer ≥ 1), otherwise **10** in code. Operators with higher quotas can raise it; if **429** responses persist, lower it. After the busy-channel bulk-import incident, Docker Compose now wires conservative caps to keep big imports from rate-limiting Cohere or starving chat: **`worker`** uses **`SEMAPHORE_LIMIT=4`** + **`WORKER_MAX_JOBS=4`**, and the dedicated **`chat-worker`** uses **`SEMAPHORE_LIMIT=6`** + **`CHAT_WORKER_MAX_JOBS=4`**.
+
+**Dedicated chat worker (queue isolation)**: interactive grounded-chat turns run as arq job `run_chat_turn` on a **separate queue** `arq:queue:chat` (`apps/pipeline/app/queues.py`), consumed by a dedicated **`chat-worker`** container (`ChatWorkerSettings` in `apps/pipeline/app/tasks.py`). This prevents a chat turn from queuing behind a bulk ingestion backlog (e.g. a busy Slack channel fanning out into hundreds of parse/notes/graph jobs) on the default `arq:queue`. Other batch jobs on the main worker include `run_dreaming_job`, `run_wiki_generation_job`, and `import_slack_channel`. Raw-chunk Naive-RAG embeddings are auto-indexed after parsing (`_index_raw_chunk_embeddings`) so `retrieval_embeddings` (`index_kind=raw_chunk`) is populated without a manual backfill.
 
 **Working-graph backend (chosen by `graphiti-core`'s driver)**:
 
@@ -162,12 +164,12 @@ zkast is a two-process system: a TypeScript web tier (Next.js 14) and a Python p
 - **Optional**: **Neo4j** for users who already run it.
 - **Future**: **Kuzu** as an embedded option for the absolute simplest self-host story.
 
-**FalkorDB database-naming contract (BUG-011, Sprint 6)**: `apps/pipeline/app/graphiti_factory.falkor_database_for_workspace(ws)` returns the workspace UUID verbatim. The database name **must equal the Graphiti `group_id`** because `graphiti-core` 0.29's `Graphiti.add_episode` silently calls `self.driver = self.driver.clone(database=group_id)` whenever the two diverge — so a prefixed database name (e.g. `zkast_ws_<hex>`) caused writes to land in a UUID-named graph while `search()` continued to read from the prefixed one, returning zero hits for every query. Pinning `database == group_id` makes the silent clone a no-op and is non-breaking for existing FalkorDB data (which is already in the UUID-named graph).
+**FalkorDB database-naming contract (BUG-011, Sprint 6; superseded by memory spaces)**: the database name **must equal the Graphiti `group_id`** because `graphiti-core` 0.29's `Graphiti.add_episode` silently calls `self.driver = self.driver.clone(database=group_id)` whenever the two diverge. The current naming is memory-space based (`apps/pipeline/app/memory_space.py` `memory_space_graph_name(workspace_id, agent_id)`): the global/PDF graph is the **workspace UUID with hyphens replaced by underscores** (RediSearch fulltext treats hyphens as NOT operators), and a per-agent/per-Slack-channel graph is `{ws}_a_{agent_id}` (also normalized). `graphiti_factory.falkor_database_for_workspace(ws, agent_id=...)` delegates to this, keeping `database == group_id` so the silent clone is a no-op while supporting agent-isolated graphs.
 
 **Rejected**:
 
 - **Custom Neo4j integration without Graphiti**: we would re-implement temporal facts, dedup, and hybrid retrieval.
-- **GraphRAG (MS)**: batch-oriented, doesn't fit our incremental, reviewable model.
+- **GraphRAG (MS)**: batch-oriented, doesn't fit our incremental, reviewable model **for production ingestion**. Update: it is being added as a *parallel, opt-in comparison backend* within the composable-evaluation-harness initiative (see [openspecs/README.md](openspecs/README.md)) — to measure it against Graphiti, not to replace it.
 - **LangChain's graph utilities**: too thin; we'd still need to build the storage layer.
 
 ### Entity/Relationship Extraction
@@ -251,7 +253,7 @@ If both paths produce an empty body the wrapper raises `RuntimeError("Cohere ret
 **P1+ — additional providers** (deferred, not in P0):
 
 - **OpenAI** (chat + embeddings + reranker via log-prob trick).
-- **Google Gemini** (chat + embeddings + reranker), required to unlock the **LangExtract**-grounded extraction stage.
+- **Google Gemini** (chat + embeddings + reranker). Note: LangExtract-grounded extraction already ships in P0 on Cohere's OpenAI-compatible endpoint; Gemini is an optional higher-fidelity backend for LangExtract, not a prerequisite for it.
 - **Anthropic Claude** (chat).
 - **Ollama** (local; chat + embeddings via `OpenAIGenericClient`).
 - **Generic OpenAI-compatible** (LM Studio, vLLM, Together, Groq).
@@ -406,7 +408,9 @@ Structured JSON logs from both services, correlated by `trace_id`. Self-hosted o
 **Containers**:
 
 - `web` — Next.js production build.
-- `pipeline` — FastAPI app + Arq worker.
+- `pipeline` — FastAPI app (internal API).
+- `worker` — Arq worker for ingestion/graph/dream/wiki/Slack-import jobs (default queue).
+- `chat-worker` — Arq worker dedicated to grounded-chat turns (`arq:queue:chat`), isolated from the ingestion backlog.
 - `postgres` — Postgres 16 (working store).
 - `redis` — Redis 7 (Arq + FalkorDB plus cache).
 - `falkordb` — Working-graph engine (default).

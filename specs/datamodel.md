@@ -894,6 +894,10 @@ In addition to the PDF fields above, North-derived documents carry:
 
 `chat_messages.retrieval_mode` allows: `rag`, `graph`, `hybrid`, `raw_transcript`, `zettelkasten_notes`, `amem_lite`.
 
+## Reconciliation status
+
+This document predates several shipped subsystems (Slack/memory-source generalization, wiki, eval harness, usage accounting, full `retrieval_embeddings`, agent-scoped graph isolation, junction-table provenance, snapshot child tables, the corrected extraction ontology). The **authoritative schema is the Alembic migrations** in [`apps/migrations/alembic/versions/`](../apps/migrations/alembic/versions/); the current deltas are tracked in the [OpenSpecs reconciliation ledger](openspecs/README.md) until woven inline here. Per the spec convention, schema-affecting PRs update that ledger.
+
 ## Related Specifications
 
 - [prd.md](prd.md) — Functional requirements implemented by this model.
