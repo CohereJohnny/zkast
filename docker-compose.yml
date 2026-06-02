@@ -159,6 +159,30 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Dedicated worker for MS GraphRAG batch indexing. Its own image (graphrag +
+  # openai 2.x) isolated from the main pipeline's openai<2 deps, consuming the
+  # arq:queue:graphrag queue. Runs the graphiti-free app.graphrag_tasks worker.
+  graphrag-worker:
+    build:
+      context: ./apps/pipeline
+      dockerfile: Dockerfile.graphrag
+    command: ["arq", "app.graphrag_tasks.GraphragWorkerSettings"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://zkast:zkast@postgres:5432/zkast
+      REDIS_URL: redis://redis:6379/0
+      GRAPHRAG_STORAGE_DIR: /var/zkast/graphrag
+      GRAPHRAG_WORKER_MAX_JOBS: "1"
+    volumes:
+      - graphrag_storage:/var/zkast/graphrag
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   web:
     build:
       context: .
@@ -179,6 +203,7 @@ services:
 volumes:
   pgdata:
   pipeline_storage:
+  graphrag_storage:
 
 # Optional (uncomment): observability profile
 # profiles: [observability]

@@ -1,0 +1,12 @@
+# Dedicated graphrag-worker deps (python 3.12). Intentionally minimal + isolated
+# from the main pipeline's openai<2 pin: graphrag (via litellm) needs openai 2.x.
+# This image only runs app.graphrag_tasks.GraphragWorkerSettings, which is
+# graphiti-free, so graphiti-core / langextract / cohere / pymupdf are omitted.
+arq>=0.26,<1
+psycopg[binary]>=3.2,<4
+pydantic-settings>=2.6,<3
+structlog>=24.4,<26
+cryptography>=43,<46
+pyyaml>=6,<7
+openai>=2.20,<3
+graphrag==3.1.0

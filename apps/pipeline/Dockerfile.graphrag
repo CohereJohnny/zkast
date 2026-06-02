@@ -1,0 +1,19 @@
+# Dedicated graphrag-worker image: python 3.12 + graphrag + openai 2.x.
+# Isolated from the main pipeline image (openai<2). Runs the graphiti-free
+# app.graphrag_tasks.GraphragWorkerSettings arq worker.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-graphrag.txt .
+RUN pip install --no-cache-dir -r requirements-graphrag.txt
+
+COPY app ./app
+
+ENV PYTHONPATH=/app
+ENV GRAPHRAG_STORAGE_DIR=/var/zkast/graphrag
+
+CMD ["arq", "app.graphrag_tasks.GraphragWorkerSettings"]
