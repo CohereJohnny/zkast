@@ -1,0 +1,15 @@
+Acme Power operates the Riverbend Nuclear Station, a Generation III+ pressurized
+water reactor located in the Gulf Coast region. The station's chief engineer,
+Dr. Elena Marsh, leads the aging-management program for the reactor pressure
+vessel and primary coolant piping.
+
+In 2024, the Nuclear Regulatory Commission issued an inspection finding that
+required Acme Power to expand its nondestructive examination (NDE) coverage of
+welds in the reactor coolant system. The finding referenced ASME Boiler and
+Pressure Vessel Code Section XI, which governs in-service inspection of nuclear
+power plant components.
+
+Dr. Marsh's team adopted phased-array ultrasonic testing, a process that
+improves detection of stress-corrosion cracking in Inconel 600 nozzles. The
+upgraded inspection program mitigates the risk of primary water stress-corrosion
+cracking, a degradation mechanism that affects nickel-based alloys.

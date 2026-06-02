@@ -1,0 +1,46 @@
+# GraphRAG 3.1.0 config — OpenAI (reference baseline; no api_base needed).
+# Run: GRAPHRAG_API_KEY=<openai key> ../.venv/bin/python ../run_spike.py openai
+
+completion_models:
+  default_completion_model:
+    model_provider: openai
+    model: gpt-4o-mini
+    auth_method: api_key
+    api_key: ${GRAPHRAG_API_KEY}
+    model_supports_json: true
+    retry:
+      type: exponential_backoff
+
+embedding_models:
+  default_embedding_model:
+    model_provider: openai
+    model: text-embedding-3-small
+    auth_method: api_key
+    api_key: ${GRAPHRAG_API_KEY}
+    retry:
+      type: exponential_backoff
+
+input:
+  type: text
+
+input_storage:
+  type: file
+  base_dir: "../fixture/input"
+
+output_storage:
+  type: file
+  base_dir: "output"
+
+cache:
+  type: json
+  storage:
+    type: file
+    base_dir: "cache"
+
+vector_store:
+  type: lancedb
+  db_uri: "output/lancedb"
+
+extract_graph:
+  entity_types: [organization, person, geo, event, standard, equipment, process, material]
+  max_gleanings: 1
