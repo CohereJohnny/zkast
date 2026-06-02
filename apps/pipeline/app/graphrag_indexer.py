@@ -19,7 +19,10 @@ from typing import Any
 import psycopg
 import yaml
 
-from app.ontology_autotune import SAMPLE_INDEX_KINDS
+# Kept local (not imported from ontology_autotune) so this module stays free of
+# graphiti_core for the minimal graphrag-worker image. Mirrors
+# ontology_autotune.SAMPLE_INDEX_KINDS.
+SAMPLE_INDEX_KINDS: tuple[str, ...] = ("raw_chunk", "note_zettel")
 
 EMBED_DIM = 1536
 # Match the harness graph ontology so GraphRAG extraction is comparable.
@@ -99,10 +102,15 @@ def build_graphrag_settings(
             "default_embedding_model": {
                 **model_common,
                 "model": embed_model,
-                # encoding_format=float fixes the arrow error; dimensions pins 1536
-                # (see spikes/ms-graphrag/README.md). litellm needs embed-v4.0
-                # registered to permit `dimensions` — handled in run_graphrag_index.
-                "call_args": {"encoding_format": "float", "dimensions": int(embed_dim)},
+                # encoding_format=float is REQUIRED (avoids graphrag's arrow
+                # assembly error). NOTE: we cannot pin `dimensions` here — litellm
+                # rejects it for embed-v4.0 on the openai provider. The model
+                # returns 1536 for a normal call, but graphrag stores a 3072-dim
+                # entity_description vector (it concatenates name+description
+                # embeddings) while local_search queries at 1536 -> dim mismatch.
+                # global_search is unaffected. Tracked: local_search needs graphrag
+                # entity-embedding consistency (see spikes/ms-graphrag/README.md).
+                "call_args": {"encoding_format": "float"},
             }
         },
         "input": {"type": "text"},
@@ -125,23 +133,6 @@ def write_workspace(root: Path, settings: dict[str, Any], documents: list[dict[s
     (root / "settings.yaml").write_text(yaml.safe_dump(settings, sort_keys=False))
     for doc in documents:
         (input_dir / f"{doc['id']}.txt").write_text(doc["text"])
-
-
-def _register_cohere_embed_dimensions(model: str) -> None:
-    """Permit the `dimensions` embedding param for a Cohere embed model in litellm.
-
-    litellm rejects `dimensions` for non text-embedding-3 models on the openai
-    provider, but Cohere's compat endpoint honors it. Best-effort registration;
-    swallow API differences (validated on the graphrag-worker).
-    """
-    try:  # pragma: no cover - exercised on the graphrag-worker, not in unit tests
-        import litellm
-
-        litellm.register_model(
-            {model: {"mode": "embedding", "supports_dimensions": True, "litellm_provider": "openai"}}
-        )
-    except Exception:  # noqa: BLE001
-        pass
 
 
 async def run_graphrag_index(
@@ -171,7 +162,6 @@ async def run_graphrag_index(
         embed_dim=embed_dim,
     )
     write_workspace(root, settings, documents)
-    _register_cohere_embed_dimensions(embed_model)
 
     config = load_config(root)
     results = await build_index(config=config, verbose=False)
