@@ -1,0 +1,214 @@
+# Built-in generic extraction ontology (config-as-code seed).
+# Faithful data representation of the original hardcoded entity_schemas.py.
+# Models rebuilt from this file must produce identical model_json_schema()
+# (see tests/test_ontology.py). The DB prompt_sets table is the runtime store
+# of record; this file seeds it. See specs/openspecs/composable-eval-harness.md.
+name: generic
+version: v1
+
+entity_types:
+  - name: Person
+    description: A human individual (researcher, executive, author, regulator, etc.).
+    fields:
+      - name: description
+        description: One short sentence describing this person in context (role, affiliation, why they matter).
+        optional: false
+      - name: role
+        description: "The person's role or title at the time of the document, e.g. 'Senior Engineer', 'Plant Manager'."
+        optional: true
+      - name: affiliation
+        description: Organization, agency, or institution the person is associated with.
+        optional: true
+  - name: Organization
+    description: A company, agency, consortium, university, or other formal entity.
+    fields:
+      - name: description
+        description: One short sentence describing what this organization does and its relevance to the document.
+        optional: false
+      - name: kind
+        description: "One of: company, agency, consortium, university, vendor, regulator, other."
+        optional: true
+      - name: country
+        description: Primary country or jurisdiction, if known.
+        optional: true
+  - name: Location
+    description: A place, facility, region, or country.
+    fields:
+      - name: description
+        description: One short sentence describing this location and its role in the document.
+        optional: false
+      - name: geo_scope
+        description: "One of: facility, plant, region, country, sub-region."
+        optional: true
+  - name: Document
+    description: "A formal document referenced by the source PDF \u2014 report, standard, regulation, paper."
+    fields:
+      - name: description
+        description: One short sentence describing this document and how it relates to the source.
+        optional: false
+      - name: doc_type
+        description: "One of: standard, report, regulation, paper, guideline, manual, other."
+        optional: true
+      - name: identifier
+        description: "Canonical identifier if any (e.g. 'MRP-227', 'NUREG-1801', 'EPRI 1012081')."
+        optional: true
+      - name: issuing_org
+        description: Publishing or issuing organization.
+        optional: true
+  - name: Standard
+    description: "A formal technical standard or specification (ASME, ISO, IEEE, ASTM, \u2026)."
+    fields:
+      - name: identifier
+        description: "The standard's canonical identifier (e.g. 'ASME Section XI', 'ISO 17636-1')."
+        optional: false
+      - name: description
+        description: One short sentence describing what the standard covers.
+        optional: true
+      - name: issuing_body
+        description: The standards-development organization.
+        optional: true
+      - name: version
+        description: Edition / revision / year if specified.
+        optional: true
+  - name: Equipment
+    description: A piece of hardware, plant, component, or technology referenced as a thing in the world.
+    fields:
+      - name: description
+        description: One short sentence describing this piece of equipment and its role.
+        optional: false
+      - name: kind
+        description: "One of: component, system, plant, instrument, fixture, other."
+        optional: true
+      - name: manufacturer
+        description: Manufacturer or vendor, if named.
+        optional: true
+      - name: generation
+        description: "Generation, model, or design class (e.g. 'Generation III+', 'Westinghouse 4-loop')."
+        optional: true
+  - name: Process
+    description: A named procedure, methodology, technique, or workflow.
+    fields:
+      - name: description
+        description: One short sentence describing what the process does and where it applies.
+        optional: false
+      - name: domain
+        description: "The technical domain of the process (e.g. 'NDE', 'aging management', 'risk assessment')."
+        optional: true
+  - name: Material
+    description: A substance, alloy, metal, composite, or chemical compound.
+    fields:
+      - name: description
+        description: One short sentence describing this material and its usage in context.
+        optional: false
+      - name: composition
+        description: "Brief composition descriptor (e.g. 'austenitic stainless steel', 'Inconel 600')."
+        optional: true
+  - name: Event
+    description: A specific occurrence or milestone with a clear time anchor (incident, release, ruling, etc.).
+    fields:
+      - name: description
+        description: One short sentence describing the event and its significance.
+        optional: false
+      - name: when
+        description: Free-text time anchor as it appears in the source, if any.
+        optional: true
+  - name: Concept
+    description: |-
+      A general technical concept, phenomenon, mechanism, or topic.
+
+      Use this only when none of the more specific types fit. The graph
+      legend treats this as the residual bucket.
+    fields:
+      - name: description
+        description: One short sentence describing the concept and how it relates to the document.
+        optional: false
+      - name: domain
+        description: "Optional technical domain (e.g. 'materials science', 'reactor physics')."
+        optional: true
+
+edge_types:
+  - name: WORKS_FOR
+    title: WorksFor
+    description: A person works for / is employed by / is affiliated with an organization.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+      - name: role
+        optional: true
+  - name: LOCATED_IN
+    title: LocatedIn
+    description: The subject is physically located within the target location/region.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+  - name: PUBLISHED
+    title: Published
+    description: The subject (org or person) published or authored the target document/standard.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+      - name: when
+        optional: true
+  - name: CITES
+    title: Cites
+    description: The subject cites, references, or relies on the target document/standard.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+  - name: MANAGES
+    title: Manages
+    description: The subject manages, owns, or is responsible for the target entity.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+  - name: INSPECTS
+    title: Inspects
+    description: The subject inspects, monitors, or evaluates the target entity.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+  - name: MITIGATES
+    title: Mitigates
+    description: The subject mitigates, addresses, or counters the target process/concept/event.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+  - name: RELATES_TO
+    title: RelatesTo
+    description: Generic semantic relation when no more specific edge type fits.
+    fields:
+      - name: rationale
+        description: One short clause justifying this relationship from the text.
+        optional: false
+
+edge_type_map:
+  - {subject: Person, object: Organization, edges: [WORKS_FOR, RELATES_TO]}
+  - {subject: Organization, object: Document, edges: [PUBLISHED, CITES, RELATES_TO]}
+  - {subject: Organization, object: Standard, edges: [PUBLISHED, CITES, RELATES_TO]}
+  - {subject: Organization, object: Location, edges: [LOCATED_IN, RELATES_TO]}
+  - {subject: Document, object: Document, edges: [CITES, RELATES_TO]}
+  - {subject: Document, object: Standard, edges: [CITES, RELATES_TO]}
+  - {subject: Standard, object: Standard, edges: [CITES, RELATES_TO]}
+  - {subject: Process, object: Concept, edges: [MITIGATES, RELATES_TO]}
+  - {subject: Process, object: Equipment, edges: [INSPECTS, MITIGATES, RELATES_TO]}
+  - {subject: Process, object: Material, edges: [INSPECTS, MITIGATES, RELATES_TO]}
+  - {subject: Person, object: Equipment, edges: [MANAGES, INSPECTS, RELATES_TO]}
+  - {subject: Organization, object: Equipment, edges: [MANAGES, RELATES_TO]}
+
+instructions: |
+  Prefer specific entity types over the generic Concept fallback. In particular:
+  - Use Standard when an entity has an identifier like 'MRP-227', 'ISO 17636', 'ASME Section XI'.
+  - Use Document for named reports, guidelines, or technical publications even without a standard identifier.
+  - Use Equipment for components, systems, or instruments referenced as physical things.
+  - Use Process for named procedures, methodologies, or workflows.
+  - Use Material for alloys, metals, composites, or chemical substances.
+  - Only use Concept when none of the more specific types fit.
+
+  For relationships, prefer specific edge types from the provided list. Only fall back to RELATES_TO when none of the more specific types describe the relation.
