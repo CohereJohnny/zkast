@@ -59,6 +59,24 @@ def test_builtin_default_round_trips_doc() -> None:
     assert restored.retrieval_strategy == "graph"
 
 
+def test_resolve_retriever_matches_prior_dispatch() -> None:
+    """The registry must resolve each mode to the SAME callable as the prior
+    chat_turn._retrieve inline dispatch (no behavior change)."""
+    from app import chat_retrieval_graph, chat_retrieval_hybrid, chat_retrieval_raw
+    from app.chat_retrieval_notes_vector import retrieve_amem, retrieve_zettel
+    from app.pipeline_stages.registry import resolve_retriever
+
+    assert resolve_retriever("graph") is chat_retrieval_graph.retrieve
+    assert resolve_retriever("rag") is chat_retrieval_raw.retrieve
+    assert resolve_retriever("raw_transcript") is chat_retrieval_raw.retrieve
+    assert resolve_retriever("hybrid") is chat_retrieval_hybrid.retrieve
+    assert resolve_retriever("zettelkasten_notes") is retrieve_zettel
+    assert resolve_retriever("amem_lite") is retrieve_amem
+    # Unknown/empty falls back to graph, matching the prior `else` branch.
+    assert resolve_retriever("") is chat_retrieval_graph.retrieve
+    assert resolve_retriever("nonsense") is chat_retrieval_graph.retrieve
+
+
 def test_builtin_default_matches_seed_yaml() -> None:
     seed_path = Path(__file__).resolve().parent.parent / "app" / "pipeline_configs" / "builtin-default.yaml"
     doc = yaml.safe_load(seed_path.read_text())
