@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 
 import structlog
@@ -563,24 +562,16 @@ async def _retrieve(
       multi-hop handlers + supporting graph evidence via
       ``chat_retrieval_hybrid``.
     """
-    from app import chat_retrieval_graph as graph_strategy
-    from app import chat_retrieval_hybrid as hybrid_strategy
-    from app import chat_retrieval_raw as raw_strategy
-    from app.chat_retrieval_notes_vector import retrieve_amem, retrieve_zettel
+    from app.pipeline_stages.registry import resolve_retriever
 
     mode = (retrieval_mode or "graph").strip().lower()
-    if mode in ("rag", "raw_transcript"):
-        impl = raw_strategy
-    elif mode == "hybrid":
-        impl = hybrid_strategy
-    elif mode == "zettelkasten_notes":
-        impl = SimpleNamespace(retrieve=retrieve_zettel)
-    elif mode == "amem_lite":
-        impl = SimpleNamespace(retrieve=retrieve_amem)
-    else:
-        impl = graph_strategy
+    # Resolve the retrieval strategy from the stage registry (the single source
+    # of truth shared with the composable harness). resolve_retriever maps each
+    # mode to the same strategy module/function as the prior inline dispatch and
+    # falls back to the graph strategy for unknown/empty modes.
+    retrieve_fn = resolve_retriever(mode)
 
-    return await impl.retrieve(
+    return await retrieve_fn(
         settings,
         database_url,
         workspace_id=workspace_id,
