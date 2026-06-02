@@ -53,26 +53,36 @@ Rules:
 """
 
 
+# Index kinds whose ``text`` is representative domain prose to sample for
+# ontology auto-tuning. Atomic notes (note_zettel) carry title+body and dominate
+# conversation-derived corpora; raw_chunk carries parsed document/transcript
+# text. note_amem is omitted to avoid duplicating note content. Note embeddings
+# have no document_id, so document-scoped sampling effectively uses raw_chunk.
+SAMPLE_INDEX_KINDS: tuple[str, ...] = ("raw_chunk", "note_zettel")
+
+
 def sample_corpus_texts(
     database_url: str,
     *,
     workspace_id: str,
     agent_id: str | None = None,
     document_id: str | None = None,
+    kinds: tuple[str, ...] = SAMPLE_INDEX_KINDS,
     limit: int = 40,
     max_chars: int = 2000,
 ) -> list[str]:
-    """Random sample of raw-chunk texts, scoped to a memory space.
+    """Random sample of representative corpus text, scoped to a memory space.
 
-    Scope precedence (most to least specific): a single ``document_id`` (one
-    source), an ``agent_id`` (an agent's / Slack channel's whole memory space),
-    or the whole workspace when neither is given.
+    Samples ``text`` from raw chunks and atomic notes. Scope precedence (most to
+    least specific): a single ``document_id`` (one source), an ``agent_id`` (an
+    agent's / Slack channel's whole memory space), or the whole workspace when
+    neither is given.
     """
     sql = [
         "SELECT text FROM retrieval_embeddings",
-        "WHERE workspace_id = %s::uuid AND index_kind = 'raw_chunk'",
+        "WHERE workspace_id = %s::uuid AND index_kind = ANY(%s)",
     ]
-    args: list[Any] = [workspace_id]
+    args: list[Any] = [workspace_id, list(kinds)]
     if document_id:
         sql.append("AND document_id = %s::uuid")
         args.append(document_id)
