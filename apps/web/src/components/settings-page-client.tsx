@@ -36,6 +36,70 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [northTestBusy, setNorthTestBusy] = useState(false);
 
+  const [slackConnected, setSlackConnected] = useState(false);
+  const [slackTeam, setSlackTeam] = useState<string | null>(null);
+  const [slackToken, setSlackToken] = useState("");
+  const [slackBusy, setSlackBusy] = useState(false);
+
+  async function loadSlack() {
+    try {
+      const res = await fetch(`/api/v1/workspaces/${workspaceId}/slack/connection`, {
+        cache: "no-store",
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        connected?: boolean;
+        connection?: { slack_team_name?: string | null } | null;
+      };
+      setSlackConnected(Boolean(body.connected));
+      setSlackTeam(body.connection?.slack_team_name ?? null);
+    } catch {
+      setSlackConnected(false);
+    }
+  }
+
+  async function connectSlack(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setMsg(null);
+    if (!slackToken.trim()) return;
+    setSlackBusy(true);
+    try {
+      const res = await fetch(`/api/v1/workspaces/${workspaceId}/slack/connect-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bot_token: slackToken.trim() }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        connected?: boolean;
+        connection?: { slack_team_name?: string | null } | null;
+        error?: { message?: string };
+        detail?: { error?: { message?: string } };
+      };
+      if (!res.ok || !body.connected) {
+        setErr(body.error?.message ?? body.detail?.error?.message ?? "Slack connect failed");
+        return;
+      }
+      setSlackToken("");
+      setMsg(`Slack connected (${body.connection?.slack_team_name ?? "workspace"}).`);
+      await loadSlack();
+    } finally {
+      setSlackBusy(false);
+    }
+  }
+
+  async function disconnectSlack() {
+    if (!confirm("Disconnect Slack and remove the stored bot token?")) return;
+    setSlackBusy(true);
+    setErr(null);
+    try {
+      await fetch(`/api/v1/workspaces/${workspaceId}/slack/connection`, { method: "DELETE" });
+      setMsg("Slack disconnected.");
+      await loadSlack();
+    } finally {
+      setSlackBusy(false);
+    }
+  }
+
   async function reload() {
     setSettingsLoading(true);
     try {
@@ -59,6 +123,7 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => {
     void reload();
+    void loadSlack();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on workspace change only
   }, [workspaceId]);
 
@@ -407,6 +472,61 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
             ) : null}
           </div>
         </form>
+      </section>
+
+      <section
+        className="rounded-lg border border-input bg-card p-5"
+        aria-labelledby="slack-integration-title"
+      >
+        <h2 id="slack-integration-title" className="text-h5 text-foreground">
+          Slack integration
+        </h2>
+        <p className="mt-2 text-caption text-muted-foreground">
+          Connect a Slack workspace to import channel conversations (see{" "}
+          <span className="font-medium text-foreground">Slack</span> in the sidebar). Paste a{" "}
+          <span className="font-mono text-muted-foreground">xoxb-…</span> bot token from your Slack
+          app&apos;s OAuth &amp; Permissions page. The token is encrypted and never returned on
+          read. The bot must be invited to each channel you want to import
+          (<span className="font-mono text-muted-foreground">/invite @your-app</span>).
+        </p>
+
+        {slackConnected ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className="rounded-md border border-border bg-secondary/60 px-3 py-2 text-caption text-muted-foreground">
+              Connected to{" "}
+              <span className="font-medium text-foreground">{slackTeam ?? "Slack"}</span>
+            </span>
+            <button
+              type="button"
+              disabled={slackBusy}
+              onClick={() => void disconnectSlack()}
+              className="rounded-md border border-[color:var(--semantic-danger)] px-4 py-2 text-p text-[color:var(--semantic-danger)] hover:bg-secondary disabled:opacity-50"
+            >
+              {slackBusy ? "Working…" : "Disconnect Slack"}
+            </button>
+          </div>
+        ) : (
+          <form className="mt-4 flex max-w-xl flex-col gap-3" onSubmit={connectSlack}>
+            <label className="flex flex-col gap-1 text-caption text-muted-foreground">
+              Bot token (xoxb-…)
+              <input
+                type="password"
+                autoComplete="off"
+                className="rounded-md border border-input bg-secondary px-3 py-2 font-mono text-p text-foreground"
+                value={slackToken}
+                onChange={(ev) => setSlackToken(ev.target.value)}
+                placeholder="xoxb-…"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={slackBusy || !slackToken.trim()}
+              className="w-fit rounded-md bg-primary px-4 py-2 text-p font-medium text-[var(--bg-background)] hover:bg-primary/90 disabled:opacity-50"
+            >
+              {slackBusy ? "Connecting…" : "Connect Slack"}
+            </button>
+          </form>
+        )}
       </section>
 
       <section className="rounded-lg border border-input bg-card p-5" aria-labelledby="api-keys-title">

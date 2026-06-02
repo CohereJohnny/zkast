@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     # Optional dev bypass. When unset, the workspace `llm_cohere` key from Postgres is used.
     cohere_api_key: str | None = Field(default=None, validation_alias="COHERE_API_KEY")
 
+    # Slack OAuth app credentials (one app serves all workspaces; per-workspace
+    # access tokens are stored encrypted in api_keys). Unset until a Slack app
+    # is configured for the deployment.
+    slack_client_id: str | None = Field(default=None, validation_alias="SLACK_CLIENT_ID")
+    slack_client_secret: str | None = Field(
+        default=None, validation_alias="SLACK_CLIENT_SECRET"
+    )
+    slack_redirect_uri: str | None = Field(
+        default=None, validation_alias="SLACK_REDIRECT_URI"
+    )
+
     zkast_otel_enabled: bool = False
     graphiti_telemetry_enabled: bool = False
 

@@ -281,6 +281,7 @@ def build_agent_summaries(
                 "agent_id": aid,
                 "display_name": agent.get("display_name") or aid,
                 "external_agent_id": agent.get("external_agent_id"),
+                "provider": agent.get("provider") or "north",
                 "stats": stats,
                 "graph": graph,
                 "notes": notes,

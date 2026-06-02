@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/feedback-provider";
 import { NoteDetail } from "@/components/note-detail";
 import { NotesList, type NoteListItem } from "@/components/notes-list";
+import type { SourceScopeSelection } from "@/components/filters/source-scope-filter";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -20,8 +21,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
   const [qInput, setQInput] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [origin, setOrigin] = useState("");
-  const [documentFilter, setDocumentFilter] = useState("");
-  const [agentFilter, setAgentFilter] = useState("");
+  const [source, setSource] = useState<SourceScopeSelection | null>(null);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
@@ -33,9 +33,12 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
   }, [qInput]);
 
   useEffect(() => {
-    const fromUrl = searchParams.get("agentId") ?? searchParams.get("agent_id");
-    if (fromUrl && UUID_RE.test(fromUrl)) {
-      setAgentFilter(fromUrl);
+    const agentFromUrl = searchParams.get("agentId") ?? searchParams.get("agent_id");
+    const docFromUrl = searchParams.get("document_id") ?? searchParams.get("documentId");
+    if (agentFromUrl && UUID_RE.test(agentFromUrl)) {
+      setSource({ kind: "agent", id: agentFromUrl });
+    } else if (docFromUrl && UUID_RE.test(docFromUrl)) {
+      setSource({ kind: "document", id: docFromUrl });
     }
   }, [searchParams]);
 
@@ -46,13 +49,8 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
       const qs = new URLSearchParams();
       if (qDebounced.trim()) qs.set("q", qDebounced.trim());
       if (origin) qs.set("origin", origin);
-      const df = documentFilter.trim();
-      if (df && UUID_RE.test(df)) {
-        qs.set("document_id", df);
-      }
-      const af = agentFilter.trim();
-      if (af && UUID_RE.test(af)) {
-        qs.set("agent_id", af);
+      if (source && UUID_RE.test(source.id)) {
+        qs.set(source.kind === "agent" ? "agent_id" : "document_id", source.id);
       }
       qs.set("limit", "100");
       qs.set("offset", "0");
@@ -75,7 +73,7 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
     } finally {
       setListLoading(false);
     }
-  }, [workspaceId, qDebounced, origin, documentFilter, agentFilter]);
+  }, [workspaceId, qDebounced, origin, source]);
 
   useEffect(() => {
     void refreshList();
@@ -128,12 +126,10 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
           error={listError}
           q={qInput}
           origin={origin}
-          documentFilter={documentFilter}
-          agentFilter={agentFilter}
+          source={source}
           onQChange={setQInput}
           onOriginChange={setOrigin}
-          onDocumentFilterChange={setDocumentFilter}
-          onAgentFilterChange={setAgentFilter}
+          onSourceChange={setSource}
           onNewNote={() => void newNote()}
           workspaceId={workspaceId}
         />

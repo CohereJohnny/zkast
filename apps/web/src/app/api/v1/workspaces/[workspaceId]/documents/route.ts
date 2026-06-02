@@ -15,7 +15,7 @@ function maxUploadBytes(): number {
   return Number.isFinite(n) && n > 0 ? n : 52428800;
 }
 
-const sourceKindSchema = z.enum(["pdf", "north_conversation", "all"]);
+const sourceKindSchema = z.enum(["pdf", "north_conversation", "slack_conversation", "all"]);
 
 export async function GET(
   req: Request,
@@ -105,10 +105,35 @@ export async function GET(
           LEFT JOIN north_agents na
             ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
           WHERE d.workspace_id = $1::uuid AND d.source_kind = 'north_conversation'
+          UNION ALL
+          SELECT d.id::text,
+                 d.original_filename AS original_filename,
+                 d.mime_type AS mime_type,
+                 d.byte_size AS byte_size,
+                 d.page_count AS page_count,
+                 d.status AS status,
+                 d.failure_reason AS failure_reason,
+                 d.created_at AS created_at,
+                 d.updated_at AS updated_at,
+                 'slack_conversation'::text AS source_kind,
+                 COALESCE(
+                   NULLIF(TRIM(COALESCE(d.source_metadata->>'title', '')), ''),
+                   NULLIF(TRIM(COALESCE(d.original_filename, '')), ''),
+                   d.id::text
+                 ) AS conversation_title,
+                 NULLIF(TRIM(COALESCE(
+                   NULLIF(TRIM(COALESCE(na.display_name, '')), ''),
+                   NULLIF(TRIM(COALESCE(d.source_metadata->>'channel_name', '')), ''),
+                   ''
+                 )), '') AS agent_display_name
+          FROM documents d
+          LEFT JOIN north_agents na
+            ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
+          WHERE d.workspace_id = $1::uuid AND d.source_kind = 'slack_conversation'
         )
         SELECT * FROM combined
         ORDER BY created_at DESC
-        LIMIT 250
+        LIMIT 400
         `,
         [workspaceId],
       );

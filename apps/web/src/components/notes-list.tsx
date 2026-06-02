@@ -1,6 +1,9 @@
 "use client";
 
-import { AgentPicker } from "@/components/filters/agent-picker";
+import {
+  SourceScopeFilter,
+  type SourceScopeSelection,
+} from "@/components/filters/source-scope-filter";
 
 export type NoteListItem = {
   id: string;
@@ -18,12 +21,10 @@ export function NotesList({
   error,
   q,
   origin,
-  documentFilter,
-  agentFilter,
+  source,
   onQChange,
   onOriginChange,
-  onDocumentFilterChange,
-  onAgentFilterChange,
+  onSourceChange,
   onNewNote,
   workspaceId,
 }: {
@@ -34,12 +35,10 @@ export function NotesList({
   error: string | null;
   q: string;
   origin: string;
-  documentFilter: string;
-  agentFilter: string;
+  source: SourceScopeSelection | null;
   onQChange: (v: string) => void;
   onOriginChange: (v: string) => void;
-  onDocumentFilterChange: (v: string) => void;
-  onAgentFilterChange: (v: string) => void;
+  onSourceChange: (next: SourceScopeSelection | null) => void;
   onNewNote: () => void;
   workspaceId?: string;
 }) {
@@ -77,34 +76,13 @@ export function NotesList({
           <option value="split">Split</option>
         </select>
       </label>
-      <label className="block text-caption text-muted-foreground">
-        Document id filter
-        <input
-          value={documentFilter}
-          onChange={(e) => onDocumentFilterChange(e.target.value)}
-          className="mt-1 w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-caption text-muted-foreground"
-          placeholder="Optional uuid"
-        />
-      </label>
       {workspaceId ? (
-        <AgentPicker
+        <SourceScopeFilter
           workspaceId={workspaceId}
-          value={agentFilter}
-          onChange={onAgentFilterChange}
-          label="North agent"
-          placeholder="All notes (PDF + North)"
+          value={source}
+          onChange={onSourceChange}
         />
-      ) : (
-        <label className="block text-caption text-muted-foreground">
-          Agent id filter
-          <input
-            value={agentFilter}
-            onChange={(e) => onAgentFilterChange(e.target.value)}
-            className="mt-1 w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-caption text-muted-foreground"
-            placeholder="Optional North agent uuid"
-          />
-        </label>
-      )}
+      ) : null}
 
       {error ? (
         <p className="text-caption text-red-300" role="alert">

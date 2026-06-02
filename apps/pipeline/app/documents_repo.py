@@ -436,6 +436,8 @@ def insert_document(
     north_conversation_id: str | None = None,
     north_metadata: dict[str, Any] | None = None,
     raw_transcript_json: dict[str, Any] | list[Any] | None = None,
+    external_conversation_id: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
@@ -444,11 +446,11 @@ def insert_document(
               id, workspace_id, original_filename, mime_type, byte_size,
               storage_uri, checksum, replaces_document_id, status,
               source_kind, agent_id, north_conversation_id, north_metadata,
-              raw_transcript_json
+              raw_transcript_json, external_conversation_id, source_metadata
             )
             VALUES (
               %s::uuid, %s::uuid, %s, %s, %s, %s, %s,
-              %s::uuid, %s, %s, %s::uuid, %s, %s::jsonb, %s::jsonb
+              %s::uuid, %s, %s, %s::uuid, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb
             )
             RETURNING *
             """,
@@ -467,6 +469,8 @@ def insert_document(
                 north_conversation_id,
                 Json(north_metadata or {}),
                 Json(raw_transcript_json) if raw_transcript_json is not None else None,
+                external_conversation_id,
+                Json(source_metadata or {}),
             ),
         ).fetchone()
         conn.commit()

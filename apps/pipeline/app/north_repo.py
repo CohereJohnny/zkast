@@ -113,7 +113,7 @@ def fetch_agent_stats(
             FROM documents
             WHERE workspace_id = %s::uuid
               AND agent_id = %s::uuid
-              AND source_kind = 'north_conversation'
+              AND source_kind IN ('north_conversation', 'slack_conversation')
             """,
             (workspace_id, agent_id),
         ).fetchone()

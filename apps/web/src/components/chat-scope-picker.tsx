@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-import { AgentPicker } from "@/components/filters/agent-picker";
-import { DocumentPicker } from "@/components/filters/document-picker";
+import {
+  SourceScopeFilter,
+  type SourceScopeSelection,
+} from "@/components/filters/source-scope-filter";
 import { EntityTypeahead } from "@/components/filters/entity-typeahead";
 import { TagPicker } from "@/components/filters/tag-picker";
 import { TypeMultiselect } from "@/components/filters/type-multiselect";
@@ -83,27 +85,34 @@ export function ChatScopePicker({
       .map((s) => s.trim())
       .filter(Boolean);
 
+  const sourceSelection: SourceScopeSelection | null = value.agent_id
+    ? { kind: "agent", id: value.agent_id }
+    : value.document_ids && value.document_ids[0]
+      ? { kind: "document", id: value.document_ids[0] }
+      : null;
+
+  const onSourceChange = (next: SourceScopeSelection | null) => {
+    if (!next) {
+      patch({ agent_id: undefined, document_ids: [] });
+    } else if (next.kind === "agent") {
+      patch({ agent_id: next.id, document_ids: [] });
+    } else {
+      patch({ agent_id: undefined, document_ids: [next.id] });
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <DocumentPicker
-        workspaceId={workspaceId}
-        value={toCsv(value.document_ids).split(",")[0] ?? ""}
-        onChange={(id) =>
-          patch({ document_ids: id ? [id] : [] })
-        }
-        label="Restrict to document"
-      />
       <div className="sm:col-span-2">
-        <AgentPicker
+        <SourceScopeFilter
           workspaceId={workspaceId}
-          value={value.agent_id ?? ""}
-          onChange={(id) => patch({ agent_id: id || undefined })}
-          label="North agent scope (optional)"
-          placeholder="All agents — leave empty for workspace-wide retrieval"
+          value={sourceSelection}
+          onChange={onSourceChange}
+          label="Grounding scope (optional)"
         />
         <p className="mt-1 text-caption text-muted-foreground">
-          When set, retrieval (graph, hybrid, A-MEM lite, zettel notes) restricts to this
-          agent&apos;s documents and notes only.
+          Restrict grounding to one memory space (agent or Slack channel — all its documents and
+          notes) or a single document. Leave empty for workspace-wide retrieval.
         </p>
       </div>
       <EntityTypeahead

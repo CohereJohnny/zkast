@@ -19,7 +19,7 @@ type SourceRow = {
 };
 
 function rowPrimaryLabel(r: SourceRow): string {
-  if (r.source_kind === "north_conversation") {
+  if (r.source_kind === "north_conversation" || r.source_kind === "slack_conversation") {
     const t = (r.conversation_title ?? "").trim();
     return t || r.original_filename;
   }
@@ -34,7 +34,24 @@ function rowSecondaryLine(r: SourceRow): string {
     parts.push(r.status);
     return parts.join(" · ");
   }
+  if (r.source_kind === "slack_conversation") {
+    const channel = (r.agent_display_name ?? "").trim();
+    const parts = ["Slack"];
+    if (channel) parts.push(`#${channel}`);
+    parts.push(r.status);
+    return parts.join(" · ");
+  }
   return [r.status, r.page_count ? `${r.page_count} pp` : ""].filter(Boolean).join(" · ");
+}
+
+function rowBadge(sourceKind: string): { label: string; className: string } {
+  if (sourceKind === "pdf") {
+    return { label: "PDF", className: "bg-primary/15 text-foreground" };
+  }
+  if (sourceKind === "slack_conversation") {
+    return { label: "Slack", className: "bg-fuchsia-500/15 text-fuchsia-200" };
+  }
+  return { label: "Conv", className: "bg-amber-500/15 text-amber-100" };
 }
 
 export function SourcePicker({
@@ -202,13 +219,9 @@ export function SourcePicker({
                 >
                   <span className="flex items-center gap-1.5">
                     <span
-                      className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
-                        d.source_kind === "pdf"
-                          ? "bg-primary/15 text-foreground"
-                          : "bg-amber-500/15 text-amber-100"
-                      }`}
+                      className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${rowBadge(d.source_kind).className}`}
                     >
-                      {d.source_kind === "pdf" ? "PDF" : "Conv"}
+                      {rowBadge(d.source_kind).label}
                     </span>
                     <span className="block min-w-0 flex-1 truncate">{rowPrimaryLabel(d)}</span>
                   </span>
