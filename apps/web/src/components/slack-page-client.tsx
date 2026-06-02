@@ -150,9 +150,7 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
           body: JSON.stringify({ range }),
         });
         const body = (await res.json()) as {
-          created?: number;
-          skipped?: number;
-          documents?: { job_id: string; document_id: string }[];
+          job_id?: string;
           error?: { message?: string };
           detail?: { error?: { message?: string } };
         };
@@ -163,16 +161,17 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
           });
           return;
         }
-        // Stream the resulting pipeline jobs into the docked log console.
-        (body.documents ?? []).slice(0, 12).forEach((d) => {
-          registerActiveJob(d.job_id, workspaceId, d.document_id, "document_parse");
-        });
-        if ((body.documents ?? []).length > 0) requestOpenLogConsole();
+        // Import runs in the background; stream its progress into the docked log.
+        if (body.job_id) {
+          registerActiveJob(body.job_id, workspaceId, null, "slack_import");
+          requestOpenLogConsole();
+        }
         toast({
           variant: "success",
-          message: `#${channelName}: ${body.created ?? 0} imported, ${body.skipped ?? 0} already present`,
+          message: `#${channelName}: import started — watch the pipeline log below.`,
         });
-        void loadSources();
+        // Sync state updates when the job finishes; refresh shortly after.
+        window.setTimeout(() => void loadSources(), 4000);
       } catch {
         toast({ variant: "error", message: "Import request failed" });
       } finally {
