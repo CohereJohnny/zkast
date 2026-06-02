@@ -25,11 +25,10 @@ embedding_models:
     auth_method: api_key
     api_key: ${GRAPHRAG_API_KEY}
     # Cohere's compat /embeddings need encoding_format=float to avoid graphrag's
-    # fixed-size arrow assembly error (issue #2194). NOTE: index/query dim
-    # mismatch (3072 vs 1536) remains, and litellm blocks the `dimensions` param
-    # on this path — see README "Findings". Recommended: use OpenAI for the
-    # embedding model (chat can stay Cohere-compat). Embeddings here are NOT
-    # fully working; this config is kept to document the chat-side success.
+    # fixed-size arrow assembly error (graphrag issue #2194). embed-v4.0 returns
+    # 1536-dim by default on the compat endpoint (verified by direct probe), so
+    # index and query embedding dims agree — no `dimensions` override needed
+    # (and litellm blocks `dimensions` on the openai provider path anyway).
     call_args:
       encoding_format: float
     retry:
