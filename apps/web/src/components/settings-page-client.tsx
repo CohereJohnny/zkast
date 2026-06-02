@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ProviderSettingsSection } from "@/components/provider-settings-section";
 import { WorkspaceResetSection } from "@/components/workspace-reset-section";
 import {
   PIPELINE_DEFAULTS,
@@ -664,6 +665,8 @@ export function SettingsPageClient({ workspaceId }: { workspaceId: string }) {
           </div>
         </dl>
       </section>
+
+      <ProviderSettingsSection workspaceId={workspaceId} />
 
       <WorkspaceResetSection workspaceId={workspaceId} />
 
