@@ -15,7 +15,7 @@ To keep drift bounded without heavyweight process:
 - [`north-agents-amem.md`](north-agents-amem.md) — North agent ingestion, A-MEM memory enrichment, dreaming. Partially merged into `datamodel.md` (North section). Not reflecting `north_agents.provider_metadata` or the Slack-driven memory-source generalization.
 - [`llm-wiki-memory.md`](llm-wiki-memory.md) — Wiki spaces / pages / generation jobs (migration `0015`). Not yet woven into `datamodel.md` or `apis.md`.
 - [`slack-source.md`](slack-source.md) — Slack as an ingestion source + provider-neutral memory-source generalization (migration `0018`). Not yet woven into `datamodel.md` or `apis.md`.
-- (planned) composable evaluation harness — pluggable pipeline stages, Pipeline Configurations, versioned ontology/prompt sets, Microsoft GraphRAG plugin. Tracked in the active plan; OpenSpec to be authored on the reconciled base.
+- [`composable-eval-harness.md`](composable-eval-harness.md) — pluggable pipeline stages, Pipeline Configurations (versioned + content-hashed), versioned ontology/prompt sets (manual + auto-tune), Microsoft GraphRAG as the first new extractor+retrieval plugin, comparison/attribution, and the Pipelines/Lab surface. The forward-looking architecture for the harness; not yet implemented in code.
 
 ## Reconciliation ledger (shipped, not yet fully in core specs)
 
