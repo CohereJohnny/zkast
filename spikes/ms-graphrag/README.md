@@ -76,6 +76,18 @@ GRAPHRAG_API_KEY=<openai-key> .venv/bin/python run_spike.py openai
   `GRAPHRAG_API_KEY=<cohere-key> .venv/bin/python run_spike.py cohere`.
   Based on the probe + chat-side success, no further config changes are expected.
 
+## Runtime decision (DECIDED): dedicated `graphrag-worker` container
+GraphRAG pulls **litellm → `openai>=2.20,<3`**, but the pipeline pins **`openai>=1.91,<2`**
+(used by notes_llm, providers, ontology_autotune, raw-chunk embeddings). To avoid a risky
+app-wide openai 2.x migration and keep heavy deps (spacy/onnxruntime/lancedb) out of the
+main images, the GraphRAG plugin will run in a **dedicated `graphrag-worker` container** —
+its own Dockerfile/requirements (py3.12 + graphrag 3.1.0 + openai 2.x), consuming a dedicated
+arq queue, sharing the `apps/pipeline` codebase. Mirrors the existing `chat-worker` pattern.
+The main pipeline/worker stay on openai 1.x and are untouched.
+
 ## Implications for the harness phases
-- `graphrag-plugin`: a batch index job calling `build_index`, writing artifacts to per-(memory-space, configuration) storage, and recording a `graphrag_indexes` pointer row. Resolve chat + embed from the configured provider (all-Cohere via the compat endpoint by default), injecting `encoding_format: float` for the embedding model.
+- `graphrag-plugin`: a batch `build_index` job (on the dedicated graphrag-worker) writing
+  artifacts to per-(memory-space, configuration) storage and recording a `graphrag_indexes`
+  pointer row. Resolve chat + embed from the configured provider (all-Cohere via the compat
+  endpoint by default), injecting `encoding_format: float` for the embedding model.
 - `graphrag-retrieval`: an `ms_graphrag` strategy loading the parquet artifacts and calling `global_search`/`local_search`, registered in the stage registry (already stubbed) with a DB CHECK migration for the new `chat_messages.retrieval_mode`.
