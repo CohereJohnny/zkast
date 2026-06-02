@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from app.config import Settings
 from app.documents_repo import list_stalled_active_documents
 from app.ingestion_logs_repo import stage_latency_stats
-from app.job_redis import JOB_HASH_PREFIX
+from app.job_redis import JOB_HASH_PREFIX, arq_queue_snapshot
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["internal-admin"])
@@ -41,17 +41,7 @@ async def get_admin_diagnostics(
     settings: Settings = request.app.state.settings
     redis = request.app.state.redis_async
 
-    try:
-        queue_depth = await redis.llen("arq:queue")
-    except Exception:  # noqa: BLE001
-        queue_depth = None
-
-    try:
-        in_progress = await redis.zrange("arq:in_progress", 0, -1)
-        if in_progress and isinstance(in_progress[0], bytes):
-            in_progress = [v.decode() for v in in_progress]
-    except Exception:  # noqa: BLE001
-        in_progress = []
+    arq = await arq_queue_snapshot(redis)
 
     stalled: list[dict[str, Any]] = []
     try:
@@ -124,10 +114,7 @@ async def get_admin_diagnostics(
 
     return JSONResponse(
         content={
-            "arq": {
-                "queue_depth": queue_depth,
-                "in_progress": in_progress,
-            },
+            "arq": arq,
             "stalled_documents": stalled,
             "stage_latency": latency,
             "job_hashes": {"terminal": terminal, "active": active},

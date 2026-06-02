@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LayoutDashboard } from "lucide-react";
 
 import { AgentPicker } from "@/components/filters/agent-picker";
@@ -75,6 +75,7 @@ type AgentSummary = {
     derived_notes: number;
     cached_conversations: number;
     note_amem_embeddings: number;
+    note_amem_orphaned?: number;
   };
   graph?: { entities: number; relationships: number; graphiti_entity_maps: number };
   notes?: number;
@@ -103,6 +104,23 @@ function KpiTile({
   );
 }
 
+function ScrollRegion({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn("min-h-0 overflow-y-auto overscroll-contain", className)}
+      tabIndex={0}
+    >
+      {children}
+    </div>
+  );
+}
+
 function RecordList({ title, rows }: { title: string; rows: [string, number][] }) {
   if (!rows.length) return null;
   return (
@@ -122,9 +140,11 @@ function RecordList({ title, rows }: { title: string; rows: [string, number][] }
 
 export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const agentFilter = searchParams.get("agent_id") || "";
   const conversationFilter = searchParams.get("conversation_id") || "";
+  const agentDetailRef = useRef<HTMLDivElement>(null);
 
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -166,11 +186,11 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
   const tokensTotal = (usage?.tokens_in ?? 0) + (usage?.tokens_out ?? 0);
 
   const selectedAgent = useMemo(() => {
-    if (!data?.agents?.length) return null;
-    if (agentFilter) {
-      return data.agents.find((a) => a.agent_id === agentFilter) ?? data.selection?.agent ?? null;
+    if (!agentFilter) return null;
+    if (data?.selection?.agent?.agent_id === agentFilter) {
+      return data.selection.agent;
     }
-    return null;
+    return data?.agents?.find((a) => a.agent_id === agentFilter) ?? null;
   }, [data, agentFilter]);
 
   const setAgentFilter = (id: string | null) => {
@@ -178,7 +198,8 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
     if (id) qs.set("agent_id", id);
     else qs.delete("agent_id");
     qs.delete("conversation_id");
-    router.replace(`/dashboard?${qs.toString()}`);
+    const suffix = qs.toString();
+    router.push(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
   };
 
   const setConversationFilter = (cid: string | null) => {
@@ -186,8 +207,16 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
     if (!agentFilter) return;
     if (cid) qs.set("conversation_id", cid);
     else qs.delete("conversation_id");
-    router.replace(`/dashboard?${qs.toString()}`);
+    router.push(`${pathname}?${qs.toString()}`, { scroll: false });
   };
+
+  useEffect(() => {
+    if (!agentFilter || !agentDetailRef.current) return;
+    const el = agentDetailRef.current;
+    window.requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [agentFilter, data?.selection?.agent?.agent_id]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-2">
@@ -292,46 +321,51 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                 (v.tokens_in ?? 0) + (v.tokens_out ?? 0),
               ])}
             />
-            <div className="rounded-lg border border-border bg-card p-4">
-              <h2 className="text-h5 font-semibold text-foreground">Storage split</h2>
-              <dl className="mt-3 space-y-2 text-p">
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Postgres content rows (est.)</dt>
-                  <dd className="font-mono tabular-nums">
-                    {Object.values(counts).reduce((a, b) => a + b, 0).toLocaleString()}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Raw chunk coverage</dt>
-                  <dd className="font-mono tabular-nums">
-                    {data.storage?.raw_chunk_index?.embeddings_total ?? 0} /{" "}
-                    {data.storage?.raw_chunk_index?.episodes_total ?? 0}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Wiki pages</dt>
-                  <dd className="font-mono tabular-nums">{data.postgres?.wiki?.pages ?? 0}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Chat messages</dt>
-                  <dd className="font-mono tabular-nums">{data.postgres?.chat?.messages ?? 0}</dd>
-                </div>
-              </dl>
-              <h3 className="mt-4 text-caption font-semibold uppercase tracking-wider text-muted-foreground">
-                FalkorDB graphs
-              </h3>
-              <ul className="mt-2 space-y-1 text-caption">
-                {(data.storage?.falkor_graphs ?? []).map((g) => (
-                  <li key={g.graph_name} className="flex justify-between gap-2">
-                    <span className="truncate font-mono text-muted-foreground" title={g.graph_name}>
-                      {g.scope}: {g.graph_name.slice(0, 24)}…
-                    </span>
-                    <span className="tabular-nums text-foreground">
-                      {g.node_count != null ? g.node_count : "—"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+            <div className="flex max-h-[min(70vh,520px)] min-h-0 flex-col rounded-lg border border-border bg-card p-4">
+              <h2 className="shrink-0 text-h5 font-semibold text-foreground">Storage split</h2>
+              <ScrollRegion className="mt-3 min-h-0 flex-1 pr-1">
+                <dl className="space-y-2 text-p">
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-muted-foreground">Postgres content rows (est.)</dt>
+                    <dd className="font-mono tabular-nums">
+                      {Object.values(counts).reduce((a, b) => a + b, 0).toLocaleString()}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-muted-foreground">Raw chunk coverage</dt>
+                    <dd className="font-mono tabular-nums">
+                      {data.storage?.raw_chunk_index?.embeddings_total ?? 0} /{" "}
+                      {data.storage?.raw_chunk_index?.episodes_total ?? 0}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-muted-foreground">Wiki pages</dt>
+                    <dd className="font-mono tabular-nums">{data.postgres?.wiki?.pages ?? 0}</dd>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-muted-foreground">Chat messages</dt>
+                    <dd className="font-mono tabular-nums">{data.postgres?.chat?.messages ?? 0}</dd>
+                  </div>
+                </dl>
+                <h3 className="mt-4 text-caption font-semibold uppercase tracking-wider text-muted-foreground">
+                  FalkorDB graphs ({(data.storage?.falkor_graphs ?? []).length})
+                </h3>
+                <ul className="mt-2 space-y-1 text-caption">
+                  {(data.storage?.falkor_graphs ?? []).map((g) => (
+                    <li key={g.graph_name} className="flex justify-between gap-2">
+                      <span
+                        className="truncate font-mono text-muted-foreground"
+                        title={g.graph_name}
+                      >
+                        {g.scope}: {g.graph_name.slice(0, 24)}…
+                      </span>
+                      <span className="shrink-0 tabular-nums text-foreground">
+                        {g.node_count != null ? g.node_count : "—"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </ScrollRegion>
             </div>
           </div>
 
@@ -340,7 +374,8 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
             <p className="mt-1 text-caption text-muted-foreground">
               Each agent has its own Falkor graph, scoped entities, and filtered embeddings.
             </p>
-            <div className="mt-4 overflow-x-auto">
+            <ScrollRegion className="mt-4 max-h-[min(50vh,420px)]">
+            <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-caption">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground">
@@ -366,6 +401,11 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                       <td className="py-2 pr-4 tabular-nums">{a.notes ?? a.stats?.derived_notes ?? 0}</td>
                       <td className="py-2 pr-4 tabular-nums">
                         {a.stats?.note_amem_embeddings ?? 0}
+                        {(a.stats?.note_amem_orphaned ?? 0) > 0 ? (
+                          <span className="ml-1 text-caution" title="Orphaned embeddings pending cleanup">
+                            (+{a.stats?.note_amem_orphaned})
+                          </span>
+                        ) : null}
                       </td>
                       <td className="py-2 pr-4 tabular-nums">{a.graph?.entities ?? 0}</td>
                       <td className="py-2">
@@ -382,10 +422,14 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                 </tbody>
               </table>
             </div>
+            </ScrollRegion>
           </div>
 
           {selectedAgent ? (
-            <div className="rounded-lg border border-border bg-card p-4">
+            <div
+              ref={agentDetailRef}
+              className="rounded-lg border border-border bg-card p-4 scroll-mt-4"
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-h5 font-semibold text-foreground">
                   {selectedAgent.display_name}
