@@ -144,6 +144,53 @@ def ontology_from_doc(doc: dict[str, Any]) -> Ontology:
     )
 
 
+def validate_ontology(ont: Ontology) -> list[str]:
+    """Return a list of human-readable validation errors (empty = valid).
+
+    Enforces the business rules from the harness OpenSpec plus the Cohere
+    json_schema constraint that every type must carry at least one REQUIRED
+    field (BUG-010), so the rebuilt models never produce an invalid schema.
+    """
+    errors: list[str] = []
+    if not ont.entity_types:
+        errors.append("at least one entity type is required")
+
+    entity_names = {t.name for t in ont.entity_types}
+    edge_names = {t.name for t in ont.edge_types}
+
+    for kind, types in (("entity", ont.entity_types), ("edge", ont.edge_types)):
+        seen: set[str] = set()
+        for t in types:
+            if not (t.name or "").strip():
+                errors.append(f"{kind} type is missing a name")
+                continue
+            if t.name in seen:
+                errors.append(f"duplicate {kind} type name {t.name!r}")
+            seen.add(t.name)
+            if not (t.description or "").strip():
+                errors.append(f"{kind} type {t.name!r} is missing a description")
+            if not any(not f.optional for f in t.fields):
+                errors.append(
+                    f"{kind} type {t.name!r} must have at least one required (non-optional) field"
+                )
+            for f in t.fields:
+                if not (f.name or "").strip():
+                    errors.append(f"{kind} type {t.name!r} has a field without a name")
+
+    for i, entry in enumerate(ont.edge_type_map):
+        subj = entry.get("subject")
+        obj = entry.get("object")
+        if subj not in entity_names:
+            errors.append(f"edge_type_map[{i}] subject {subj!r} is not a defined entity type")
+        if obj not in entity_names:
+            errors.append(f"edge_type_map[{i}] object {obj!r} is not a defined entity type")
+        for e in entry.get("edges") or []:
+            if e not in edge_names:
+                errors.append(f"edge_type_map[{i}] references undefined edge type {e!r}")
+
+    return errors
+
+
 def load_ontology_file(name: str, version: str) -> Ontology:
     """Load a config-as-code ontology from ``app/ontologies/<name>_<version>.yaml``."""
     path = ONTOLOGIES_DIR / f"{name}_{version}.yaml"

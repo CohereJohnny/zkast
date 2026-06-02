@@ -9,7 +9,13 @@ edge_type_map, and the same extraction instructions.
 import inspect
 
 from app import entity_schemas
-from app.ontology import load_ontology_file
+from app.ontology import (
+    Ontology,
+    OntologyField,
+    OntologyType,
+    load_ontology_file,
+    validate_ontology,
+)
 
 
 def _norm(model) -> dict:
@@ -45,3 +51,32 @@ def test_generic_v1_edge_type_map_equivalent() -> None:
 def test_generic_v1_instructions_equivalent() -> None:
     ont = load_ontology_file("generic", "v1")
     assert ont.instructions == entity_schemas.CUSTOM_EXTRACTION_INSTRUCTIONS
+
+
+def test_validate_ontology_accepts_generic_v1() -> None:
+    ont = load_ontology_file("generic", "v1")
+    assert validate_ontology(ont) == []
+
+
+def test_validate_ontology_flags_problems() -> None:
+    # No entity types at all.
+    assert "at least one entity type is required" in validate_ontology(
+        Ontology(name="x", version="v1")
+    )
+
+    # A type with only optional fields violates the Cohere required-field rule;
+    # a missing description and an edge_type_map referencing unknown types.
+    ont = Ontology(
+        name="x",
+        version="v1",
+        entity_types=[
+            OntologyType(name="Thing", description="", fields=[OntologyField("note", optional=True)]),
+        ],
+        edge_types=[],
+        edge_type_map=[{"subject": "Thing", "object": "Ghost", "edges": ["NOPE"]}],
+    )
+    errors = validate_ontology(ont)
+    assert any("at least one required" in e for e in errors)
+    assert any("missing a description" in e for e in errors)
+    assert any("object 'Ghost'" in e for e in errors)
+    assert any("undefined edge type 'NOPE'" in e for e in errors)
