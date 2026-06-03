@@ -16,6 +16,7 @@ import {
   StickyNote,
   Camera,
   Target,
+  Workflow,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -32,6 +33,7 @@ const items = [
   { href: "/notes", label: "Notes", Icon: StickyNote },
   { href: "/graph", label: "Graph", Icon: Network },
   { href: "/ontologies", label: "Ontologies", Icon: Boxes },
+  { href: "/graphrag", label: "GraphRAG", Icon: Workflow },
   { href: "/wiki", label: "Wiki", Icon: BookOpen },
   { href: "/chat", label: "Chat", Icon: MessageSquare },
   { href: "/evals", label: "Evals", Icon: BarChart3 },
