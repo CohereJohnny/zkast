@@ -60,7 +60,8 @@ export type RetrievalMode =
   | "graph"
   | "hybrid"
   | "zettelkasten_notes"
-  | "amem_lite";
+  | "amem_lite"
+  | "ms_graphrag";
 
 const MAX_INPUT_LEN = 20_000;
 const ARIA_LIVE_THROTTLE_MS = 150;
@@ -106,6 +107,12 @@ export const RETRIEVAL_MODE_LABELS: Record<
     label: "A-MEM lite",
     tagline: "Vector over enriched notes",
     helper: "Embeddings include memory_context and memory_keywords after enrichment (note_amem index).",
+  },
+  ms_graphrag: {
+    label: "MS GraphRAG",
+    tagline: "Global search over community reports",
+    helper:
+      "Microsoft GraphRAG global search: grounds on the community reports of the latest built GraphRAG index for the scoped memory space. Build an index first (graphrag-worker).",
   },
 };
 
@@ -746,6 +753,7 @@ function RetrievalModeSelector({
     "hybrid",
     "zettelkasten_notes",
     "amem_lite",
+    "ms_graphrag",
   ];
   const meta = RETRIEVAL_MODE_LABELS[value];
   return (

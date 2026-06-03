@@ -182,4 +182,47 @@ async def run_graphrag_index(
         "text_units": _count("text_units"),
         "failed_workflows": [getattr(r, "workflow", "?") for r in failed],
     }
-    return {"artifact_uri": str(out), "stats": stats, "ok": not failed}
+    return {
+        "artifact_uri": str(out),
+        "stats": stats,
+        "ok": not failed,
+        "community_reports": _read_community_reports(out),
+    }
+
+
+def _read_community_reports(out: Path) -> list[dict[str, Any]]:
+    """Read community_reports.parquet into plain dicts (worker-only; pandas)."""
+    import pandas as pd  # noqa: WPS433
+
+    path = out / "community_reports.parquet"
+    if not path.exists():
+        return []
+    df = pd.read_parquet(path)
+
+    def _val(row: Any, col: str, cast: Any) -> Any:
+        if col not in df.columns:
+            return None
+        v = row[col]
+        try:
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        try:
+            return cast(v)
+        except (TypeError, ValueError):
+            return None
+
+    out_rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        out_rows.append(
+            {
+                "community": _val(row, "community", int),
+                "level": _val(row, "level", int),
+                "rank": _val(row, "rank", float),
+                "title": _val(row, "title", str),
+                "summary": _val(row, "summary", str),
+                "full_content": _val(row, "full_content", str),
+            }
+        )
+    return out_rows

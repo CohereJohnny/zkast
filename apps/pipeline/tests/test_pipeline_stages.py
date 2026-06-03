@@ -20,10 +20,11 @@ def test_registry_has_current_builtins() -> None:
     assert GRAPH_STORES["graphiti_falkor"].implemented
     for mode in ("graph", "rag", "raw_transcript", "hybrid", "zettelkasten_notes", "amem_lite"):
         assert RETRIEVERS[mode].implemented, mode
-    # Planned plugins are registered but flagged not implemented.
+    # Planned extractor/store plugins remain not implemented.
     assert not EXTRACTORS["ms_graphrag"].implemented
     assert not GRAPH_STORES["graphrag_artifacts"].implemented
-    assert not RETRIEVERS["ms_graphrag"].implemented
+    # ms_graphrag retrieval (global search over community reports) is now implemented.
+    assert RETRIEVERS["ms_graphrag"].implemented
 
 
 def test_retriever_strategy_strings_match_current_pipeline() -> None:

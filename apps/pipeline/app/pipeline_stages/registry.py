@@ -124,12 +124,12 @@ RETRIEVERS: dict[str, StagePlugin] = {
     "ms_graphrag": StagePlugin(
         id="ms_graphrag",
         kind=StageKind.RETRIEVE,
-        label="Microsoft GraphRAG (community search)",
-        description="Local/global search over GraphRAG community reports.",
+        label="Microsoft GraphRAG (global/community search)",
+        description="Global search over GraphRAG community reports (built by the graphrag-worker).",
         module="app.chat_retrieval_ms_graphrag",
         attr="retrieve",
         strategy="graph_ms_graphrag_v1",
-        implemented=False,
+        implemented=True,
     ),
     "wiki": StagePlugin(
         id="wiki",
