@@ -17,6 +17,7 @@ import {
   Camera,
   Target,
   Workflow,
+  Layers,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -34,6 +35,7 @@ const items = [
   { href: "/graph", label: "Graph", Icon: Network },
   { href: "/ontologies", label: "Ontologies", Icon: Boxes },
   { href: "/graphrag", label: "GraphRAG", Icon: Workflow },
+  { href: "/pipelines", label: "Pipelines", Icon: Layers },
   { href: "/wiki", label: "Wiki", Icon: BookOpen },
   { href: "/chat", label: "Chat", Icon: MessageSquare },
   { href: "/evals", label: "Evals", Icon: BarChart3 },
