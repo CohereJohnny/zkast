@@ -18,6 +18,7 @@ from psycopg.types.json import Json
 from app.cohere_chat import CitationSpan, chat_stream_grounded
 from app.config import get_settings
 from app.eval.adapters import memory_system_for_mode, normalize_mode, retrieval_module
+from app.eval.composition import composition_for_mode
 from app.eval.scoring import aggregate_scores, score_answer
 from app.graphiti_factory import resolve_cohere_api_key
 from app.workspace_repo import fetch_pipeline_settings
@@ -180,18 +181,19 @@ def _insert_result(
     tokens_in: int | None,
     tokens_out: int | None,
     retrieval_items: list[dict[str, Any]] | None,
+    composition: dict[str, Any] | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO chat_eval_results (
             id, run_id, question_id, retrieval_mode, memory_system,
             top_k_cutoff, answer_text, refused, scores, latency_ms,
-            tokens_in, tokens_out, retrieval_items
+            tokens_in, tokens_out, retrieval_items, composition
         )
         VALUES (
             %s::uuid, %s::uuid, %s::uuid, %s, %s,
             %s, %s, %s, %s, %s,
-            %s, %s, %s
+            %s, %s, %s, %s
         )
         """,
         (
@@ -208,6 +210,7 @@ def _insert_result(
             tokens_in,
             tokens_out,
             Json(retrieval_items) if retrieval_items is not None else None,
+            Json(composition or {}),
         ),
     )
 
@@ -547,6 +550,7 @@ async def run_eval(
                             tokens_in=res.get("tokens_in"),
                             tokens_out=res.get("tokens_out"),
                             retrieval_items=res.get("retrieval_snapshot"),
+                            composition=composition_for_mode(mode, cfg),
                         )
                         conn.commit()
                         rollup_rows.append(

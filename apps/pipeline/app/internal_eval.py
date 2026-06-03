@@ -291,6 +291,7 @@ async def get_eval_run(
                 refused,
                 scores,
                 retrieval_items,
+                composition,
                 latency_ms,
                 tokens_in,
                 tokens_out,
