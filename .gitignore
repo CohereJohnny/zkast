@@ -26,6 +26,10 @@ dist/
 # Cursor (local plans — not part of shipped repo)
 .cursor/plans/
 
+# Local MS GraphRAG spike artifacts (venv, cache, parquet, LanceDB).
+# Tracked source under this path stays in git; new/untracked files are ignored.
+/spikes/ms-graphrag/
+
 # IDE / OS
 .DS_Store
 .idea/
