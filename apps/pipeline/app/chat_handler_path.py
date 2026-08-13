@@ -38,39 +38,86 @@ PATH_STRATEGY = "hybrid_path_v1"
 
 def _resolve_entity_id(
     conn: psycopg.Connection,
+    database_url: str,
     workspace_id: str,
     canonical_name: str,
+    *,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
 ) -> str | None:
     """Resolve a canonical name to its entity id within the workspace."""
+    from app.graph_repo import memory_space_entity_filter_sql
+
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
+    )
     row = conn.execute(
-        """
-        SELECT id::text AS id
-        FROM entities
-        WHERE workspace_id = %s::uuid
-          AND lower(canonical_name) = lower(%s)
+        f"""
+        SELECT e.id::text AS id
+        FROM entities e
+        WHERE e.workspace_id = %s::uuid
+          AND lower(e.canonical_name) = lower(%s)
+        {filt_sql}
         LIMIT 1
         """,
-        (workspace_id, canonical_name),
+        (workspace_id, canonical_name, *filt_params),
     ).fetchone()
     if row:
         return str(row[0])
-    # Fallback: case-insensitive ``LIKE`` so "Probabilistic Safety
-    # Assessment" can match "Probabilistic Safety Assessment (PSA)" or
-    # similar aliased forms.
     row = conn.execute(
-        """
-        SELECT id::text AS id
-        FROM entities
-        WHERE workspace_id = %s::uuid
-          AND canonical_name ILIKE %s
-        ORDER BY length(canonical_name) ASC
+        f"""
+        SELECT e.id::text AS id
+        FROM entities e
+        WHERE e.workspace_id = %s::uuid
+          AND e.canonical_name ILIKE %s
+        {filt_sql}
+        ORDER BY length(e.canonical_name) ASC
         LIMIT 1
         """,
-        (workspace_id, f"%{canonical_name}%"),
+        (workspace_id, f"%{canonical_name}%", *filt_params),
     ).fetchone()
     if row:
         return str(row[0])
     return None
+
+
+def _entity_ids_in_scope(
+    conn: psycopg.Connection,
+    database_url: str,
+    workspace_id: str,
+    entity_ids: set[str],
+    *,
+    agent_id: str | None = None,
+    document_id: str | None = None,
+) -> set[str]:
+    if not entity_ids:
+        return set()
+    from app.graph_repo import memory_space_entity_filter_sql
+
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        document_id=document_id,
+    )
+    if not filt_sql:
+        return set(entity_ids)
+    rows = conn.execute(
+        f"""
+        SELECT e.id::text AS id
+        FROM entities e
+        WHERE e.workspace_id = %s::uuid
+          AND e.id = ANY(%s::uuid[])
+        {filt_sql}
+        """,
+        (workspace_id, list(entity_ids), *filt_params),
+    ).fetchall()
+    return {str(r["id"]) for r in rows}
 
 
 def _entity_name(conn: psycopg.Connection, entity_id: str) -> str:
@@ -121,12 +168,15 @@ def _neighbors(
 
 def _bfs_paths(
     conn: psycopg.Connection,
+    database_url: str,
     workspace_id: str,
     start_id: str,
     end_id: str,
     *,
     max_depth: int = 3,
     max_paths: int = 5,
+    agent_id: str | None = None,
+    document_id: str | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Return up to ``max_paths`` paths (each a list of edges) from
     ``start_id`` to ``end_id`` of length ≤ ``max_depth``."""
@@ -151,6 +201,17 @@ def _bfs_paths(
 
         for edge in edges:
             nxt = edge["other_id"]
+            if nxt != end_id:
+                allowed = _entity_ids_in_scope(
+                    conn,
+                    database_url,
+                    workspace_id,
+                    {nxt},
+                    agent_id=agent_id,
+                    document_id=document_id,
+                )
+                if nxt not in allowed:
+                    continue
             if nxt == end_id:
                 paths.append(path + [edge])
                 if len(paths) >= max_paths:
@@ -197,6 +258,9 @@ def answer(
     intent: IntentClassification,
     max_depth: int = 3,
     max_paths: int = 5,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ChatDocument]]:
     """Return ``(retrieved_items, documents)`` for the multi-hop path
     answer. Empty if fewer than two endpoints can be resolved or if no
@@ -213,30 +277,49 @@ def answer(
         # iteration could enumerate all pairwise paths.
         a_name = names[0]
         b_name = names[1]
-        a_id = _resolve_entity_id(conn, workspace_id, a_name)
-        b_id = _resolve_entity_id(conn, workspace_id, b_name)
+        a_id = _resolve_entity_id(
+            conn,
+            database_url,
+            workspace_id,
+            a_name,
+            agent_id=agent_id,
+            collection_id=collection_id,
+            document_id=document_id,
+        )
+        b_id = _resolve_entity_id(
+            conn,
+            database_url,
+            workspace_id,
+            b_name,
+            agent_id=agent_id,
+            collection_id=collection_id,
+            document_id=document_id,
+        )
         if not a_id or not b_id or a_id == b_id:
             return [], []
 
         paths = _bfs_paths(
             conn,
+            database_url,
             workspace_id,
             a_id,
             b_id,
             max_depth=max_depth,
             max_paths=max_paths,
+            agent_id=agent_id,
+            document_id=document_id,
         )
         if not paths:
-            # Try the reverse direction too — some relationships are
-            # directed, and BFS from the other endpoint may reach a
-            # path the first direction missed.
             paths = _bfs_paths(
                 conn,
+                database_url,
                 workspace_id,
                 b_id,
                 a_id,
                 max_depth=max_depth,
                 max_paths=max_paths,
+                agent_id=agent_id,
+                document_id=document_id,
             )
             if not paths:
                 return [], []

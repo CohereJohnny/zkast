@@ -70,6 +70,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       FALKORDB_HOST: falkordb
       FALKORDB_PORT: "6379"
+      GRAPHRAG_STORAGE_DIR: /var/zkast/graphrag
     ports:
       # Host access when Next.js runs via `pnpm dev` (PIPELINE_INTERNAL_URL=http://127.0.0.1:8000).
       - "8000:8000"
@@ -77,6 +78,7 @@ services:
       - "8000"
     volumes:
       - pipeline_storage:/var/zkast/storage
+      - graphrag_storage:/var/zkast/graphrag
     depends_on:
       postgres:
         condition: service_healthy

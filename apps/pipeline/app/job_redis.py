@@ -11,6 +11,7 @@ Sprint 5b adds:
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,6 +27,59 @@ JOB_STREAM_MAXLEN = 1000
 # Job hashes and streams should not linger forever. They survive long enough
 # to be useful for post-mortem; permanent history lives in ingestion_run_logs.
 JOB_HASH_TTL_SECONDS = 7 * 24 * 3600
+
+# Info logs matching these are mirrored to the activity theater as ``thought`` cards.
+_THEATER_LOG_BLOCK = re.compile(
+    r"worker started|^\s*\d+\s*%|Progress\s+\d|queued_",
+    re.IGNORECASE,
+)
+_THEATER_LOG_EPISODE = re.compile(
+    r"^episode\s+(\d+)\/(\d+):\s+\+(\d+)\s+entities,\s+\+(\d+)\s+edges",
+    re.IGNORECASE,
+)
+
+
+def narrative_log_for_theater(message: str) -> str | None:
+    """Return a theater-friendly label for a pipeline log line, or None to skip."""
+    text = (message or "").strip()
+    if len(text) < 6 or _THEATER_LOG_BLOCK.search(text):
+        return None
+    ep = _THEATER_LOG_EPISODE.match(text)
+    if ep:
+        idx, total, ents, edges = ep.groups()
+        return f"Episode {idx}/{total} — mapped {ents} entities and {edges} edges"
+    lower = text.lower()
+    markers = (
+        "parsed",
+        "parsing",
+        "synthesi",
+        "extract",
+        "created",
+        "graph",
+        "episode",
+        "transcript",
+        "chunk",
+        "note",
+        "entity",
+        "relationship",
+        "export",
+        "index",
+        "corpus",
+        "community",
+        "reading",
+        "draft",
+        "opening",
+        "examining",
+        "spotted",
+        "wired",
+        "outlined",
+        "saved",
+        "llm",
+        "north",
+    )
+    if any(m in lower for m in markers):
+        return text
+    return None
 
 
 def job_hash_key(job_id: str) -> str:
@@ -71,6 +125,31 @@ def job_stream_key(job_id: str) -> str:
     return f"{JOB_CHANNEL_PREFIX}{job_id}{JOB_STREAM_SUFFIX}"
 
 
+# arq ``in-progress`` suffixes: ``{job_id}:{function}`` for pipeline stages, or
+# the full job id for GraphRAG/chat (``graphrag:{uuid}`` has colons — never
+# ``rsplit(":", 1)`` those entries).
+_ARQ_KNOWN_FUNCTION_SUFFIXES = (
+    ":run_graphrag_index_job",
+    ":generate_atomic_notes",
+    ":extract_graph",
+    ":parse_document",
+    ":slack_import",
+    ":parse",
+    ":notes",
+    ":graph",
+)
+
+
+def parse_arq_in_progress_suffix(entry: str) -> tuple[str, str | None]:
+    """Parse an ``arq:in-progress:`` suffix into ``(job_id, function | None)``."""
+    if not entry or entry.startswith("cron:"):
+        return entry, None
+    for suffix in _ARQ_KNOWN_FUNCTION_SUFFIXES:
+        if entry.endswith(suffix):
+            return entry[: -len(suffix)], suffix[1:]
+    return entry, None
+
+
 def _flatten_mapping(fields: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, val in fields.items():
@@ -113,6 +192,29 @@ async def job_hset(redis: Any, job_id: str, **fields: Any) -> None:
 async def job_hgetall(redis: Any, job_id: str) -> dict[str, str]:
     raw = await redis.hgetall(job_hash_key(job_id))
     return dict(raw)
+
+
+async def emit_activity(
+    redis: Any,
+    *,
+    job_id: str,
+    stage: str,
+    label: str,
+    detail: str | None = None,
+    kind: str = "thought",
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Narrative telemetry for the pipeline activity theater (not the log view)."""
+    await publish_job_event(
+        redis,
+        job_id,
+        "activity",
+        stage=stage,
+        kind=kind,
+        label=label,
+        detail=detail,
+        data=data or {},
+    )
 
 
 async def publish_job_event(redis: Any, job_id: str, event_type: str, **data: Any) -> None:
@@ -177,6 +279,16 @@ async def record_log(
         await redis.expire(job_stream_key(job_id), JOB_HASH_TTL_SECONDS, nx=True)
     except Exception:  # noqa: BLE001
         pass
+    theater_label = narrative_log_for_theater(message) if level == "info" else None
+    if theater_label:
+        await emit_activity(
+            redis,
+            job_id=job_id,
+            stage=stage,
+            label=theater_label,
+            kind="thought",
+            data=data or {},
+        )
     if database_url and ingestion_run_id:
         # Persist for post-mortem and the Diagnostics page. Imported lazily so
         # the job_redis module stays import-cheap.
@@ -258,6 +370,7 @@ ARQ_FUNCTION_LABELS: dict[str, str] = {
     "parse": "Parsing",
     "notes": "Generating notes",
     "graph": "Extracting graph",
+    "run_graphrag_index_job": "GraphRAG indexing",
 }
 
 STAGE_LABELS: dict[str, str] = {
@@ -270,6 +383,7 @@ STAGE_LABELS: dict[str, str] = {
     "ready": "Ready",
     "wiki_generation": "Wiki generation",
     "dreaming": "Dreaming",
+    "graphrag_indexing": "GraphRAG indexing",
 }
 
 
@@ -277,11 +391,11 @@ def _parse_arq_in_progress(entries: list[str]) -> dict[str, str]:
     """Map pipeline job_id → arq function suffix (``parse`` / ``notes`` / ``graph``)."""
     out: dict[str, str] = {}
     for entry in entries:
-        if ":" not in entry:
-            continue
-        job_id, func = entry.rsplit(":", 1)
+        job_id, func = parse_arq_in_progress_suffix(entry)
         if job_id and func:
             out[job_id] = func
+        elif job_id:
+            out[job_id] = ""
     return out
 
 
@@ -306,10 +420,12 @@ def enrich_pipeline_jobs(
     doc_ids = list({str(j["document_id"]) for j in jobs if j.get("document_id")})
     run_ids = list({str(j["ingestion_run_id"]) for j in jobs if j.get("ingestion_run_id")})
     wiki_ids = list({str(j["wiki_space_id"]) for j in jobs if j.get("wiki_space_id")})
+    agent_ids = list({str(j["agent_id"]) for j in jobs if j.get("agent_id")})
 
     docs: dict[str, dict[str, Any]] = {}
     runs: dict[str, dict[str, Any]] = {}
     wikis: dict[str, dict[str, Any]] = {}
+    agents: dict[str, dict[str, Any]] = {}
 
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         if doc_ids:
@@ -342,6 +458,16 @@ def enrich_pipeline_jobs(
                 (wiki_ids,),
             ).fetchall()
             wikis = {str(r["id"]): dict(r) for r in rows}
+        if agent_ids:
+            rows = conn.execute(
+                """
+                SELECT id::text AS id, display_name, external_agent_id, provider
+                FROM north_agents
+                WHERE id = ANY(%s::uuid[])
+                """,
+                (agent_ids,),
+            ).fetchall()
+            agents = {str(r["id"]): dict(r) for r in rows}
 
     enriched: list[dict[str, Any]] = []
     for job in jobs:
@@ -350,6 +476,7 @@ def enrich_pipeline_jobs(
         doc = docs.get(str(row.get("document_id") or ""))
         run = runs.get(str(row.get("ingestion_run_id") or ""))
         wiki = wikis.get(str(row.get("wiki_space_id") or ""))
+        agent = agents.get(str(row.get("agent_id") or ""))
 
         progress = row.get("progress")
         stage = ""
@@ -377,6 +504,7 @@ def enrich_pipeline_jobs(
                 "parse": "parsing",
                 "notes": "generating_notes",
                 "graph": "building_graph",
+                "run_graphrag_index_job": "graphrag_indexing",
             }.get(arq_func, stage)
         row["stage"] = stage
         row["percent"] = percent
@@ -392,6 +520,7 @@ def enrich_pipeline_jobs(
                 "parse": 10,
                 "notes": 35,
                 "graph": 55,
+                "run_graphrag_index_job": 50,
             }.get(arq_func or "", 50)
 
         if doc:
@@ -410,6 +539,19 @@ def enrich_pipeline_jobs(
             title = str(doc["original_filename"])
         elif wiki and wiki.get("name"):
             title = f"Wiki: {wiki['name']}"
+        elif row.get("title"):
+            title = str(row["title"])
+        elif str(row.get("kind") or "") == "graphrag_index":
+            if agent:
+                name = (
+                    agent.get("display_name") or agent.get("external_agent_id") or row.get("agent_id")
+                )
+                if agent.get("provider") == "slack":
+                    title = f"GraphRAG: #{name}"
+                else:
+                    title = f"GraphRAG: {name}"
+            else:
+                title = "GraphRAG: whole workspace"
         else:
             title = str(row.get("kind") or "Pipeline job").replace("_", " ")
 

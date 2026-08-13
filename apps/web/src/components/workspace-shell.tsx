@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { ActiveJobsReconciler } from "@/components/active-jobs-reconciler";
 import { ChatDrawerSlot } from "@/components/chat-drawer-slot";
 import { LeftRail } from "@/components/left-rail";
 import { WorkspaceMainGrid } from "@/components/workspace-main-grid";
@@ -16,6 +17,7 @@ export async function WorkspaceShell({
 }) {
   return (
     <JobEventsProvider>
+      <ActiveJobsReconciler workspaceId={workspaceId} />
       <div className="min-h-screen bg-background">
         <LeftRail workspaceName={workspaceName} />
         <div className="pl-[calc(13rem+2rem)] pr-14 pt-4 pb-4">

@@ -2,38 +2,28 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  ChatScopePicker,
+  type ChatScopeValue,
+} from "@/components/chat-scope-picker";
 import { useToast } from "@/components/feedback-provider";
 import {
   RETRIEVAL_MODE_LABELS,
+  type RetrievalMode,
 } from "@/components/chat-panel";
 import {
   useChatStream,
   type CitationSource,
 } from "@/lib/chat-stream";
-
-/**
- * Sprint 6b — side-by-side comparison of retrieval strategies.
- *
- * The user types a question once; we POST it to three brand-new chat
- * sessions in parallel (one per retrieval mode) and render their
- * streaming answers in three columns. Each column shows the mode
- * label, the streaming answer, citation count, latency, and refusal
- * state so the user can directly contrast how Naive RAG, GraphRAG,
- * and Hybrid handle the same query.
- *
- * Architecture note: each column owns its own ephemeral session +
- * useChatStream subscription. State is local to this component so the
- * regular ChatPanel is unaffected.
- */
+import { cn } from "@/lib/utils";
 
 const MAX_INPUT_LEN = 4_000;
 
-type CompareMode = "rag" | "graph" | "hybrid";
-
-const COMPARE_MODES: CompareMode[] = ["rag", "graph", "hybrid"];
+const DEFAULT_COMPARE_MODES: RetrievalMode[] = ["rag", "graph", "hybrid"];
+export const HARNESS_COMPARE_MODES: RetrievalMode[] = ["graph", "ms_graphrag"];
 
 type ColumnState = {
-  mode: CompareMode;
+  mode: RetrievalMode;
   sessionId: string | null;
   assistantMessageId: string | null;
   turnId: string | null;
@@ -52,7 +42,7 @@ type ColumnState = {
   errorMessage: string | null;
 };
 
-function initialColumn(mode: CompareMode): ColumnState {
+function initialColumn(mode: RetrievalMode): ColumnState {
   return {
     mode,
     sessionId: null,
@@ -69,18 +59,72 @@ function initialColumn(mode: CompareMode): ColumnState {
   };
 }
 
-export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
+function columnsFromModes(modes: RetrievalMode[]): Record<string, ColumnState> {
+  return Object.fromEntries(modes.map((m) => [m, initialColumn(m)]));
+}
+
+export function ChatComparePanel({
+  workspaceId,
+  modes = DEFAULT_COMPARE_MODES,
+  initialAgentId,
+  title = "Compare retrieval strategies",
+  description = "Submit one question and see how Naive RAG, GraphRAG, and Hybrid answer side by side. Each card streams its own answer; the retrieval mode is locked per column.",
+}: {
+  workspaceId: string;
+  modes?: RetrievalMode[];
+  initialAgentId?: string | null;
+  title?: string;
+  description?: string;
+}) {
   const toast = useToast();
+  const compareModes = modes;
   const [question, setQuestion] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [columns, setColumns] = useState<Record<CompareMode, ColumnState>>({
-    rag: initialColumn("rag"),
-    graph: initialColumn("graph"),
-    hybrid: initialColumn("hybrid"),
-  });
+  const [scopeOpen, setScopeOpen] = useState(Boolean(initialAgentId));
+  const [scope, setScope] = useState<ChatScopeValue>(() =>
+    initialAgentId ? { agent_id: initialAgentId } : {},
+  );
+  const [agentName, setAgentName] = useState<string | null>(null);
+  const [columns, setColumns] = useState<Record<string, ColumnState>>(() =>
+    columnsFromModes(compareModes),
+  );
+
+  useEffect(() => {
+    setColumns(columnsFromModes(compareModes));
+  }, [compareModes]);
+
+  useEffect(() => {
+    const aid = scope.agent_id;
+    if (!aid) {
+      setAgentName(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${workspaceId}/north/agents`,
+          { cache: "no-store" },
+        );
+        const body = (await res.json()) as {
+          items?: { id: string; display_name: string; external_agent_id: string }[];
+        };
+        if (cancelled) return;
+        const hit = (body.items ?? []).find((a) => a.id === aid);
+        setAgentName(
+          hit ? hit.display_name || hit.external_agent_id : `${aid.slice(0, 8)}…`,
+        );
+      } catch {
+        if (!cancelled) setAgentName(`${aid.slice(0, 8)}…`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [scope.agent_id, workspaceId]);
 
   const updateColumn = useCallback(
-    (mode: CompareMode, delta: Partial<ColumnState>) => {
+    (mode: RetrievalMode, delta: Partial<ColumnState>) => {
       setColumns((prev) => ({
         ...prev,
         [mode]: { ...prev[mode], ...delta },
@@ -90,15 +134,11 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
   );
 
   const reset = useCallback(() => {
-    setColumns({
-      rag: initialColumn("rag"),
-      graph: initialColumn("graph"),
-      hybrid: initialColumn("hybrid"),
-    });
-  }, []);
+    setColumns(columnsFromModes(compareModes));
+  }, [compareModes]);
 
   const launchOne = useCallback(
-    async (mode: CompareMode, q: string): Promise<void> => {
+    async (mode: RetrievalMode, q: string): Promise<void> => {
       updateColumn(mode, { status: "starting", startedAt: Date.now() });
       try {
         const sessRes = await fetch(
@@ -108,6 +148,7 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               title: `Compare ${RETRIEVAL_MODE_LABELS[mode].label}`,
+              scope,
               model_settings: { retrieval_mode: mode },
               seed_message: q,
             }),
@@ -144,7 +185,7 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
         });
       }
     },
-    [workspaceId, updateColumn],
+    [workspaceId, updateColumn, scope],
   );
 
   const submit = useCallback(async () => {
@@ -152,29 +193,80 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
     if (!q || submitting) return;
     setSubmitting(true);
     reset();
-    await Promise.all(COMPARE_MODES.map((m) => launchOne(m, q)));
+    await Promise.all(compareModes.map((m) => launchOne(m, q)));
     setSubmitting(false);
-  }, [question, submitting, launchOne, reset]);
+  }, [question, submitting, launchOne, reset, compareModes]);
+
+  const gridCols =
+    compareModes.length <= 2 ? "lg:grid-cols-2" : "lg:grid-cols-3";
 
   return (
     <section
-      aria-label="Compare retrieval strategies"
-      // No ``max-w`` cap here: the side rails on the workspace shell
-      // (Documents, Graph) are collapsible, and the Compare view should
-      // reclaim that horizontal real-estate when either rail is folded
-      // so the three answer columns aren't squeezed.
+      aria-label={title}
       className="flex w-full flex-col gap-3"
     >
-      <header className="flex flex-col gap-1 border-b border-border pb-2">
-        <h2 className="text-p font-medium text-foreground">
-          Compare retrieval strategies
-        </h2>
-        <p className="text-caption text-muted-foreground">
-          Submit one question and see how Naive RAG, GraphRAG, and Hybrid
-          answer side by side. Each card streams its own answer; the
-          retrieval mode is locked per column.
-        </p>
+      <header className="flex flex-col gap-2 border-b border-border pb-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex flex-col gap-1">
+            <h2 className="text-p font-medium text-foreground">{title}</h2>
+            <p className="text-caption text-muted-foreground">{description}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setScopeOpen((o) => !o)}
+            aria-expanded={scopeOpen}
+            disabled={submitting}
+            className="shrink-0 cursor-pointer rounded border border-input px-2 py-1 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {scopeOpen ? "Hide scope" : "Scope"}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-caption">
+          <span
+            className={
+              scope.agent_id
+                ? "inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-foreground"
+                : "inline-flex items-center gap-1 rounded-full border border-border bg-card/40 px-2 py-0.5 text-muted-foreground"
+            }
+            title={
+              scope.agent_id
+                ? "Retrieval is restricted to this memory space's documents and notes."
+                : "Retrieval can use any document or note in this workspace."
+            }
+          >
+            <span aria-hidden="true">{scope.agent_id ? "●" : "○"}</span>
+            {scope.agent_id ? (
+              <>Memory space: {agentName ?? `${scope.agent_id.slice(0, 8)}…`}</>
+            ) : scope.document_ids?.[0] ? (
+              <>Document scope</>
+            ) : (
+              <>Workspace-wide</>
+            )}
+          </span>
+          {scope.agent_id && !submitting ? (
+            <button
+              type="button"
+              onClick={() => setScope((s) => ({ ...s, agent_id: undefined }))}
+              className="rounded border border-border px-2 py-0.5 text-muted-foreground hover:bg-card hover:text-foreground"
+            >
+              Clear memory space
+            </button>
+          ) : null}
+        </div>
       </header>
+
+      {scopeOpen ? (
+        <div className="rounded-md border border-border bg-card/40 p-3">
+          <ChatScopePicker
+            workspaceId={workspaceId}
+            value={scope}
+            onChange={setScope}
+          />
+          <p className="mt-2 text-caption text-muted-foreground">
+            Scope applies to every strategy column when you click Compare.
+          </p>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-2 rounded-md border border-border bg-card/40 p-3">
         <label
@@ -228,12 +320,12 @@ export function ChatComparePanel({ workspaceId }: { workspaceId: string }) {
         </div>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-3">
-        {COMPARE_MODES.map((mode) => (
+      <div className={cn("grid gap-3", gridCols)}>
+        {compareModes.map((mode) => (
           <CompareColumn
             key={mode}
             workspaceId={workspaceId}
-            column={columns[mode]}
+            column={columns[mode] ?? initialColumn(mode)}
             onState={updateColumn}
           />
         ))}
@@ -249,7 +341,7 @@ function CompareColumn({
 }: {
   workspaceId: string;
   column: ColumnState;
-  onState: (mode: CompareMode, delta: Partial<ColumnState>) => void;
+  onState: (mode: RetrievalMode, delta: Partial<ColumnState>) => void;
 }) {
   const meta = RETRIEVAL_MODE_LABELS[column.mode];
   const startedAtRef = useRef<number | null>(column.startedAt);
@@ -299,7 +391,6 @@ function CompareColumn({
         : null;
 
   const [tick, setTick] = useState(0);
-  // Update once a second while streaming so the latency counter ticks.
   useEffect(() => {
     if (column.status !== "streaming") return;
     const id = window.setInterval(() => setTick((n) => n + 1), 500);

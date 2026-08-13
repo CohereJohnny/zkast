@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/feedback-provider";
 import { type ActiveJobKind, useActiveJobs, useJobEvents } from "@/lib/job-events";
 import { readApiErrorMessage } from "@/lib/api-error-message";
+import { arqEntryJobId } from "@/lib/arq-job-id";
 import { cn } from "@/lib/utils";
 
 type PipelineJob = {
@@ -82,7 +83,8 @@ function pipelineKind(kind: string | undefined): ActiveJobKind | null {
     kind === "document_parse" ||
     kind === "generate_atomic_notes" ||
     kind === "extract_graph" ||
-    kind === "dreaming"
+    kind === "dreaming" ||
+    kind === "graphrag_index"
   ) {
     return kind;
   }
@@ -290,9 +292,8 @@ export function JobsPageClient({ workspaceId }: { workspaceId: string }) {
   const arqUnlinked = useMemo(() => {
     const linked = new Set(activeJobs.map((j) => j.job_id));
     return (arq?.in_progress ?? []).filter((entry) => {
-      const colon = entry.lastIndexOf(":");
-      const id = colon >= 0 ? entry.slice(0, colon) : entry;
-      return id && !linked.has(id);
+      const id = arqEntryJobId(entry);
+      return id && !id.startsWith("cron:") && !linked.has(id);
     });
   }, [arq?.in_progress, activeJobs]);
 
@@ -364,16 +365,47 @@ export function JobsPageClient({ workspaceId }: { workspaceId: string }) {
                 onWatch={() => watchJob(j)}
               />
             ))}
-            {arqUnlinked.map((entry) => (
-              <li
-                key={entry}
-                className="border-t border-border-subtle bg-caution/5 px-3 py-3 text-caption"
-              >
-                <p className="font-medium text-foreground">Worker task (syncing…)</p>
-                <p className="mt-1 font-mono text-muted-foreground">{entry}</p>
-                <p className="mt-1 text-muted-foreground">Refresh in a few seconds for progress.</p>
-              </li>
-            ))}
+            {arqUnlinked.map((entry) => {
+              const jobId = arqEntryJobId(entry);
+              const isGraphrag = jobId.startsWith("graphrag:");
+              return (
+                <li
+                  key={entry}
+                  className="border-t border-border-subtle bg-caution/5 px-3 py-3 text-caption"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium text-foreground">
+                      {isGraphrag ? "GraphRAG index build" : "Worker task (syncing…)"}
+                    </p>
+                    <button
+                      type="button"
+                      className="ml-auto rounded border border-caution/50 px-2 py-1 text-foreground hover:bg-secondary"
+                      onClick={() => {
+                        registerActiveJob(
+                          jobId,
+                          workspaceId,
+                          null,
+                          isGraphrag ? "graphrag_index" : null,
+                        );
+                        toast({
+                          variant: "success",
+                          message: "Subscribed to job log",
+                          description: jobId.slice(0, 24),
+                        });
+                      }}
+                    >
+                      Watch log
+                    </button>
+                  </div>
+                  <p className="mt-1 font-mono text-muted-foreground">{entry}</p>
+                  {!isGraphrag ? (
+                    <p className="mt-1 text-muted-foreground">
+                      Refresh in a few seconds for progress.
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

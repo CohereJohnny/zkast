@@ -60,13 +60,29 @@ def _default_exclude_roles() -> set[str]:
     return {"system"}
 
 
+def resolve_role_filters(import_settings: dict[str, Any] | None) -> tuple[set[str], set[str]]:
+    """Return ``(include, exclude)`` role sets after ``user_messages_only`` sugar."""
+    settings = import_settings or {}
+    if settings.get("user_messages_only"):
+        return {"user"}, {"system", "assistant", "tool"}
+    include = {str(x).lower() for x in (settings.get("include_roles") or _default_include_roles())}
+    exclude = {str(x).lower() for x in (settings.get("exclude_roles") or _default_exclude_roles())}
+    return include, exclude
+
+
+def validate_import_settings(import_settings: dict[str, Any] | None) -> None:
+    """Raise ``ValueError`` when filters would exclude every role."""
+    include, _ = resolve_role_filters(import_settings)
+    if not include:
+        raise ValueError("include_roles must be non-empty")
+
+
 def filter_messages(
     messages: list[dict[str, Any]],
     import_settings: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     settings = import_settings or {}
-    include = {str(x).lower() for x in (settings.get("include_roles") or _default_include_roles())}
-    exclude = {str(x).lower() for x in (settings.get("exclude_roles") or _default_exclude_roles())}
+    include, exclude = resolve_role_filters(import_settings)
     reasoning = bool(settings.get("include_reasoning_traces"))
     out: list[dict[str, Any]] = []
     for msg in messages:
@@ -312,6 +328,7 @@ def north_conversation_preview_payload(
     *,
     max_messages: int = 50,
     max_excerpt_chars: int = 600,
+    import_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Structured preview for agent UI (role + excerpt per message, capped)."""
     if isinstance(raw, dict):
@@ -321,7 +338,7 @@ def north_conversation_preview_payload(
     else:
         root = {"messages": []}
     title = str(root.get("title") or root.get("name") or "").strip()
-    messages = _normalize_messages(root)
+    messages = filter_messages(_normalize_messages(root), import_settings)
     items: list[dict[str, str]] = []
     for msg in messages[:max_messages]:
         role = _message_role(msg)

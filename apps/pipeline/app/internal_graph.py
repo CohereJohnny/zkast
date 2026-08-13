@@ -34,6 +34,7 @@ from app.filter_options_repo import (
     search_entities_typeahead,
 )
 from app.graph_repo import get_entity_detail, list_graph
+from app.graphrag_graph_repo import list_graphrag_graph
 from app.graphiti_factory import graphiti_for_workspace
 from app.snapshots_repo import (
     SnapshotError,
@@ -132,6 +133,9 @@ async def internal_cleanup_orphan_graph_rows(
 async def internal_get_graph(
     workspace_id: uuid.UUID,
     request: Request,
+    backend: Annotated[Literal["graphiti", "graphrag"], Query()] = "graphiti",
+    graphrag_index_id: Annotated[uuid.UUID | None, Query()] = None,
+    community_id: Annotated[int | None, Query()] = None,
     view: Annotated[str, Query()] = "overview",
     seed_entity_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
     depth: Annotated[int, Query(ge=0, le=10)] = 2,
@@ -139,6 +143,7 @@ async def internal_get_graph(
     edge_type: Annotated[list[str] | None, Query()] = None,
     document_id: Annotated[uuid.UUID | None, Query()] = None,
     agent_id: Annotated[uuid.UUID | None, Query()] = None,
+    collection_id: Annotated[uuid.UUID | None, Query()] = None,
     tag: Annotated[str | None, Query()] = None,
     valid_at: Annotated[str | None, Query()] = None,
     node_limit: Annotated[int, Query(ge=1, le=25000)] = 5000,
@@ -148,20 +153,43 @@ async def internal_get_graph(
     seeds = [str(x) for x in (seed_entity_ids or [])]
     va = _parse_valid_at(valid_at)
     try:
-        data = list_graph(
-            settings.database_url,
-            workspace_id=ws,
-            view=view,
-            seed_entity_ids=seeds or None,
-            depth=depth,
-            entity_types=entity_type,
-            edge_types=edge_type,
-            document_id=str(document_id) if document_id else None,
-            tag=tag,
-            agent_id=str(agent_id) if agent_id else None,
-            valid_at=va,
-            node_limit=node_limit,
-        )
+        if backend == "graphrag":
+            data = await asyncio.to_thread(
+                list_graphrag_graph,
+                settings.database_url,
+                workspace_id=ws,
+                graphrag_index_id=str(graphrag_index_id) if graphrag_index_id else None,
+                agent_id=str(agent_id) if agent_id else None,
+                collection_id=str(collection_id) if collection_id else None,
+                community_id=community_id,
+                node_limit=node_limit,
+            )
+        else:
+            data = list_graph(
+                settings.database_url,
+                workspace_id=ws,
+                view=view,
+                seed_entity_ids=seeds or None,
+                depth=depth,
+                entity_types=entity_type,
+                edge_types=edge_type,
+                document_id=str(document_id) if document_id else None,
+                tag=tag,
+                agent_id=str(agent_id) if agent_id else None,
+                collection_id=str(collection_id) if collection_id else None,
+                valid_at=va,
+                node_limit=node_limit,
+            )
+    except LookupError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "not_found", "message": str(e)}},
+        ) from e
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "artifacts_missing", "message": str(e)}},
+        ) from e
     except Exception as e:
         logger.exception("graph_list_failed", error=str(e))
         raise HTTPException(
@@ -180,13 +208,21 @@ async def internal_get_entity(
     neighbor_limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> JSONResponse:
     settings: Settings = request.app.state.settings
-    detail = get_entity_detail(
-        settings.database_url,
-        workspace_id=str(workspace_id),
-        entity_id=str(entity_id),
-        neighbor_depth=neighbor_depth,
-        neighbor_limit=neighbor_limit,
-    )
+    try:
+        detail = await asyncio.to_thread(
+            get_entity_detail,
+            settings.database_url,
+            workspace_id=str(workspace_id),
+            entity_id=str(entity_id),
+            neighbor_depth=neighbor_depth,
+            neighbor_limit=neighbor_limit,
+        )
+    except Exception as e:
+        logger.exception("entity_detail_failed", entity_id=str(entity_id), error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"code": "internal_error", "message": "Failed to load entity"}},
+        ) from e
     if not detail:
         raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Entity not found"}})
     return JSONResponse(content={"entity": detail})

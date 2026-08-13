@@ -22,7 +22,9 @@ from app.job_redis import (
     enrich_pipeline_jobs,
     job_hgetall,
     list_workspace_jobs,
+    parse_arq_in_progress_suffix,
 )
+from app.graphrag_reconcile import reconcile_stale_graphrag_indexes
 
 
 async def _merge_arq_in_progress_jobs(
@@ -36,10 +38,8 @@ async def _merge_arq_in_progress_jobs(
     known = {str(j.get("job_id") or "") for j in jobs}
     merged = list(jobs)
     for entry in arq_in_progress:
-        if ":" not in entry:
-            continue
-        job_id, _func = entry.rsplit(":", 1)
-        if not job_id or job_id in known:
+        job_id, _func = parse_arq_in_progress_suffix(entry)
+        if not job_id or job_id.startswith("cron:") or job_id in known:
             continue
         raw = await job_hgetall(redis, job_id)
         if not raw or raw.get("workspace_id") != workspace_id:
@@ -120,6 +120,14 @@ async def get_workspace_jobs_overview(
 async def get_internal_job(job_id: str, request: Request) -> dict[str, Any]:
     ws = _workspace_header(request)
     redis = request.app.state.redis_async
+    settings: Settings = request.app.state.settings
+    if job_id.startswith("graphrag:"):
+        arq = await arq_queue_snapshot(redis)
+        await reconcile_stale_graphrag_indexes(
+            redis,
+            settings.database_url,
+            arq_in_progress=arq.get("in_progress") or [],
+        )
     raw = await job_hgetall(redis, job_id)
     if not raw:
         raise HTTPException(

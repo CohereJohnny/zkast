@@ -3,6 +3,8 @@
 import "@react-sigma/core/lib/style.css";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import EdgeCurveProgram from "@sigma/edge-curve";
+import { NodeBorderProgram } from "@sigma/node-border";
 import {
   SigmaContainer,
   useLoadGraph,
@@ -13,6 +15,23 @@ import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import louvain from "graphology-communities-louvain";
 
+import { LiveGraphPatcher } from "@/components/graph-live-patcher";
+import { readApiErrorMessage } from "@/lib/api-error-message";
+import { fetchTimeoutMessage, fetchWithTimeout, readJsonResponse } from "@/lib/fetch-with-timeout";
+import {
+  applyCurvedEdgeRendering,
+  colorForType,
+  communityColor,
+  EDGE_DEFAULT_SIZE,
+  GRAPH_CANVAS_BG,
+  GRAPH_CANVAS_BG_SIZE,
+  NODE_BORDER_COLOR,
+  NODE_BORDER_SIZE,
+  nodeSizeForDegree,
+  edgeColorForDensity,
+} from "@/lib/graph-visual-style";
+import { cn } from "@/lib/utils";
+
 export type GraphNode = {
   id: string;
   type: string;
@@ -21,6 +40,8 @@ export type GraphNode = {
   properties: Record<string, unknown>;
   aliases: string[];
   is_user_edited: boolean;
+  /** MS GraphRAG native community id (when backend=graphrag). */
+  community?: number;
 };
 
 export type GraphEdge = {
@@ -42,65 +63,8 @@ export type GraphPayload = {
   truncated: boolean;
 };
 
-// Vibrant, dark-mode-friendly palette. Each type gets a distinct hue so a
-// large graph reads at a glance instead of as a green mush. Tailwind 400/500
-// stops were chosen for ~70% saturation and ~4.5:1 contrast on the canvas
-// background.
-const TYPE_COLORS: Record<string, string> = {
-  Person: "#fbbf24", // amber-400
-  Organization: "#38bdf8", // sky-400
-  Concept: "#34d399", // emerald-400
-  Location: "#a78bfa", // violet-400
-  Work: "#f472b6", // pink-400
-  Event: "#22d3ee", // cyan-400
-  Document: "#fb7185", // rose-400
-  Equipment: "#fb923c", // orange-400
-  Process: "#84cc16", // lime-500
-  Standard: "#e879f9", // fuchsia-400
-  Material: "#60a5fa", // blue-400
-  Component: "#818cf8", // indigo-400
-};
-
-// 12 visually distinct hues used for community-based coloring AND for
-// fallback type coloring. Picked from Tailwind 400/500 with care that no
-// two adjacent colors are too close in hue for colorblind users.
-const COMMUNITY_PALETTE = [
-  "#38bdf8", // sky-400
-  "#fbbf24", // amber-400
-  "#a78bfa", // violet-400
-  "#34d399", // emerald-400
-  "#f472b6", // pink-400
-  "#fb923c", // orange-400
-  "#22d3ee", // cyan-400
-  "#e879f9", // fuchsia-400
-  "#84cc16", // lime-500
-  "#fb7185", // rose-400
-  "#60a5fa", // blue-400
-  "#818cf8", // indigo-400
-];
-
-function communityColor(idx: number): string {
-  return COMMUNITY_PALETTE[idx % COMMUNITY_PALETTE.length];
-}
-
-function colorForType(t: string): string {
-  if (TYPE_COLORS[t]) return TYPE_COLORS[t];
-  let h = 0;
-  for (let i = 0; i < t.length; i += 1) {
-    h = (h * 31 + t.charCodeAt(i)) | 0;
-  }
-  return COMMUNITY_PALETTE[Math.abs(h) % COMMUNITY_PALETTE.length];
-}
-
-// Degree-based sizing so high-connectivity hubs are visually prominent and
-// leaf nodes shrink out of the way. sqrt() compresses the long tail so a
-// degree-100 hub doesn't dwarf a degree-1 leaf by 100×. Raised the ceiling
-// vs. the first pass so hubs are clearly readable in 200+ node graphs.
-function nodeSizeForDegree(degree: number, maxDegree: number): number {
-  const base = 2.5;
-  const norm = maxDegree > 0 ? Math.sqrt(degree) / Math.sqrt(maxDegree) : 0;
-  return base + norm * 18; // range ~2.5–20 px
-}
+/** Stable empty payload for live-ingestion patching (avoids GraphLoader reset). */
+const EMPTY_LIVE_CANVAS: GraphPayload = { nodes: [], edges: [], truncated: false };
 
 type ChipFilters = {
   entity_types: string[];
@@ -157,39 +121,49 @@ function ChipFilterApplier({
 }
 
 /**
- * Wires hover emphasis: dim everything that isn't the hovered node or one
- * of its incident edges. Mirrors what MiroFish does on hover and what the
- * Graphiti reference UI does. Implemented via Sigma's node/edge reducers
- * so it's GPU-cheap.
+ * Hover emphasis + readable HTML inspector. Sigma's WebGL labels are too
+ * small for peripheral nodes; we dim the graph and show a high-contrast
+ * overlay instead of force-rendering tiny canvas text.
  */
-function HoverEmphasis() {
+function GraphInteractionLayer({
+  nodes,
+  edges,
+}: {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}) {
   const sigma = useSigma();
-  const [hovered, setHovered] = useState<string | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
+  const [inspector, setInspector] = useState<{
+    kind: "node" | "edge";
+    title: string;
+    subtitle?: string;
+    detail?: string;
+  } | null>(null);
+
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const edgeById = useMemo(() => new Map(edges.map((e) => [e.id, e])), [edges]);
 
   useEffect(() => {
-    // Pre-compute the neighbor set once per hover change so the per-node
-    // reducer is O(1) instead of O(degree) on every render frame.
     let neighborSet: Set<string> | null = null;
-    if (hovered) {
-      const g = sigma.getGraph();
-      if (g.hasNode(hovered)) {
-        neighborSet = new Set(g.neighbors(hovered));
-        neighborSet.add(hovered);
-      }
+    const g = sigma.getGraph();
+
+    if (hoveredNode && g.hasNode(hoveredNode)) {
+      neighborSet = new Set(g.neighbors(hoveredNode));
+      neighborSet.add(hoveredNode);
+    } else if (hoveredEdge && g.hasEdge(hoveredEdge)) {
+      const [source, target] = g.extremities(hoveredEdge);
+      neighborSet = new Set([source, target]);
     }
 
     sigma.setSetting("nodeReducer", (node, attrs) => {
-      if (!neighborSet) return attrs;
+      if (!neighborSet) return { ...attrs, label: attrs.labelHidden ? "" : attrs.label };
       if (neighborSet.has(node)) {
-        // Hub-only labels are blanked at base zoom; on hover, surface the
-        // full label from the ``fullLabel`` shadow attribute so the user
-        // can read peripheral nodes once they're investigated.
-        const restoredLabel = attrs.fullLabel || attrs.label;
         return {
           ...attrs,
-          label: restoredLabel,
+          label: "",
           zIndex: 2,
-          forceLabel: true,
         };
       }
       return {
@@ -201,38 +175,128 @@ function HoverEmphasis() {
     });
 
     sigma.setSetting("edgeReducer", (edge, attrs) => {
-      if (!hovered) return attrs;
-      const g = sigma.getGraph();
-      const [source, target] = g.extremities(edge);
-      const incident = source === hovered || target === hovered;
-      if (incident) {
+      if (!hoveredNode && !hoveredEdge) return attrs;
+      if (hoveredEdge && edge === hoveredEdge) {
         return {
           ...attrs,
-          color: "rgba(20, 184, 166, 0.85)", // accent teal
-          size: Math.max(attrs.size ?? 1, 1.2),
-          zIndex: 2,
+          color: "rgba(244, 114, 182, 0.95)",
+          size: Math.max(attrs.size ?? 1, 0.65),
+          zIndex: 3,
         };
+      }
+      if (hoveredNode) {
+        const [source, target] = g.extremities(edge);
+        const incident = source === hoveredNode || target === hoveredNode;
+        if (incident) {
+          return {
+            ...attrs,
+            color: "rgba(244, 114, 182, 0.92)",
+            size: Math.max(attrs.size ?? 1, 0.55),
+            zIndex: 2,
+          };
+        }
+      }
+      if (hoveredEdge) {
+        const [source, target] = g.extremities(hoveredEdge);
+        const [s, t] = g.extremities(edge);
+        const incident = s === source || s === target || t === source || t === target;
+        if (incident) {
+          return {
+            ...attrs,
+            color: "rgba(244, 114, 182, 0.75)",
+            size: Math.max(attrs.size ?? 1, 0.5),
+            zIndex: 2,
+          };
+        }
       }
       return {
         ...attrs,
         color: "rgba(148, 163, 184, 0.08)",
-        hidden: false,
         zIndex: 0,
       };
     });
 
     sigma.refresh();
-  }, [sigma, hovered]);
+  }, [sigma, hoveredNode, hoveredEdge]);
 
   const registerEvents = useRegisterEvents();
   useEffect(() => {
     registerEvents({
-      enterNode: (event: { node: string }) => setHovered(event.node),
-      leaveNode: () => setHovered(null),
+      enterNode: (event: { node: string }) => {
+        setHoveredEdge(null);
+        setHoveredNode(event.node);
+        const n = nodeById.get(event.node);
+        const g = sigma.getGraph();
+        const attrs = g.hasNode(event.node) ? g.getNodeAttributes(event.node) : null;
+        setInspector({
+          kind: "node",
+          title: n?.name ?? String(attrs?.fullLabel ?? attrs?.label ?? event.node),
+          subtitle: n?.type ?? String(attrs?.entityType ?? "Entity"),
+          detail: n?.summary?.trim() ? truncate(n.summary, 160) : undefined,
+        });
+      },
+      leaveNode: () => {
+        setHoveredNode(null);
+        setInspector(null);
+      },
+      enterEdge: (event: { edge: string }) => {
+        setHoveredNode(null);
+        setHoveredEdge(event.edge);
+        const e = edgeById.get(event.edge);
+        const g = sigma.getGraph();
+        if (!e || !g.hasEdge(event.edge)) {
+          setInspector({ kind: "edge", title: "Relationship" });
+          return;
+        }
+        const [source, target] = g.extremities(event.edge);
+        const sourceName = nodeById.get(source)?.name ?? source.slice(0, 8);
+        const targetName = nodeById.get(target)?.name ?? target.slice(0, 8);
+        setInspector({
+          kind: "edge",
+          title: e.type || "RELATED_TO",
+          subtitle: `${sourceName} → ${targetName}`,
+          detail: e.fact?.trim() ? truncate(e.fact, 200) : undefined,
+        });
+      },
+      leaveEdge: () => {
+        setHoveredEdge(null);
+        setInspector(null);
+      },
     });
-  }, [registerEvents]);
+  }, [registerEvents, nodeById, edgeById, sigma]);
 
-  return null;
+  if (!inspector) return null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none absolute inset-x-3 top-3 z-20 mx-auto max-w-lg rounded-lg border border-border bg-popover/95 px-3 py-2.5 shadow-lg backdrop-blur-sm"
+    >
+      <div className="flex items-start gap-2">
+        <span
+          aria-hidden
+          className={cn(
+            "mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+            inspector.kind === "node"
+              ? "bg-sky-500/20 text-sky-200"
+              : "bg-pink-500/20 text-pink-200",
+          )}
+        >
+          {inspector.kind === "node" ? inspector.subtitle ?? "Entity" : "Edge"}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold leading-snug text-foreground">{inspector.title}</p>
+          {inspector.kind === "edge" && inspector.subtitle ? (
+            <p className="mt-0.5 text-xs font-medium text-muted-foreground">{inspector.subtitle}</p>
+          ) : null}
+          {inspector.detail ? (
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{inspector.detail}</p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function truncate(s: string, n: number): string {
@@ -250,10 +314,51 @@ function truncate(s: string, n: number): string {
  * Computes everything from ``data`` directly so it doesn't race the
  * async ForceAtlas2 layout that GraphLoader runs.
  */
-function GraphLegend({ data }: { data: GraphPayload }) {
+function GraphLegend({
+  data,
+  useNativeCommunities = false,
+}: {
+  data: GraphPayload;
+  useNativeCommunities?: boolean;
+}) {
   const { mode, entries } = useMemo(() => {
     if (data.nodes.length === 0) {
       return { mode: "types" as const, entries: [] };
+    }
+
+    const nativeCount = data.nodes.filter((n) => n.community != null).length;
+    if (useNativeCommunities && nativeCount > data.nodes.length * 0.5) {
+      const byComm = new Map<number, { count: number; topName: string; topDeg: number }>();
+      const degree = new Map<string, number>();
+      for (const e of data.edges) {
+        if (e.source === e.target) continue;
+        degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+        degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+      }
+      for (const n of data.nodes) {
+        if (n.community == null) continue;
+        const c = n.community;
+        const cur = byComm.get(c) ?? { count: 0, topName: n.name, topDeg: 0 };
+        cur.count += 1;
+        const d = degree.get(n.id) ?? 0;
+        if (d >= cur.topDeg) {
+          cur.topDeg = d;
+          cur.topName = n.name;
+        }
+        byComm.set(c, cur);
+      }
+      return {
+        mode: "communities" as const,
+        entries: Array.from(byComm.entries())
+          .sort((a, b) => b[1].count - a[1].count)
+          .slice(0, 10)
+          .map(([cidx, info]) => ({
+            key: `gr:${cidx}`,
+            label: truncate(info.topName, 28),
+            color: communityColor(cidx),
+            count: info.count,
+          })),
+      };
     }
 
     // Count entity types up front. If there's real diversity (>= 2 types),
@@ -311,8 +416,6 @@ function GraphLegend({ data }: { data: GraphPayload }) {
       communityIdx.set(id, idx);
     }
 
-    // For each community, pick the highest-degree node as its label so
-    // the legend reads "Reactor Coolant System" rather than "Cluster 3".
     const degree = new Map<string, number>();
     for (const e of data.edges) {
       if (e.source === e.target) continue;
@@ -343,7 +446,7 @@ function GraphLegend({ data }: { data: GraphPayload }) {
           count,
         })),
     };
-  }, [data]);
+  }, [data, useNativeCommunities]);
 
   if (entries.length === 0) return null;
 
@@ -629,19 +732,14 @@ function normalizeGraphCoordinates(g: Graph): void {
 function GraphLoader({
   data,
   reducedMotion,
+  useNativeCommunities = false,
   onSelectNode,
   onLoaded,
 }: {
   data: GraphPayload;
   reducedMotion: boolean;
+  useNativeCommunities?: boolean;
   onSelectNode: (id: string | null) => void;
-  /**
-   * Fires once the FA2-positioned graph has been handed to Sigma. The
-   * outer component uses this to trigger an explicit camera fit — Sigma
-   * itself doesn't re-center on graph-replace, which is what caused
-   * "nodes clustered at the top of the canvas" after the layout fix
-   * gave the canvas its full vertical room.
-   */
   onLoaded?: () => void;
 }) {
   const loadGraph = useLoadGraph();
@@ -663,15 +761,20 @@ function GraphLoader({
     });
 
     for (const n of data.nodes) {
+      const nativeComm =
+        useNativeCommunities && n.community != null ? n.community : undefined;
       g.addNode(n.id, {
         label: n.name,
+        type: "border",
         size: nodeSizeForDegree(degree.get(n.id) ?? 0, maxDegree),
-        // Provisional color — Louvain overwrites below once edges are in.
-        color: colorForType(n.type),
-        borderColor: "#020617",
-        borderSize: 0.5,
-        // Shadow attributes consumed by GraphLegend / HoverEmphasis.
+        color:
+          nativeComm != null ? communityColor(nativeComm) : colorForType(n.type),
+        borderColor: NODE_BORDER_COLOR,
+        borderSize: NODE_BORDER_SIZE,
         entityType: n.type,
+        fullLabel: n.name,
+        summary: n.summary,
+        community: nativeComm,
       });
     }
 
@@ -680,8 +783,8 @@ function GraphLoader({
       if (g.hasEdge(e.id)) continue;
       try {
         g.addDirectedEdgeWithKey(e.id, e.source, e.target, {
-          size: 0.6,
-          color: "rgba(148, 163, 184, 0.18)",
+          size: EDGE_DEFAULT_SIZE,
+          color: edgeColorForDensity(1, maxDegree || 1),
           label: "",
         });
       } catch {
@@ -691,17 +794,23 @@ function GraphLoader({
 
     if (g.order === 0) {
       loadGraph(g);
+      onLoaded?.();
       return;
     }
 
-    // ---- Community detection (Louvain) ----
-    // When all entity types collapse to a single label ("Concept" in
-    // current Graphiti), color-by-type produces a monochromatic blob.
-    // Louvain partitions the graph by topology and reveals the actual
-    // semantic clusters, which is the standard knowledge-graph rendering
-    // trick (used in MiroFish, Obsidian Graph, etc.).
     let communityIndex: Map<string, number> | null = null;
-    try {
+    const hasNativeCommunities =
+      useNativeCommunities &&
+      data.nodes.some((n) => n.community != null);
+
+    if (hasNativeCommunities) {
+      communityIndex = new Map<string, number>();
+      for (const n of data.nodes) {
+        if (n.community != null) {
+          communityIndex.set(n.id, n.community);
+        }
+      }
+    } else try {
       if (g.size > 0) {
         const partition = louvain(g, { resolution: 1.0 });
         // Build a stable index → color mapping so legend ordering is
@@ -724,8 +833,18 @@ function GraphLoader({
         });
       }
     } catch {
-      /* Louvain occasionally fails on disconnected micro-graphs;
-       * fall back silently to the type-based coloring already in place. */
+      /* Louvain occasionally fails on disconnected micro-graphs */
+    }
+
+    if (communityIndex && hasNativeCommunities) {
+      g.forEachNode((id, attrs) => {
+        const cIdx = attrs.community;
+        if (typeof cIdx === "number") {
+          g.setNodeAttribute(id, "color", communityColor(cIdx));
+        }
+      });
+    } else if (!hasNativeCommunities) {
+      // Louvain block above already recolored when successful
     }
 
     // ---- Density-aware edge alpha ----
@@ -738,16 +857,10 @@ function GraphLoader({
       const ds = degree.get(source) ?? 1;
       const dt = degree.get(target) ?? 1;
       const minD = Math.min(ds, dt);
-      // alpha is high (0.55) for periphery-periphery edges and decays to
-      // 0.12 in the densest cluster centers.
-      const norm = maxDegree > 0 ? Math.min(1, minD / Math.max(1, maxDegree / 2)) : 0;
-      const alpha = 0.55 - norm * 0.43;
-      g.setEdgeAttribute(
-        edgeId,
-        "color",
-        `rgba(148, 163, 184, ${alpha.toFixed(2)})`,
-      );
+      g.setEdgeAttribute(edgeId, "color", edgeColorForDensity(minD, maxDegree));
     });
+
+    applyCurvedEdgeRendering(g);
 
     // ---- Hub-only labels ----
     // Showing 200+ labels at default zoom is unreadable. Reveal only the
@@ -878,7 +991,7 @@ function GraphLoader({
       layout?.stop();
       layout?.kill();
     };
-  }, [data, loadGraph, reducedMotion, onLoaded]);
+  }, [data, loadGraph, reducedMotion, useNativeCommunities, onLoaded]);
 
   const registerEvents = useRegisterEvents();
   useEffect(() => {
@@ -901,11 +1014,23 @@ function GraphLoader({
 export function GraphCanvas({
   workspaceId,
   filters,
+  graphBackend = "graphiti",
+  graphragIndexId,
+  communityId,
   onSelectNode,
+  fullHeight = false,
+  liveIngestion = false,
+  onLivePatch,
 }: {
   workspaceId: string;
+  fullHeight?: boolean;
   filters: Record<string, string | undefined>;
+  graphBackend?: "graphiti" | "graphrag";
+  graphragIndexId?: string | null;
+  communityId?: number | null;
   onSelectNode: (id: string | null) => void;
+  liveIngestion?: boolean;
+  onLivePatch?: () => void;
 }) {
   const [data, setData] = useState<GraphPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -932,9 +1057,19 @@ export function GraphCanvas({
   // toggle visibility instantly without re-running ForceAtlas2.
   const qs = useMemo(() => {
     const p = new URLSearchParams();
+    if (graphBackend === "graphrag") {
+      p.set("backend", "graphrag");
+      if (graphragIndexId) p.set("graphrag_index_id", graphragIndexId);
+      if (filters.agent_id) p.set("agent_id", filters.agent_id);
+      if (filters.collection_id) p.set("collection_id", filters.collection_id);
+      if (communityId != null) p.set("community_id", String(communityId));
+      if (filters.node_limit) p.set("node_limit", filters.node_limit);
+      return p.toString();
+    }
     p.set("view", filters.view ?? "overview");
     if (filters.document_id) p.set("document_id", filters.document_id);
     if (filters.agent_id) p.set("agent_id", filters.agent_id);
+    if (filters.collection_id) p.set("collection_id", filters.collection_id);
     if (filters.valid_at) p.set("valid_at", filters.valid_at);
     if (filters.node_limit) p.set("node_limit", filters.node_limit);
     if (filters.depth) p.set("depth", filters.depth);
@@ -944,7 +1079,7 @@ export function GraphCanvas({
       .filter(Boolean);
     seeds.forEach((s) => p.append("seed_entity_ids", s));
     return p.toString();
-  }, [filters]);
+  }, [filters, graphBackend, graphragIndexId, communityId]);
 
   const chipFilters = useMemo(
     () => ({
@@ -963,16 +1098,29 @@ export function GraphCanvas({
 
   const load = useCallback(async () => {
     setError(null);
+    setData(null);
     try {
-      const res = await fetch(`/api/v1/workspaces/${workspaceId}/graph?${qs}`, { cache: "no-store" });
-      const body = (await res.json()) as GraphPayload & { error?: { message?: string } };
+      const res = await fetchWithTimeout(
+        `/api/v1/workspaces/${workspaceId}/graph?${qs}`,
+        { cache: "no-store", timeoutMs: 90_000 },
+      );
+      const body = await readJsonResponse<GraphPayload & { error?: { message?: string } }>(res);
       if (!res.ok) {
-        setError(body.error?.message ?? "Failed to load graph");
+        setError(readApiErrorMessage(body, "Failed to load graph"));
         setData(null);
         return;
       }
       setData({
-        nodes: body.nodes ?? [],
+        nodes: (body.nodes ?? []).map((n) => ({
+          id: n.id,
+          name: n.name,
+          type: n.type ?? "entity",
+          summary: n.summary ?? "",
+          properties: n.properties ?? {},
+          aliases: n.aliases ?? [],
+          is_user_edited: n.is_user_edited ?? false,
+          community: (n as GraphNode).community,
+        })),
         edges: body.edges ?? [],
         truncated: Boolean(body.truncated),
       });
@@ -981,7 +1129,7 @@ export function GraphCanvas({
       // bumping here would fire the camera-reset too early (before FA2
       // even started) and cluster the graph at the top edge again.
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load graph");
+      setError(fetchTimeoutMessage(e));
       setData(null);
     }
   }, [workspaceId, qs]);
@@ -998,20 +1146,49 @@ export function GraphCanvas({
   const cameraEpoch = String(loadEpoch);
 
   if (error) {
-    return <p className="text-caption text-red-300">{error}</p>;
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-caption text-destructive">
+        <p>{error}</p>
+        <button
+          type="button"
+          className="self-start rounded border border-input px-2 py-1 text-foreground hover:bg-card"
+          onClick={() => void load()}
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
   if (!data) {
     return <p className="text-caption text-muted-foreground">Loading graph…</p>;
   }
-  if (data.nodes.length === 0) {
+  const showEmptyHint = data.nodes.length === 0 && !liveIngestion;
+  if (showEmptyHint) {
     const agentHint = filters.agent_id
       ? "No entities for this agent with the current filters. Try clearing entity-type chips or re-import the conversation."
-      : "No entities in this workspace yet.";
+      : filters.collection_id
+        ? "No entities for this collection with the current filters. Try clearing entity-type chips or wait for extract to finish."
+      : graphBackend === "graphrag"
+        ? "No GraphRAG entities yet. Build an index above, or pick a ready index."
+        : "No entities in this workspace yet.";
     return <p className="text-caption text-muted-foreground">{agentHint}</p>;
   }
 
+  const canvasData =
+    data.nodes.length === 0 && liveIngestion ? EMPTY_LIVE_CANVAS : data;
+
   return (
-    <div className="flex min-h-[320px] flex-1 flex-col gap-2">
+    <div
+      className={cn(
+        "flex flex-1 flex-col gap-2",
+        fullHeight ? "h-full min-h-0" : "min-h-[320px]",
+      )}
+    >
+      {liveIngestion && data.nodes.length === 0 ? (
+        <p className="text-caption text-caution/90">
+          Live graph — entities will appear here as they are extracted…
+        </p>
+      ) : null}
       {data.truncated ? (
         <p className="text-caption text-amber-200/90">
           Graph truncated — add filters or lower scope (see node limit in URL).
@@ -1019,7 +1196,14 @@ export function GraphCanvas({
       ) : null}
       <div
         ref={canvasFrameRef}
-        className="relative min-h-[420px] flex-1 overflow-hidden rounded-md border border-border bg-background"
+        className={cn(
+          "relative flex-1 overflow-hidden rounded-md border border-border bg-[#0b1220]",
+          fullHeight ? "min-h-0" : "min-h-[420px]",
+        )}
+        style={{
+          backgroundImage: GRAPH_CANVAS_BG,
+          backgroundSize: GRAPH_CANVAS_BG_SIZE,
+        }}
       >
         {canvasSize ? (
           <SigmaContainer
@@ -1034,33 +1218,43 @@ export function GraphCanvas({
               inset: 0,
               height: `${canvasSize.height}px`,
               width: `${canvasSize.width}px`,
-              background:
-                "radial-gradient(ellipse at center, #0b1224 0%, #020617 70%)",
+              background: "#0b1220",
             }}
             settings={{
               renderLabels: true,
-              // Only show a node's label when its rendered size is at least
-              // this many pixels. Cuts label clutter dramatically on 200+
-              // node graphs without losing top-degree hubs.
               labelRenderedSizeThreshold: 6,
-              labelDensity: 0.7,
-              labelColor: { color: "#e2e8f0" },
-              labelFont: "Plus Jakarta Sans, sans-serif",
-              labelSize: 12,
-              labelWeight: "500",
-              defaultEdgeColor: "rgba(148, 163, 184, 0.35)",
+              labelDensity: 0.55,
+              labelColor: { color: "#f1f5f9" },
+              labelFont: "Plus Jakarta Sans, system-ui, sans-serif",
+              labelSize: 13,
+              labelWeight: "600",
+              defaultEdgeColor: "rgba(192, 192, 192, 0.35)",
+              defaultEdgeType: "curved",
+              defaultNodeType: "border",
+              edgeProgramClasses: {
+                curved: EdgeCurveProgram,
+              },
+              nodeProgramClasses: {
+                border: NodeBorderProgram,
+              },
               zIndex: true,
               allowInvalidContainer: true,
             }}
           >
             <GraphLoader
-              data={data}
+              data={canvasData}
               reducedMotion={reducedMotion}
+              useNativeCommunities={graphBackend === "graphrag"}
               onSelectNode={onSelectNode}
               onLoaded={handleGraphLoaded}
             />
-            <ChipFilterApplier data={data} chipFilters={chipFilters} />
-            <HoverEmphasis />
+            <LiveGraphPatcher
+              enabled={liveIngestion}
+              reducedMotion={reducedMotion}
+              onPatch={onLivePatch}
+            />
+            <ChipFilterApplier data={canvasData} chipFilters={chipFilters} />
+            <GraphInteractionLayer nodes={canvasData.nodes} edges={canvasData.edges} />
             <CameraFitAndResize epoch={cameraEpoch} />
             <ZoomControls />
           </SigmaContainer>
@@ -1069,7 +1263,9 @@ export function GraphCanvas({
             Preparing graph canvas…
           </div>
         )}
-        <GraphLegend data={data} />
+        {canvasData.nodes.length > 0 ? (
+          <GraphLegend data={canvasData} useNativeCommunities={graphBackend === "graphrag"} />
+        ) : null}
       </div>
     </div>
   );

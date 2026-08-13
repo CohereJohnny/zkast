@@ -201,11 +201,14 @@ def _run_langextract_sync(
     Wrapped in its own function so ``asyncio.to_thread`` can call it
     cleanly. Uses LangExtract's OpenAI provider explicitly — auto-
     detection would otherwise try to dispatch to Gemini.
+
+    Cohere's OpenAI-compat endpoint rejects the ``n`` parameter that
+    LangExtract's stock provider always sends, so we use a thin
+    subclass that omits it (see worker logs: "n is not supported").
     """
     import langextract as lx
-    from langextract.providers import openai as lx_openai
 
-    model_instance = lx_openai.OpenAILanguageModel(
+    model_instance = _cohere_compat_openai_model_class()(
         model_id=model,
         api_key=api_key,
         base_url=base_url,
@@ -228,6 +231,93 @@ def _run_langextract_sync(
         fence_output=True,
         show_progress=False,
     )
+
+
+_COHERE_COMPAT_MODEL_CLS: type | None = None
+
+
+def _cohere_compat_openai_model_class():
+    """Build once per process — langextract is optional in some dev contexts."""
+    global _COHERE_COMPAT_MODEL_CLS  # noqa: PLW0603
+    if _COHERE_COMPAT_MODEL_CLS is not None:
+        return _COHERE_COMPAT_MODEL_CLS
+
+    from langextract.core import exceptions as lx_exceptions
+    from langextract.core import types as core_types
+    from langextract.providers import openai as lx_openai
+
+    class CohereCompatOpenAILanguageModel(lx_openai.OpenAILanguageModel):
+        """OpenAILanguageModel without ``n=1`` — Cohere compat rejects it."""
+
+        def _process_single_prompt(  # noqa: D401 — upstream signature
+            self, prompt: str, config: dict
+        ) -> core_types.ScoredOutput:
+            try:
+                normalized_config = config.copy()
+                import langextract.data as lx_data
+
+                system_message = ""
+                if self.format_type == lx_data.FormatType.JSON:
+                    system_message = (
+                        "You are a helpful assistant that responds in JSON format."
+                    )
+                elif self.format_type == lx_data.FormatType.YAML:
+                    system_message = (
+                        "You are a helpful assistant that responds in YAML format."
+                    )
+
+                messages = [{"role": "user", "content": prompt}]
+                if system_message:
+                    messages.insert(0, {"role": "system", "content": system_message})
+
+                api_params: dict[str, Any] = {
+                    "model": self.model_id,
+                    "messages": messages,
+                }
+
+                temp = normalized_config.get("temperature", self.temperature)
+                if temp is not None:
+                    api_params["temperature"] = temp
+
+                runtime_response_format = normalized_config.get("response_format")
+                openai_schema = getattr(self, "openai_schema", None)
+                if openai_schema and runtime_response_format is None:
+                    self._validate_schema_config()
+                    api_params["response_format"] = openai_schema.response_format
+                elif runtime_response_format is not None:
+                    api_params["response_format"] = runtime_response_format
+                elif self.format_type == lx_data.FormatType.JSON:
+                    api_params["response_format"] = {"type": "json_object"}
+
+                if (v := normalized_config.get("max_output_tokens")) is not None:
+                    api_params["max_tokens"] = v
+                if (v := normalized_config.get("top_p")) is not None:
+                    api_params["top_p"] = v
+                for key in (
+                    "frequency_penalty",
+                    "presence_penalty",
+                    "seed",
+                    "stop",
+                    "logprobs",
+                    "top_logprobs",
+                    "reasoning_effort",
+                ):
+                    if (v := normalized_config.get(key)) is not None:
+                        api_params[key] = v
+
+                response = self._client.chat.completions.create(**api_params)
+                output_text = response.choices[0].message.content
+                return core_types.ScoredOutput(score=1.0, output=output_text or "")
+            except lx_exceptions.InferenceConfigError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise lx_exceptions.InferenceRuntimeError(
+                    f"OpenAI API error: {exc!s}",
+                    original=exc,
+                ) from exc
+
+    _COHERE_COMPAT_MODEL_CLS = CohereCompatOpenAILanguageModel
+    return _COHERE_COMPAT_MODEL_CLS
 
 
 def _normalize_result(result: Any, original_text: str) -> list[EvidenceSpan]:

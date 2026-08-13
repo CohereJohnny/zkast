@@ -16,6 +16,7 @@ To keep drift bounded without heavyweight process:
 - [`llm-wiki-memory.md`](llm-wiki-memory.md) — Wiki spaces / pages / generation jobs (migration `0015`). Not yet woven into `datamodel.md` or `apis.md`.
 - [`slack-source.md`](slack-source.md) — Slack as an ingestion source + provider-neutral memory-source generalization (migration `0018`). Not yet woven into `datamodel.md` or `apis.md`.
 - [`composable-eval-harness.md`](composable-eval-harness.md) — pluggable pipeline stages, Pipeline Configurations (versioned + content-hashed), versioned ontology/prompt sets (manual + auto-tune), Microsoft GraphRAG as the first new extractor+retrieval plugin, comparison/attribution, and the Pipelines/Lab surface. The forward-looking architecture for the harness; not yet implemented in code.
+- [`live-ingestion-theater.md`](live-ingestion-theater.md) — MiroFish-inspired live observability: pipeline activity theater (stage LEDs, metric tiles, activity feed), graph pulse during extraction, SSE `activity` events. Phase 1 MVP in progress.
 
 ## Reconciliation ledger (shipped, not yet fully in core specs)
 

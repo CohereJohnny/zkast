@@ -40,11 +40,15 @@ def upsert_entity_from_graphiti(
     episode_id: str | None,
     note_id: str | None,
     agent_id: str | None = None,
+    collection_id: str | None = None,
 ) -> str:
     """Returns zkast entity UUID string."""
     etype = entity_type_from_labels(labels)
     canonical = (name or "").strip()[:500] or "Unknown"
     summary = (summary or "")[:2000]
+    # Agent scope wins over collection (North/Slack docs never set collection_id).
+    if agent_id:
+        collection_id = None
 
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         existing_map = conn.execute(
@@ -75,11 +79,22 @@ def upsert_entity_from_graphiti(
                 """,
                 (workspace_id, agent_id, etype, canonical),
             ).fetchone()
+        elif collection_id:
+            row = conn.execute(
+                """
+                SELECT id FROM entities
+                WHERE workspace_id = %s::uuid AND collection_id = %s::uuid
+                  AND agent_id IS NULL
+                  AND type = %s AND lower(canonical_name) = lower(%s)
+                LIMIT 1
+                """,
+                (workspace_id, collection_id, etype, canonical),
+            ).fetchone()
         else:
             row = conn.execute(
                 """
                 SELECT id FROM entities
-                WHERE workspace_id = %s::uuid AND agent_id IS NULL
+                WHERE workspace_id = %s::uuid AND agent_id IS NULL AND collection_id IS NULL
                   AND type = %s AND lower(canonical_name) = lower(%s)
                 LIMIT 1
                 """,
@@ -89,11 +104,13 @@ def upsert_entity_from_graphiti(
             eid = str(row["id"])
             conn.execute(
                 """
-                INSERT INTO graphiti_entity_map (graphiti_uuid, entity_id, workspace_id, agent_id)
-                VALUES (%s, %s::uuid, %s::uuid, %s::uuid)
+                INSERT INTO graphiti_entity_map (
+                  graphiti_uuid, entity_id, workspace_id, agent_id, collection_id
+                )
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s::uuid)
                 ON CONFLICT (graphiti_uuid) DO NOTHING
                 """,
-                (graphiti_uuid, eid, workspace_id, agent_id),
+                (graphiti_uuid, eid, workspace_id, agent_id, collection_id),
             )
             conn.execute(
                 """
@@ -111,14 +128,18 @@ def upsert_entity_from_graphiti(
         conn.execute(
             """
             INSERT INTO entities (
-              id, workspace_id, agent_id, type, canonical_name, aliases, summary, properties, is_user_edited
+              id, workspace_id, agent_id, collection_id, type, canonical_name,
+              aliases, summary, properties, is_user_edited
             )
-            VALUES (%s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, false)
+            VALUES (
+              %s::uuid, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, false
+            )
             """,
             (
                 eid,
                 workspace_id,
                 agent_id,
+                collection_id,
                 etype,
                 canonical,
                 [],
@@ -128,10 +149,12 @@ def upsert_entity_from_graphiti(
         )
         conn.execute(
             """
-            INSERT INTO graphiti_entity_map (graphiti_uuid, entity_id, workspace_id, agent_id)
-            VALUES (%s, %s::uuid, %s::uuid, %s::uuid)
+            INSERT INTO graphiti_entity_map (
+              graphiti_uuid, entity_id, workspace_id, agent_id, collection_id
+            )
+            VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s::uuid)
             """,
-            (graphiti_uuid, eid, workspace_id, agent_id),
+            (graphiti_uuid, eid, workspace_id, agent_id, collection_id),
         )
         _add_provenance(conn, entity_id=eid, episode_id=episode_id, note_id=note_id)
         conn.commit()

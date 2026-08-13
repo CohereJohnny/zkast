@@ -70,6 +70,7 @@ type EvalResult = {
   latency_ms?: number | null;
   tokens_in?: number | null;
   tokens_out?: number | null;
+  composition?: Record<string, unknown> | null;
 };
 
 type EvalRunDetail = {
@@ -83,7 +84,8 @@ const MEMORY_MODES: { id: string; label: string }[] = [
   { id: "raw_transcript", label: "Raw transcript" },
   { id: "zettelkasten_notes", label: "Zettel notes" },
   { id: "amem_lite", label: "A-MEM lite" },
-  { id: "graph", label: "Graph" },
+  { id: "graph", label: "Graphiti graph" },
+  { id: "ms_graphrag", label: "MS GraphRAG" },
   { id: "hybrid", label: "Hybrid" },
 ];
 
@@ -123,9 +125,15 @@ function statusChip(status: string) {
 export function EvalsPanel({
   workspaceId,
   initialRunId,
+  initialModes,
+  initialAgentId,
+  initialNotes,
 }: {
   workspaceId: string;
   initialRunId?: string | null;
+  initialModes?: string[] | null;
+  initialAgentId?: string | null;
+  initialNotes?: string | null;
 }) {
   const toast = useToast();
   const [datasets, setDatasets] = useState<EvalDataset[]>([]);
@@ -138,11 +146,13 @@ export function EvalsPanel({
   const [filter, setFilter] = useState("");
 
   const [datasetName, setDatasetName] = useState("oil_gas_v1");
-  const [selectedModes, setSelectedModes] = useState<string[]>(["rag", "graph", "hybrid"]);
-  const [agentId, setAgentId] = useState("");
+  const [selectedModes, setSelectedModes] = useState<string[]>(
+    initialModes?.length ? initialModes : ["rag", "graph", "hybrid"],
+  );
+  const [agentId, setAgentId] = useState(initialAgentId ?? "");
   const [topKPreset, setTopKPreset] = useState(0);
   const [runMode, setRunMode] = useState<(typeof RUN_MODES)[number]["id"]>("full");
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(initialNotes ?? "");
 
   const [inspectorQid, setInspectorQid] = useState<string | null>(null);
   const [inspectorMode, setInspectorMode] = useState<string | null>(null);
@@ -272,6 +282,28 @@ export function EvalsPanel({
   const inspectorQuestion = useMemo(() => {
     if (!detail || !inspectorQid) return null;
     return detail.questions.find((q) => q.id === inspectorQid) ?? null;
+  }, [detail, inspectorQid]);
+
+  const compositionDiff = useMemo(() => {
+    if (!detail || !inspectorQid) return null;
+    const qResults = detail.results.filter((r) => r.question_id === inspectorQid);
+    if (qResults.length < 2) return null;
+    const fields = [
+      "extractor",
+      "ontology_version",
+      "graph_store",
+      "retrieval_strategy",
+      "provider",
+    ] as const;
+    const comps = qResults
+      .map((r) => r.composition as Record<string, unknown> | null | undefined)
+      .filter(Boolean) as Record<string, unknown>[];
+    if (comps.length < 2) return null;
+    const differing = fields.filter((f) => {
+      const vals = new Set(comps.map((c) => String(c[f] ?? "")));
+      return vals.size > 1;
+    });
+    return differing.length ? differing : null;
   }, [detail, inspectorQid]);
 
   const toggleMode = (mode: string) => {
@@ -662,6 +694,38 @@ export function EvalsPanel({
                         )}{" "}
                         · {inspectorResult.latency_ms ?? "—"} ms
                       </p>
+                      {inspectorResult.composition &&
+                      Object.keys(inspectorResult.composition).length > 0 ? (
+                        <div className="mt-2 rounded-md border border-border bg-secondary/30 p-2 text-caption">
+                          <p className="font-medium text-foreground">Pipeline composition</p>
+                          <dl className="mt-1 grid gap-1">
+                            {(
+                              [
+                                "extractor",
+                                "ontology_version",
+                                "graph_store",
+                                "retrieval_strategy",
+                                "provider",
+                              ] as const
+                            ).map((key) =>
+                              inspectorResult.composition?.[key] != null ? (
+                                <div key={key} className="flex justify-between gap-2">
+                                  <dt className="text-muted-foreground">{key}</dt>
+                                  <dd className="font-mono text-foreground">
+                                    {String(inspectorResult.composition[key])}
+                                  </dd>
+                                </div>
+                              ) : null,
+                            )}
+                          </dl>
+                          {compositionDiff?.length ? (
+                            <p className="mt-2 text-muted-foreground">
+                              Varies vs other modes on this question:{" "}
+                              {compositionDiff.join(", ")}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                     <div>
                       <h4 className="text-p font-medium text-foreground">Retrieved contexts</h4>

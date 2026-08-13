@@ -43,24 +43,35 @@ def export_corpus(
     *,
     workspace_id: str,
     agent_id: str | None = None,
+    collection_id: str | None = None,
     kinds: tuple[str, ...] = SAMPLE_INDEX_KINDS,
     max_chars: int = 8000,
     max_docs: int | None = None,
 ) -> list[dict[str, str]]:
     """All corpus text for a memory space as GraphRAG input documents.
 
-    Scope precedence mirrors auto-tune: a single ``agent_id`` (memory space) or
-    the whole workspace when None. Returns ``[{id, text}]``.
+    Scope precedence: ``agent_id`` (North/Slack), else ``collection_id``
+    (document collection), else whole workspace. Returns ``[{id, text}]``.
     """
     sql = [
-        "SELECT id::text AS id, text FROM retrieval_embeddings",
-        "WHERE workspace_id = %s::uuid AND index_kind = ANY(%s)",
+        "SELECT re.id::text AS id, re.text FROM retrieval_embeddings re",
+        "WHERE re.workspace_id = %s::uuid AND re.index_kind = ANY(%s)",
     ]
     args: list[Any] = [workspace_id, list(kinds)]
     if agent_id:
-        sql.append("AND agent_id = %s::uuid")
+        sql.append("AND re.agent_id = %s::uuid")
         args.append(agent_id)
-    sql.append("ORDER BY created_at ASC")
+    elif collection_id:
+        sql.append(
+            """
+            AND re.document_id IN (
+              SELECT d.id FROM documents d
+              WHERE d.workspace_id = %s::uuid AND d.collection_id = %s::uuid
+            )
+            """
+        )
+        args.extend([workspace_id, collection_id])
+    sql.append("ORDER BY re.created_at ASC")
     if max_docs:
         sql.append("LIMIT %s")
         args.append(int(max_docs))

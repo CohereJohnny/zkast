@@ -32,6 +32,7 @@ def test_render_graph_context_document_emits_counts_and_names() -> None:
     shape = {
         "entity_total": 117,
         "edge_total": 67,
+        "scope_label": "Workspace",
         "entity_types": [
             {
                 "name": "Process",
@@ -90,6 +91,21 @@ def test_render_graph_context_document_emits_counts_and_names() -> None:
     # And the instructional postamble that tells the LLM to treat the
     # structured numbers as authoritative.
     assert "authoritative" in rendered
+
+
+def test_render_graph_context_document_uses_memory_space_label() -> None:
+    shape = {
+        "entity_total": 4,
+        "edge_total": 2,
+        "scope_label": "Memory space",
+        "entity_types": [
+            {"name": "Location", "count": 4, "top_examples": ["A", "B"], "truncated_examples": True},
+        ],
+        "edge_types": [],
+    }
+    rendered = chat_turn._render_graph_context_document(shape)
+    assert rendered.startswith("Memory space graph (ground truth")
+    assert "Location (count=4)" in rendered
 
 
 def test_render_graph_context_document_returns_empty_for_empty_workspace() -> None:

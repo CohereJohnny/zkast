@@ -108,21 +108,41 @@ def fetch_document(
             _uuid_str(row, "replaces_document_id")
         if row.get("agent_id"):
             _uuid_str(row, "agent_id")
+        if row.get("collection_id"):
+            _uuid_str(row, "collection_id")
         return row
 
 
-def list_documents_for_workspace(database_url: str, workspace_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+def list_documents_for_workspace(
+    database_url: str,
+    workspace_id: str,
+    *,
+    limit: int = 200,
+    collection_id: str | None = None,
+) -> list[dict[str, Any]]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM documents
-            WHERE workspace_id = %s::uuid
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (workspace_id, limit),
-        ).fetchall()
+        if collection_id:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM documents
+                WHERE workspace_id = %s::uuid AND collection_id = %s::uuid
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (workspace_id, collection_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM documents
+                WHERE workspace_id = %s::uuid
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (workspace_id, limit),
+            ).fetchall()
         out: list[dict[str, Any]] = []
         for row in rows:
             _uuid_str(row, "id")
@@ -131,6 +151,8 @@ def list_documents_for_workspace(database_url: str, workspace_id: str, *, limit:
                 _uuid_str(row, "replaces_document_id")
             if row.get("agent_id"):
                 _uuid_str(row, "agent_id")
+            if row.get("collection_id"):
+                _uuid_str(row, "collection_id")
             out.append(row)
         return out
 
@@ -150,6 +172,25 @@ def list_document_ids_for_agent(
             WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
             """,
             (workspace_id, agent_id),
+        ).fetchall()
+        return [r["id"] for r in rows]
+
+
+def list_document_ids_for_collection(
+    database_url: str,
+    *,
+    workspace_id: str,
+    collection_id: str,
+) -> list[str]:
+    """Document ids in a named collection within a workspace."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            SELECT id::text AS id
+            FROM documents
+            WHERE workspace_id = %s::uuid AND collection_id = %s::uuid
+            """,
+            (workspace_id, collection_id),
         ).fetchall()
         return [r["id"] for r in rows]
 
@@ -433,6 +474,7 @@ def insert_document(
     status: str,
     source_kind: str = "pdf",
     agent_id: str | None = None,
+    collection_id: str | None = None,
     north_conversation_id: str | None = None,
     north_metadata: dict[str, Any] | None = None,
     raw_transcript_json: dict[str, Any] | list[Any] | None = None,
@@ -445,12 +487,12 @@ def insert_document(
             INSERT INTO documents (
               id, workspace_id, original_filename, mime_type, byte_size,
               storage_uri, checksum, replaces_document_id, status,
-              source_kind, agent_id, north_conversation_id, north_metadata,
+              source_kind, agent_id, collection_id, north_conversation_id, north_metadata,
               raw_transcript_json, external_conversation_id, source_metadata
             )
             VALUES (
               %s::uuid, %s::uuid, %s, %s, %s, %s, %s,
-              %s::uuid, %s, %s, %s::uuid, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb
+              %s::uuid, %s, %s, %s::uuid, %s::uuid, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb
             )
             RETURNING *
             """,
@@ -466,6 +508,7 @@ def insert_document(
                 status,
                 source_kind,
                 agent_id,
+                collection_id,
                 north_conversation_id,
                 Json(north_metadata or {}),
                 Json(raw_transcript_json) if raw_transcript_json is not None else None,
@@ -481,6 +524,8 @@ def insert_document(
             _uuid_str(row, "replaces_document_id")
         if row.get("agent_id"):
             _uuid_str(row, "agent_id")
+        if row.get("collection_id"):
+            _uuid_str(row, "collection_id")
         return row
 
 
@@ -496,16 +541,19 @@ def insert_ingestion_run(
     llm_model_large: str,
     stats: dict[str, Any] | None = None,
     trace_id: str | None = None,
+    ontology_name: str = "generic",
+    ontology_version: str = "v1",
 ) -> dict[str, Any]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
             """
             INSERT INTO ingestion_runs (
               id, document_id, status, pipeline_version,
-              llm_provider, llm_model_small, llm_model_large, stats, trace_id
+              llm_provider, llm_model_small, llm_model_large, stats, trace_id,
+              ontology_name, ontology_version
             )
             VALUES (
-              %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb, %s
+              %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s
             )
             RETURNING *
             """,
@@ -519,6 +567,8 @@ def insert_ingestion_run(
                 llm_model_large,
                 Json(stats or {}),
                 trace_id,
+                ontology_name,
+                ontology_version,
             ),
         ).fetchone()
         conn.commit()
@@ -526,6 +576,48 @@ def insert_ingestion_run(
         _uuid_str(row, "id")
         _uuid_str(row, "document_id")
         return row
+
+
+def fetch_ingestion_run_ontology(
+    database_url: str, *, ingestion_run_id: str
+) -> tuple[str, str]:
+    """Return ``(ontology_name, ontology_version)`` for a run; defaults to generic/v1."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT ontology_name, ontology_version
+            FROM ingestion_runs
+            WHERE id = %s::uuid
+            """,
+            (ingestion_run_id,),
+        ).fetchone()
+    if not row:
+        return ("generic", "v1")
+    name = (row.get("ontology_name") or "generic").strip() or "generic"
+    version = (row.get("ontology_version") or "v1").strip() or "v1"
+    return (name, version)
+
+
+def fetch_latest_document_ontology(
+    database_url: str, *, document_id: str
+) -> tuple[str, str]:
+    """Most recent ontology selection for a document; defaults to generic/v1."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT ontology_name, ontology_version
+            FROM ingestion_runs
+            WHERE document_id = %s::uuid
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (document_id,),
+        ).fetchone()
+    if not row:
+        return ("generic", "v1")
+    name = (row.get("ontology_name") or "generic").strip() or "generic"
+    version = (row.get("ontology_version") or "v1").strip() or "v1"
+    return (name, version)
 
 
 def update_document(

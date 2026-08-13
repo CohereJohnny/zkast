@@ -9,6 +9,8 @@ import {
   type ConversationMemoryStats,
 } from "@/components/conversation-memory-telemetry";
 import { DreamJobStatus } from "@/components/dream-job-status";
+import { IngestionRetrySection } from "@/components/ingestion-retry-buttons";
+import { useToast } from "@/components/feedback-provider";
 import { readApiErrorMessage } from "@/lib/api-error-message";
 import { useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
@@ -33,6 +35,23 @@ type PreviewReady = {
 };
 
 type PreviewEntry = PreviewReady | { status: "loading" } | { status: "error"; message: string };
+
+type ImportSettings = {
+  user_messages_only?: boolean;
+  include_roles?: string[];
+  exclude_roles?: string[];
+};
+
+function readUserMessagesOnly(settings: unknown): boolean {
+  if (!settings || typeof settings !== "object") return false;
+  const s = settings as ImportSettings;
+  if (s.user_messages_only === true) return true;
+  const include = s.include_roles;
+  if (Array.isArray(include) && include.length === 1 && String(include[0]).toLowerCase() === "user") {
+    return true;
+  }
+  return false;
+}
 
 function normalizeConversationRow(it: unknown): CacheRow | null {
   if (!it || typeof it !== "object") return null;
@@ -131,6 +150,7 @@ function ConversationAction({
 
 export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string; agentId: string }) {
   const { registerActiveJob, requestOpenLogConsole } = useJobEvents();
+  const toast = useToast();
   const runRef = useRef(0);
   const [rows, setRows] = useState<CacheRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +170,45 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
   const [statsLoading, setStatsLoading] = useState(true);
   const [dreamJobId, setDreamJobId] = useState<string | null>(null);
   const [dreamBusy, setDreamBusy] = useState(false);
+  const [agentLabel, setAgentLabel] = useState<string | null>(null);
+  const [listMeta, setListMeta] = useState<{
+    source?: string;
+    matched_count?: number;
+    agent_display_name?: string;
+  } | null>(null);
+  const [retryErrorById, setRetryErrorById] = useState<Record<string, string>>({});
+  const [refreshAttempted, setRefreshAttempted] = useState(false);
+  const [userMessagesOnly, setUserMessagesOnly] = useState(false);
+  const [importSettingsLoaded, setImportSettingsLoaded] = useState(false);
+  const [importSettingsSaving, setImportSettingsSaving] = useState(false);
+
+  const reloadStats = useCallback(async () => {
+    setStatsLoading(true);
+    setStatsError(null);
+    try {
+      const res = await fetch(
+        `/api/v1/workspaces/${workspaceId}/north/agents/${agentId}/stats`,
+        { cache: "no-store" },
+      );
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setStatsError(readApiErrorMessage(body, `HTTP ${res.status}`));
+        setStats(null);
+        return;
+      }
+      setStats({
+        imported_documents: Number(body.imported_documents ?? 0),
+        derived_notes: Number(body.derived_notes ?? 0),
+        cached_conversations: Number(body.cached_conversations ?? 0),
+        note_amem_embeddings: Number(body.note_amem_embeddings ?? 0),
+        import_digest: typeof body.import_digest === "string" ? body.import_digest : null,
+      });
+    } catch {
+      setStatsError("Failed to load agent stats");
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [workspaceId, agentId]);
 
   const loadPreview = useCallback(
     async (cid: string) => {
@@ -222,6 +281,22 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
           .filter((r): r is CacheRow => r !== null && Boolean(r.north_conversation_id));
         if (runId === undefined || runId === runRef.current) {
           setRows(normalized);
+          const meta = body.refresh_meta as Record<string, unknown> | undefined;
+          setListMeta({
+            source: typeof body.source === "string" ? body.source : refresh ? "north" : "cache",
+            matched_count:
+              typeof meta?.matched_count === "number"
+                ? meta.matched_count
+                : refresh
+                  ? normalized.length
+                  : undefined,
+            agent_display_name:
+              typeof meta?.agent_display_name === "string" ? meta.agent_display_name : undefined,
+          });
+          if (refresh) {
+            setRefreshAttempted(true);
+            void reloadStats();
+          }
         }
         return normalized;
       } finally {
@@ -230,43 +305,37 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
         }
       }
     },
-    [workspaceId, agentId],
+    [workspaceId, agentId, reloadStats],
   );
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      setStatsLoading(true);
-      setStatsError(null);
       try {
-        const res = await fetch(
-          `/api/v1/workspaces/${workspaceId}/north/agents/${agentId}/stats`,
-          { cache: "no-store" },
-        );
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        if (cancelled) return;
-        if (!res.ok) {
-          setStatsError(readApiErrorMessage(body, `HTTP ${res.status}`));
-          setStats(null);
-          return;
-        }
-        setStats({
-          imported_documents: Number(body.imported_documents ?? 0),
-          derived_notes: Number(body.derived_notes ?? 0),
-          cached_conversations: Number(body.cached_conversations ?? 0),
-          note_amem_embeddings: Number(body.note_amem_embeddings ?? 0),
-          import_digest: typeof body.import_digest === "string" ? body.import_digest : null,
+        const res = await fetch(`/api/v1/workspaces/${workspaceId}/north/agents`, {
+          cache: "no-store",
         });
+        const body = (await res.json().catch(() => ({}))) as { items?: Record<string, unknown>[] };
+        if (cancelled || !res.ok) return;
+        const row = (body.items ?? []).find((a) => String(a.id) === agentId);
+        if (row) {
+          const name = String(row.display_name ?? row.external_agent_id ?? "").trim();
+          if (name) setAgentLabel(name);
+          setUserMessagesOnly(readUserMessagesOnly(row.import_settings));
+          setImportSettingsLoaded(true);
+        }
       } catch {
-        if (!cancelled) setStatsError("Failed to load agent stats");
-      } finally {
-        if (!cancelled) setStatsLoading(false);
+        /* non-fatal */
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [workspaceId, agentId]);
+
+  useEffect(() => {
+    void reloadStats();
+  }, [reloadStats]);
 
   useEffect(() => {
     const id = ++runRef.current;
@@ -282,9 +351,88 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
     void loadPreview(expandedId);
   }, [expandedId, previewById, loadPreview]);
 
+  /** Re-attach theater when the tab was refreshed mid-import. */
+  const hasSyncing = rows.some((r) => r.sync_status === "syncing");
+  useEffect(() => {
+    if (!hasSyncing) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/jobs/overview`,
+          { cache: "no-store" },
+        );
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as {
+          pipeline_jobs?: Array<{
+            job_id?: string;
+            document_id?: string;
+            status?: string;
+            kind?: string;
+          }>;
+        };
+        for (const j of body.pipeline_jobs ?? []) {
+          if (!j.job_id) continue;
+          const st = (j.status ?? "").toLowerCase();
+          if (st === "succeeded" || st === "failed" || st === "cancelled") continue;
+          registerActiveJob(
+            j.job_id,
+            workspaceId,
+            j.document_id ?? null,
+            (j.kind as "document_parse" | undefined) ?? "document_parse",
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    void sync();
+    const t = window.setInterval(() => void sync(), 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [hasSyncing, registerActiveJob, workspaceId]);
+
   const toggleExpanded = (cid: string) => {
     setExpandedId((cur) => (cur === cid ? null : cid));
   };
+
+  const saveUserMessagesOnly = async (next: boolean) => {
+    const prev = userMessagesOnly;
+    setUserMessagesOnly(next);
+    setImportSettingsSaving(true);
+    try {
+      const res = await fetch(
+        `/api/v1/workspaces/${workspaceId}/north/agents/${agentId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_messages_only: next }),
+        },
+      );
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setUserMessagesOnly(prev);
+        toast({
+          variant: "error",
+          message: readApiErrorMessage(body, `Save failed (HTTP ${res.status})`),
+        });
+        return;
+      }
+      setPreviewById({});
+      void load(false);
+    } catch {
+      setUserMessagesOnly(prev);
+      toast({ variant: "error", message: "Failed to save import settings" });
+    } finally {
+      setImportSettingsSaving(false);
+    }
+  };
+
+  const showReimportHint =
+    userMessagesOnly &&
+    rows.some((r) => r.sync_status === "synced" || r.sync_status === "outdated");
 
   const importConv = async (cid: string) => {
     setBusy(cid);
@@ -309,8 +457,9 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
       const doc = body.document as { id?: string } | undefined;
       if (typeof jid === "string" && jid.length > 0) {
         registerActiveJob(jid, workspaceId, doc?.id ?? null, "document_parse");
+        requestOpenLogConsole();
         setImportNotice(
-          "Import started — watch pipeline progress in the job drawer. When complete, find the transcript under Conversations.",
+          "Import started — watch the pipeline theater below for live progress.",
         );
         void load(false);
       }
@@ -427,6 +576,34 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
         ) : null}
       </div>
       <DreamJobStatus workspaceId={workspaceId} agentId={agentId} jobId={dreamJobId} />
+      <div className="rounded-lg border border-border bg-card px-3 py-3">
+        <h2 className="text-h5 text-foreground">Import settings</h2>
+        <label className="mt-2 flex cursor-pointer items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={userMessagesOnly}
+            disabled={!importSettingsLoaded || importSettingsSaving}
+            onChange={(e) => void saveUserMessagesOnly(e.target.checked)}
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-p text-foreground">User messages only</span>
+            <span className="text-caption text-muted-foreground">
+              Exclude assistant and tool messages from notes and graph extraction.
+            </span>
+          </span>
+        </label>
+        {importSettingsSaving ? (
+          <p className="mt-2 text-caption text-muted-foreground" role="status">
+            Saving…
+          </p>
+        ) : null}
+        {showReimportHint ? (
+          <p className="mt-2 text-caption text-muted-foreground">
+            Existing imports used the previous filter — re-import to refresh memories.
+          </p>
+        ) : null}
+      </div>
       {error ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-p text-destructive">
           {error}
@@ -500,6 +677,32 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
                   role="region"
                   aria-label="Conversation preview"
                 >
+                  {r.document_id ? (
+                    <div className="mb-3 rounded-md border border-border bg-card/80 p-3">
+                      <IngestionRetrySection
+                        workspaceId={workspaceId}
+                        documentId={r.document_id}
+                        disabled={r.sync_status === "syncing"}
+                        description="Re-run parsing, notes, or graph for this imported conversation."
+                        onJobStarted={(docId, jobId) => {
+                          registerActiveJob(jobId, workspaceId, docId, "document_parse");
+                          requestOpenLogConsole();
+                        }}
+                        onError={(message) =>
+                          setRetryErrorById((prev) => ({
+                            ...prev,
+                            [r.north_conversation_id]: message,
+                          }))
+                        }
+                        onComplete={() => void load(false)}
+                      />
+                      {retryErrorById[r.north_conversation_id] ? (
+                        <p className="mt-2 text-caption text-red-300" role="alert">
+                          {retryErrorById[r.north_conversation_id]}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {!preview || preview.status === "loading" ? (
                     <p className="text-caption text-muted-foreground" role="status">
                       Loading preview…
@@ -564,7 +767,27 @@ export function AgentDetailPanel({ workspaceId, agentId }: { workspaceId: string
         })}
       </ul>
       {rows.length === 0 && !error && !listLoading ? (
-        <p className="text-caption text-muted-foreground">No cached conversations — click refresh to pull from North.</p>
+        <p className="text-caption text-muted-foreground">
+          {refreshAttempted || listMeta?.source === "north" ? (
+            <>
+              North returned{" "}
+              <strong className="text-foreground">{listMeta?.matched_count ?? 0}</strong>{" "}
+              conversation{(listMeta?.matched_count ?? 0) === 1 ? "" : "s"} for{" "}
+              <strong className="text-foreground">
+                {listMeta?.agent_display_name ?? agentLabel ?? "this agent"}
+              </strong>
+              .{" "}
+              {(listMeta?.matched_count ?? 0) === 0 ? (
+                <>
+                  Start a chat with this agent in North, then click{" "}
+                  <span className="text-foreground">Refresh from North</span> again.
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>No cached conversations — click Refresh from North to pull the latest list.</>
+          )}
+        </p>
       ) : null}
     </div>
   );

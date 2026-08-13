@@ -43,22 +43,35 @@ def _list_entities_of_types(
     workspace_id: str,
     entity_types: list[str],
     name_limit_per_type: int = 500,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
 ) -> dict[str, list[str]]:
     """Return ``{type: [canonical_names...]}`` for each requested type."""
     if not entity_types:
         return {}
+    from app.graph_repo import memory_space_entity_filter_sql
+
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
+    )
     out: dict[str, list[str]] = {}
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         for t in entity_types:
             rows = conn.execute(
-                """
+                f"""
                 SELECT canonical_name
-                FROM entities
-                WHERE workspace_id = %s::uuid AND type = %s
+                FROM entities e
+                WHERE e.workspace_id = %s::uuid AND e.type = %s
+                {filt_sql}
                 ORDER BY canonical_name ASC
                 LIMIT %s
                 """,
-                (workspace_id, t, int(name_limit_per_type)),
+                (workspace_id, t, *filt_params, int(name_limit_per_type)),
             ).fetchall()
             names = [str(r["canonical_name"]) for r in rows if r.get("canonical_name")]
             out[t] = names
@@ -70,25 +83,43 @@ def _count_entities_by_type(
     *,
     workspace_id: str,
     entity_types: list[str],
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
 ) -> dict[str, int]:
     if not entity_types:
         return {}
+    from app.graph_repo import memory_space_entity_filter_sql
+
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
+    )
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         rows = conn.execute(
-            """
-            SELECT type, COUNT(*) AS c
-            FROM entities
-            WHERE workspace_id = %s::uuid AND type = ANY(%s::text[])
-            GROUP BY type
+            f"""
+            SELECT e.type, COUNT(*) AS c
+            FROM entities e
+            WHERE e.workspace_id = %s::uuid AND e.type = ANY(%s::text[])
+            {filt_sql}
+            GROUP BY e.type
             """,
-            (workspace_id, entity_types),
+            (workspace_id, entity_types, *filt_params),
         ).fetchall()
     return {str(r["type"]): int(r["c"]) for r in rows}
 
 
-def _render_document(counts: dict[str, int], lists: dict[str, list[str]]) -> str:
+def _render_document(
+    counts: dict[str, int],
+    lists: dict[str, list[str]],
+    *,
+    scope_label: str = "Workspace",
+) -> str:
     lines: list[str] = [
-        "Workspace typed-entity ground truth (deterministic, from the structured graph store):"
+        f"{scope_label} typed-entity ground truth (deterministic, from the structured graph store):"
     ]
     for t, c in counts.items():
         names = lists.get(t) or []
@@ -116,6 +147,9 @@ def answer(
     *,
     workspace_id: str,
     intent: IntentClassification,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ChatDocument]]:
     """Return ``(retrieved_items, documents)`` for the typed-entity
     aggregation answer. Empty when no entity types were extracted.
@@ -125,15 +159,34 @@ def answer(
         return [], []
 
     counts = _count_entities_by_type(
-        database_url, workspace_id=workspace_id, entity_types=types
+        database_url,
+        workspace_id=workspace_id,
+        entity_types=types,
+        agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
     )
     lists = _list_entities_of_types(
-        database_url, workspace_id=workspace_id, entity_types=types
+        database_url,
+        workspace_id=workspace_id,
+        entity_types=types,
+        agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
     )
     if not counts and not lists:
         return [], []
 
-    text = _render_document(counts, lists)
+    if agent_id:
+        scope_label = "Memory space"
+    elif collection_id:
+        scope_label = "Collection"
+    elif document_id:
+        scope_label = "Document"
+    else:
+        scope_label = "Workspace"
+
+    text = _render_document(counts, lists, scope_label=scope_label)
     doc = ChatDocument(
         id="typed_entity:aggregation",
         text=text,

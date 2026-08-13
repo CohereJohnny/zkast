@@ -40,16 +40,27 @@ async def retrieve(
     agent_id = (
         str(scope.get("agent_id")).strip() if scope.get("agent_id") else None
     )
+    collection_id = (
+        None
+        if agent_id
+        else (str(scope.get("collection_id")).strip() if scope.get("collection_id") else None)
+    )
     limit = min(max(int(top_k), 8), 20)
     reports = await asyncio.to_thread(
         fetch_reports_for_space,
         database_url,
         workspace_id=workspace_id,
         agent_id=agent_id,
+        collection_id=collection_id,
         limit=limit,
     )
     if not reports:
-        logger.info("ms_graphrag_no_index", workspace_id=workspace_id, agent_id=agent_id)
+        logger.info(
+            "ms_graphrag_no_index",
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            collection_id=collection_id,
+        )
         return [], [], 0, False, MS_GRAPHRAG_STRATEGY
 
     budget_chars = doc_token_budget * APPROX_CHARS_PER_TOKEN

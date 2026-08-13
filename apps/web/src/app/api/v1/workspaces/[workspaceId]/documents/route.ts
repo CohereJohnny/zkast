@@ -15,7 +15,33 @@ function maxUploadBytes(): number {
   return Number.isFinite(n) && n > 0 ? n : 52428800;
 }
 
-const sourceKindSchema = z.enum(["pdf", "north_conversation", "slack_conversation", "all"]);
+const sourceKindSchema = z.enum([
+  "pdf",
+  "text",
+  "markdown",
+  "email",
+  "north_conversation",
+  "slack_conversation",
+  "all",
+  "uploads",
+]);
+
+const ACCEPTED_UPLOAD_EXT = new Set(["pdf", "txt", "md", "markdown", "eml"]);
+const ACCEPTED_UPLOAD_MIME = new Set([
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+  "message/rfc822",
+  "application/eml",
+  "",
+]);
+
+function uploadExtOk(name: string): boolean {
+  const lower = name.toLowerCase();
+  const ext = lower.includes(".") ? lower.split(".").pop() ?? "" : "";
+  return ACCEPTED_UPLOAD_EXT.has(ext);
+}
 
 export async function GET(
   req: Request,
@@ -39,13 +65,43 @@ export async function GET(
       {
         error: {
           code: "validation_failed",
-          message: "source_kind must be pdf, north_conversation, or all",
+          message:
+            "source_kind must be pdf, text, markdown, email, uploads, north_conversation, slack_conversation, or all",
         },
       },
       { status: 400 },
     );
   }
   const sourceKind = sourceKindParsed?.success ? sourceKindParsed.data : "pdf";
+  const agentIdRaw = url.searchParams.get("agent_id");
+  const agentIdParsed = agentIdRaw ? uuidParam.safeParse(agentIdRaw) : null;
+  if (agentIdRaw && !agentIdParsed?.success) {
+    return NextResponse.json(
+      { error: { code: "validation_failed", message: "agent_id must be a UUID" } },
+      { status: 400 },
+    );
+  }
+  const agentId = agentIdParsed?.success ? agentIdParsed.data : null;
+  if (agentId && sourceKind !== "slack_conversation") {
+    return NextResponse.json(
+      {
+        error: {
+          code: "validation_failed",
+          message: "agent_id filter is only supported with source_kind=slack_conversation",
+        },
+      },
+      { status: 400 },
+    );
+  }
+  const collectionIdRaw = url.searchParams.get("collection_id");
+  const collectionIdParsed = collectionIdRaw ? uuidParam.safeParse(collectionIdRaw) : null;
+  if (collectionIdRaw && !collectionIdParsed?.success) {
+    return NextResponse.json(
+      { error: { code: "validation_failed", message: "collection_id must be a UUID" } },
+      { status: 400 },
+    );
+  }
+  const collectionId = collectionIdParsed?.success ? collectionIdParsed.data : null;
 
   try {
     const pool = getDb();
@@ -63,6 +119,8 @@ export async function GET(
         source_kind: string;
         conversation_title: string | null;
         agent_display_name: string | null;
+        collection_id: string | null;
+        collection_name: string | null;
       }>(
         `
         WITH combined AS (
@@ -75,11 +133,16 @@ export async function GET(
                  d.failure_reason AS failure_reason,
                  d.created_at AS created_at,
                  d.updated_at AS updated_at,
-                 'pdf'::text AS source_kind,
+                 d.source_kind::text AS source_kind,
                  NULL::text AS conversation_title,
-                 NULL::text AS agent_display_name
+                 NULL::text AS agent_display_name,
+                 d.collection_id::text AS collection_id,
+                 dc.name AS collection_name
           FROM documents d
-          WHERE d.workspace_id = $1::uuid AND d.source_kind = 'pdf'
+          LEFT JOIN document_collections dc ON dc.id = d.collection_id
+          WHERE d.workspace_id = $1::uuid
+            AND d.source_kind IN ('pdf', 'text', 'markdown', 'email')
+            AND ($2::uuid IS NULL OR d.collection_id = $2::uuid)
           UNION ALL
           SELECT d.id::text,
                  d.original_filename AS original_filename,
@@ -100,11 +163,14 @@ export async function GET(
                    NULLIF(TRIM(COALESCE(na.display_name, '')), ''),
                    NULLIF(TRIM(COALESCE(d.north_metadata->>'agent_display_name', '')), ''),
                    ''
-                 )), '') AS agent_display_name
+                 )), '') AS agent_display_name,
+                 NULL::text AS collection_id,
+                 NULL::text AS collection_name
           FROM documents d
           LEFT JOIN north_agents na
             ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
           WHERE d.workspace_id = $1::uuid AND d.source_kind = 'north_conversation'
+            AND $2::uuid IS NULL
           UNION ALL
           SELECT d.id::text,
                  d.original_filename AS original_filename,
@@ -125,17 +191,20 @@ export async function GET(
                    NULLIF(TRIM(COALESCE(na.display_name, '')), ''),
                    NULLIF(TRIM(COALESCE(d.source_metadata->>'channel_name', '')), ''),
                    ''
-                 )), '') AS agent_display_name
+                 )), '') AS agent_display_name,
+                 NULL::text AS collection_id,
+                 NULL::text AS collection_name
           FROM documents d
           LEFT JOIN north_agents na
             ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
           WHERE d.workspace_id = $1::uuid AND d.source_kind = 'slack_conversation'
+            AND $2::uuid IS NULL
         )
         SELECT * FROM combined
         ORDER BY created_at DESC
         LIMIT 400
         `,
-        [workspaceId],
+        [workspaceId, collectionId],
       );
       return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
     }
@@ -239,6 +308,58 @@ export async function GET(
       return NextResponse.json({ items, next_cursor: null as string | null });
     }
 
+    if (sourceKind === "slack_conversation") {
+      const result = await pool.query<{
+        id: string;
+        original_filename: string;
+        mime_type: string;
+        byte_size: number;
+        page_count: number | null;
+        status: string;
+        failure_reason: string | null;
+        created_at: string;
+        updated_at: string;
+        conversation_title: string | null;
+        agent_display_name: string | null;
+      }>(
+        `
+        SELECT d.id::text,
+               d.original_filename,
+               d.mime_type,
+               d.byte_size,
+               d.page_count,
+               d.status,
+               d.failure_reason,
+               d.created_at,
+               d.updated_at,
+               COALESCE(
+                 NULLIF(TRIM(COALESCE(d.source_metadata->>'title', '')), ''),
+                 NULLIF(TRIM(COALESCE(d.original_filename, '')), ''),
+                 d.id::text
+               ) AS conversation_title,
+               NULLIF(TRIM(COALESCE(
+                 NULLIF(TRIM(COALESCE(na.display_name, '')), ''),
+                 NULLIF(TRIM(COALESCE(d.source_metadata->>'channel_name', '')), ''),
+                 ''
+               )), '') AS agent_display_name
+        FROM documents d
+        LEFT JOIN north_agents na
+          ON na.id = d.agent_id AND na.workspace_id = d.workspace_id
+        WHERE d.workspace_id = $1::uuid
+          AND d.source_kind = 'slack_conversation'
+          AND ($2::uuid IS NULL OR d.agent_id = $2::uuid)
+        ORDER BY d.created_at DESC
+        LIMIT 200
+        `,
+        [workspaceId, agentId],
+      );
+      return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
+    }
+
+    const uploadKinds =
+      sourceKind === "uploads"
+        ? (["pdf", "text", "markdown", "email"] as const)
+        : ([sourceKind] as const);
     const result = await pool.query<{
       id: string;
       original_filename: string;
@@ -249,16 +370,24 @@ export async function GET(
       failure_reason: string | null;
       created_at: string;
       updated_at: string;
+      source_kind: string;
+      collection_id: string | null;
+      collection_name: string | null;
     }>(
       `
-      SELECT id::text, original_filename, mime_type, byte_size, page_count,
-             status, failure_reason, created_at, updated_at
-      FROM documents
-      WHERE workspace_id = $1::uuid AND source_kind = $2::text
-      ORDER BY created_at DESC
+      SELECT d.id::text, d.original_filename, d.mime_type, d.byte_size, d.page_count,
+             d.status, d.failure_reason, d.created_at, d.updated_at, d.source_kind,
+             d.collection_id::text AS collection_id,
+             dc.name AS collection_name
+      FROM documents d
+      LEFT JOIN document_collections dc ON dc.id = d.collection_id
+      WHERE d.workspace_id = $1::uuid
+        AND d.source_kind = ANY($2::text[])
+        AND ($3::uuid IS NULL OR d.collection_id = $3::uuid)
+      ORDER BY d.created_at DESC
       LIMIT 200
       `,
-      [workspaceId, sourceKind],
+      [workspaceId, [...uploadKinds], collectionId],
     );
     return NextResponse.json({ items: result.rows, next_cursor: null as string | null });
   } catch (err) {
@@ -306,6 +435,17 @@ export async function POST(
   const documents: Array<Record<string, unknown>> = [];
   const job_ids: string[] = [];
 
+  const collectionNameRaw = formData.get("collection_name");
+  const collectionName =
+    typeof collectionNameRaw === "string" && collectionNameRaw.trim()
+      ? collectionNameRaw.trim()
+      : null;
+  const collectionIdRaw = formData.get("collection_id");
+  const collectionId =
+    typeof collectionIdRaw === "string" && uuidParam.safeParse(collectionIdRaw).success
+      ? collectionIdRaw
+      : null;
+
   for (const file of files) {
     if (file.size > limit) {
       return NextResponse.json(
@@ -313,9 +453,15 @@ export async function POST(
         { status: 413 },
       );
     }
-    if (file.type && file.type !== "application/pdf") {
+    const mimeOk = ACCEPTED_UPLOAD_MIME.has(file.type);
+    if (!mimeOk && !uploadExtOk(file.name)) {
       return NextResponse.json(
-        { error: { code: "unsupported_media_type", message: "Only application/pdf is accepted" } },
+        {
+          error: {
+            code: "unsupported_media_type",
+            message: "Accepted types: PDF, TXT, MD, EML",
+          },
+        },
         { status: 415 },
       );
     }
@@ -327,6 +473,20 @@ export async function POST(
     const replacesRaw = formData.get("replaces_document_id");
     if (typeof replacesRaw === "string" && uuidParam.safeParse(replacesRaw).success) {
       upstream.append("replaces_document_id", replacesRaw);
+    }
+
+    const ontologyName = formData.get("ontology_name");
+    if (typeof ontologyName === "string" && ontologyName.trim()) {
+      upstream.append("ontology_name", ontologyName.trim());
+    }
+    const ontologyVersion = formData.get("ontology_version");
+    if (typeof ontologyVersion === "string" && ontologyVersion.trim()) {
+      upstream.append("ontology_version", ontologyVersion.trim());
+    }
+    if (collectionId) {
+      upstream.append("collection_id", collectionId);
+    } else if (collectionName) {
+      upstream.append("collection_name", collectionName);
     }
 
     const idem = req.headers.get("idempotency-key");

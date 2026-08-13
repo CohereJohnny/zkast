@@ -18,7 +18,9 @@ from app.cascade import (
     execute_exclusive_derivatives_delete,
     preview_document_delete,
 )
+from app.collections_repo import fetch_collection, get_or_create_collection
 from app.config import Settings
+from app.prompt_sets_repo import BUILTIN_NAME, BUILTIN_VERSION, fetch_prompt_set_row
 from app.documents_repo import (
     cleanup_expired_idempotency,
     delete_document_row,
@@ -26,6 +28,7 @@ from app.documents_repo import (
     fetch_document_by_checksum,
     fetch_idempotency,
     fail_running_ingestion_runs_for_document,
+    fetch_latest_document_ontology,
     fetch_latest_ingestion_run_with_episodes,
     fetch_workspace_id_for_document,
     insert_document,
@@ -39,6 +42,7 @@ from app.documents_repo import (
 from app.job_redis import job_hset
 from app.notes_repo import clear_notes_for_episode_ids, clear_notes_for_ingestion_run
 from app.storage import LocalStorage
+from app.text_ingest import detect_upload_kind
 from app.workspace_repo import fetch_pipeline_settings
 
 logger = structlog.get_logger(__name__)
@@ -74,10 +78,91 @@ def _serialize_document(row: dict[str, Any]) -> dict[str, Any]:
             out[k] = v.isoformat()
         else:
             out[k] = v
-    for k in ("id", "workspace_id", "replaces_document_id"):
+    for k in ("id", "workspace_id", "replaces_document_id", "agent_id", "collection_id"):
         if out.get(k) is not None:
             out[k] = str(out[k])
     return out
+
+
+def _resolve_upload_collection(
+    database_url: str,
+    *,
+    workspace_id: str,
+    collection_id: uuid.UUID | None,
+    collection_name: str | None,
+) -> str | None:
+    """Resolve optional collection_id or collection_name (create-or-get)."""
+    if collection_id is not None:
+        row = fetch_collection(
+            database_url, workspace_id=workspace_id, collection_id=str(collection_id)
+        )
+        if not row:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": "validation_failed",
+                        "message": "collection_id not found in this workspace",
+                    }
+                },
+            )
+        return str(row["id"])
+    name = (collection_name or "").strip()
+    if not name:
+        return None
+    try:
+        row = get_or_create_collection(
+            database_url, workspace_id=workspace_id, name=name
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "validation_failed",
+                    "message": str(exc).replace("_", " "),
+                }
+            },
+        ) from exc
+    return str(row["id"])
+
+
+def _resolve_upload_ontology(
+    database_url: str,
+    *,
+    workspace_id: str,
+    ontology_name: str | None,
+    ontology_version: str | None,
+) -> tuple[str, str]:
+    """Validate optional ontology form fields; default to builtin generic/v1."""
+    name = (ontology_name or "").strip() or BUILTIN_NAME
+    version = (ontology_version or "").strip() or BUILTIN_VERSION
+    if len(name) > 128 or len(version) > 64:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "validation_failed",
+                    "message": "ontology_name or ontology_version is too long",
+                }
+            },
+        )
+    row = fetch_prompt_set_row(
+        database_url, name=name, version=version, workspace_id=workspace_id
+    )
+    if row is None and (name, version) == (BUILTIN_NAME, BUILTIN_VERSION):
+        return (BUILTIN_NAME, BUILTIN_VERSION)
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "validation_failed",
+                    "message": f"Ontology {name}/{version} not found",
+                }
+            },
+        )
+    return (name, version)
 
 
 @router.post("/internal/v1/documents")
@@ -86,12 +171,28 @@ async def post_internal_document(
     workspace_id: Annotated[uuid.UUID, Form()],
     file: Annotated[UploadFile, File()],
     replaces_document_id: Annotated[uuid.UUID | None, Form()] = None,
+    ontology_name: Annotated[str | None, Form()] = None,
+    ontology_version: Annotated[str | None, Form()] = None,
+    collection_id: Annotated[uuid.UUID | None, Form()] = None,
+    collection_name: Annotated[str | None, Form()] = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
     settings: Settings = request.app.state.settings
     db = settings.database_url
 
     ws_str = str(workspace_id)
+    ont_name, ont_version = _resolve_upload_ontology(
+        db,
+        workspace_id=ws_str,
+        ontology_name=ontology_name,
+        ontology_version=ontology_version,
+    )
+    resolved_collection_id = _resolve_upload_collection(
+        db,
+        workspace_id=ws_str,
+        collection_id=collection_id,
+        collection_name=collection_name,
+    )
 
     if idempotency_key:
         hit = fetch_idempotency(db, key=idempotency_key, workspace_id=ws_str)
@@ -111,20 +212,41 @@ async def post_internal_document(
     job_id = str(uuid.uuid4())
     run_id = str(uuid.uuid4())
 
+    try:
+        source_kind, mime_type, file_ext = detect_upload_kind(file.filename, file.content_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": {
+                    "code": "unsupported_media_type",
+                    "message": "Accepted types: PDF, TXT, MD, EML",
+                }
+            },
+        ) from exc
+
     storage = LocalStorage(settings.zkast_storage_root)
     try:
-        storage_uri, checksum, byte_size = await storage.write_upload(
+        storage_uri, checksum, byte_size, source_kind, mime_type = await storage.write_upload(
             ws_str,
             doc_id,
             file,
             max_bytes=settings.max_upload_bytes,
+            source_kind=source_kind,
+            mime_type=mime_type,
+            ext=file_ext,
         )
     except ValueError as exc:
         code = str(exc)
-        if code == "not_pdf":
+        if code in ("not_pdf", "not_text", "not_eml", "unsupported_media_type"):
             raise HTTPException(
                 status_code=415,
-                detail={"error": {"code": "unsupported_media_type", "message": "Expected a PDF file"}},
+                detail={
+                    "error": {
+                        "code": "unsupported_media_type",
+                        "message": "File content does not match an accepted upload type",
+                    }
+                },
             ) from exc
         if code in ("too_large", "empty_file"):
             raise HTTPException(
@@ -150,13 +272,15 @@ async def post_internal_document(
             db,
             document_id=doc_id,
             workspace_id=ws_str,
-            original_filename=file.filename or "upload.pdf",
-            mime_type="application/pdf",
+            original_filename=file.filename or f"upload.{file_ext}",
+            mime_type=mime_type,
             byte_size=byte_size,
             storage_uri=storage_uri,
             checksum=checksum,
             replaces_document_id=str(replaces_document_id) if replaces_document_id else None,
             status="queued",
+            source_kind=source_kind,
+            collection_id=resolved_collection_id,
         )
         insert_ingestion_run(
             db,
@@ -168,6 +292,8 @@ async def post_internal_document(
             llm_model_small=str(pipe.get("small_model") or ""),
             llm_model_large=str(pipe.get("large_model") or ""),
             stats={"chunk_count": 0, "page_count": 0},
+            ontology_name=ont_name,
+            ontology_version=ont_version,
         )
     except UniqueViolation:
         existing = fetch_document_by_checksum(db, workspace_id=ws_str, checksum=checksum)
@@ -257,6 +383,9 @@ async def post_internal_ingestion_runs(body: IngestionRetryBody, request: Reques
         )
 
         run_id = str(uuid.uuid4())
+        prev_ont_name, prev_ont_version = fetch_latest_document_ontology(
+            db, document_id=doc_id
+        )
         insert_ingestion_run(
             db,
             run_id=run_id,
@@ -267,6 +396,8 @@ async def post_internal_ingestion_runs(body: IngestionRetryBody, request: Reques
             llm_model_small=str(pipe.get("small_model") or ""),
             llm_model_large=str(pipe.get("large_model") or ""),
             stats={"chunk_count": 0, "page_count": 0},
+            ontology_name=prev_ont_name,
+            ontology_version=prev_ont_version,
         )
 
         await job_hset(

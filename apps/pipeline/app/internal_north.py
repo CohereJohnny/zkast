@@ -9,6 +9,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings
 from app.documents_repo import (
@@ -50,6 +51,7 @@ from app.north_repo import (
     list_dream_jobs,
     list_north_agents,
     update_agent_sync_cursor,
+    update_north_agent_import_settings,
     upsert_conversation_cache,
     upsert_north_agent,
 )
@@ -69,6 +71,13 @@ from app.workspace_repo import (
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["internal-north"])
+
+
+class PatchNorthAgentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    import_settings: dict[str, Any] | None = None
+    user_messages_only: bool | None = None
 
 
 def _resolve_north_bearer_token(settings: Settings, database_url: str, workspace_id: str) -> str:
@@ -220,6 +229,45 @@ async def get_north_agents(
     )
 
 
+@router.patch("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}")
+async def patch_north_agent(
+    workspace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    request: Request,
+    body: PatchNorthAgentBody,
+) -> JSONResponse:
+    if body.import_settings is None and body.user_messages_only is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "validation_failed",
+                    "message": "Provide import_settings and/or user_messages_only",
+                },
+            },
+        )
+    settings: Settings = request.app.state.settings
+    db = settings.database_url
+    ws = str(workspace_id)
+    aid = str(agent_id)
+    try:
+        row = update_north_agent_import_settings(
+            db,
+            workspace_id=ws,
+            agent_id=aid,
+            import_settings_patch=body.import_settings,
+            user_messages_only=body.user_messages_only,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "validation_failed", "message": str(exc)}},
+        ) from exc
+    if not row:
+        raise HTTPException(status_code=404, detail={"error": {"code": "not_found", "message": "Agent"}})
+    return JSONResponse(content={"agent": row})
+
+
 @router.get("/internal/v1/workspaces/{workspace_id}/north/agents/{agent_id}/stats")
 async def get_north_agent_stats(
     workspace_id: uuid.UUID,
@@ -300,6 +348,7 @@ async def get_north_conversations(
                     next_one = str(inner) if inner is not None else None
                 else:
                     next_one = str(next_raw)
+            # ``list_conversations`` already client-filters; keep a defensive pass.
             filtered_batch: list[dict[str, Any]] = []
             for it in batch:
                 if not isinstance(it, dict):
@@ -324,6 +373,13 @@ async def get_north_conversations(
                     )
                     filtered_batch.append(dict(it))
             items.extend(filtered_batch)
+            if not filtered_batch and batch:
+                logger.info(
+                    "north_conversations_page_no_matches",
+                    agent_id=aid,
+                    external_agent_id=ext_api,
+                    page_size=len(batch),
+                )
             last_next = next_one
             if not next_one or not batch:
                 break
@@ -353,6 +409,12 @@ async def get_north_conversations(
                 "items": enriched,
                 "next_cursor": last_next,
                 "import_digest": agent_import_digest(docs_by_cid),
+                "source": "north",
+                "refresh_meta": {
+                    "matched_count": len(enriched),
+                    "agent_external_id": ext_api,
+                    "agent_display_name": str(agent.get("display_name") or ""),
+                },
             },
         ),
     )
@@ -400,7 +462,10 @@ async def get_north_conversation_preview(
     else:
         conv_root = {"messages": []}
 
-    preview = north_conversation_preview_payload(conv_root)
+    preview = north_conversation_preview_payload(
+        conv_root,
+        import_settings=agent.get("import_settings") if isinstance(agent.get("import_settings"), dict) else None,
+    )
     return JSONResponse(content=json_safe(preview))
 
 

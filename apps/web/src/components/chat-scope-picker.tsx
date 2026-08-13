@@ -31,6 +31,8 @@ export type ChatScopeValue = {
   pinned_snapshot_id?: string | null;
   /** When set, graph + hybrid retrieval restrict to documents owned by this North agent. */
   agent_id?: string;
+  /** When set (and agent_id unset), restrict to a document collection memory space. */
+  collection_id?: string;
 };
 
 type SnapshotRow = {
@@ -87,17 +89,21 @@ export function ChatScopePicker({
 
   const sourceSelection: SourceScopeSelection | null = value.agent_id
     ? { kind: "agent", id: value.agent_id }
-    : value.document_ids && value.document_ids[0]
-      ? { kind: "document", id: value.document_ids[0] }
-      : null;
+    : value.collection_id
+      ? { kind: "collection", id: value.collection_id }
+      : value.document_ids && value.document_ids[0]
+        ? { kind: "document", id: value.document_ids[0] }
+        : null;
 
   const onSourceChange = (next: SourceScopeSelection | null) => {
     if (!next) {
-      patch({ agent_id: undefined, document_ids: [] });
+      patch({ agent_id: undefined, collection_id: undefined, document_ids: [] });
     } else if (next.kind === "agent") {
-      patch({ agent_id: next.id, document_ids: [] });
+      patch({ agent_id: next.id, collection_id: undefined, document_ids: [] });
+    } else if (next.kind === "collection") {
+      patch({ agent_id: undefined, collection_id: next.id, document_ids: [] });
     } else {
-      patch({ agent_id: undefined, document_ids: [next.id] });
+      patch({ agent_id: undefined, collection_id: undefined, document_ids: [next.id] });
     }
   };
 
@@ -111,8 +117,8 @@ export function ChatScopePicker({
           label="Grounding scope (optional)"
         />
         <p className="mt-1 text-caption text-muted-foreground">
-          Restrict grounding to one memory space (agent or Slack channel — all its documents and
-          notes) or a single document. Leave empty for workspace-wide retrieval.
+          Restrict grounding to one memory space (agent, Slack channel, or document collection) or a
+          single document. Leave empty for workspace-wide retrieval.
         </p>
       </div>
       <EntityTypeahead

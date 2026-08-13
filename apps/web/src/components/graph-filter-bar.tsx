@@ -18,23 +18,30 @@ export type GraphFilterValues = Record<string, string | undefined>;
 export function GraphFilterBar({
   basePath,
   workspaceId,
+  scopeHint,
 }: {
   basePath: string;
   workspaceId?: string;
+  /** e.g. "Graphiti only" in split-compare mode */
+  scopeHint?: string;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
   const initialDoc = sp.get("document_id") ?? "";
   const initialAgent = sp.get("agent_id") ?? sp.get("agentId") ?? "";
+  const initialCollection = sp.get("collection_id") ?? "";
   const [source, setSource] = useState<SourceScopeSelection | null>(
     initialAgent
       ? { kind: "agent", id: initialAgent }
-      : initialDoc
-        ? { kind: "document", id: initialDoc }
-        : null,
+      : initialCollection
+        ? { kind: "collection", id: initialCollection }
+        : initialDoc
+          ? { kind: "document", id: initialDoc }
+          : null,
   );
   const documentId = source?.kind === "document" ? source.id : "";
   const agentId = source?.kind === "agent" ? source.id : "";
+  const collectionId = source?.kind === "collection" ? source.id : "";
   const [tag, setTag] = useState(sp.get("tag") ?? "");
   const [entityTypes, setEntityTypes] = useState(sp.get("entity_types") ?? "");
   const [edgeTypes, setEdgeTypes] = useState(sp.get("edge_types") ?? "");
@@ -56,20 +63,53 @@ export function GraphFilterBar({
       .forEach((s) => p.append("seed_entity_ids", s));
     setOrDel("document_id", documentId);
     setOrDel("agent_id", agentId);
+    setOrDel("collection_id", collectionId);
     setOrDel("tag", tag);
     setOrDel("entity_types", entityTypes);
     setOrDel("edge_types", edgeTypes);
     setOrDel("view", view);
     router.push(`${basePath}?${p.toString()}`);
-  }, [router, sp, basePath, documentId, agentId, tag, entityTypes, edgeTypes, view, seeds, source]);
+  }, [
+    router,
+    sp,
+    basePath,
+    documentId,
+    agentId,
+    collectionId,
+    tag,
+    entityTypes,
+    edgeTypes,
+    view,
+    seeds,
+    source,
+  ]);
+
+  // Auto-apply Sources (agent / collection / document) so picking a memory
+  // space updates the URL and refetches the canvas without requiring Apply.
+  const sourceApplyRef = useRef(true);
+  useEffect(() => {
+    if (sourceApplyRef.current) {
+      sourceApplyRef.current = false;
+      return;
+    }
+    const p = new URLSearchParams(sp.toString());
+    const setOrDel = (k: string, v: string) => {
+      const t = v.trim();
+      if (t) p.set(k, t);
+      else p.delete(k);
+    };
+    setOrDel("document_id", documentId);
+    setOrDel("agent_id", agentId);
+    setOrDel("collection_id", collectionId);
+    router.replace(`${basePath}?${p.toString()}`);
+  }, [documentId, agentId, collectionId, basePath, router, sp]);
 
   // D5 — debounce the chip-style filters (entity types, edge types, tag) so
   // typing applies after a short pause without forcing an "Apply" click.
-  // The graph canvas handles these client-side as hidden attributes; the
+  // The graph canvas handles these client-side as Sigma `hidden` attributes; the
   // URL push is what feeds searchParamsToGraphFilters → GraphCanvas.
-  // Heavier filters (view / seeds / document_id / valid_at / node_limit /
-  // depth) intentionally still require the Apply button — they trigger a
-  // refetch + relayout.
+  // Heavier filters (view / seeds / valid_at / node_limit / depth) still
+  // require the Apply button — they trigger a refetch + relayout.
   const initialChipsRef = useRef(true);
   useEffect(() => {
     if (initialChipsRef.current) {
@@ -169,6 +209,11 @@ export function GraphFilterBar({
     <div className="flex flex-col gap-2 border-b border-border pb-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-caption font-medium text-muted-foreground">Graph filters</span>
+        {scopeHint ? (
+          <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {scopeHint}
+          </span>
+        ) : null}
         {chips.length ? (
           <span className="text-caption text-muted-foreground">({chips.join(" · ")})</span>
         ) : null}
@@ -260,6 +305,7 @@ export function searchParamsToGraphFilters(sp: URLSearchParams): GraphFilterValu
     view: sp.get("view") ?? "overview",
     document_id: sp.get("document_id") ?? undefined,
     agent_id: sp.get("agent_id") ?? sp.get("agentId") ?? undefined,
+    collection_id: sp.get("collection_id") ?? undefined,
     tag: sp.get("tag") ?? undefined,
     entity_types: sp.get("entity_types") ?? undefined,
     edge_types: sp.get("edge_types") ?? undefined,

@@ -86,7 +86,10 @@ def _render_graph_context_document(shape: dict[str, Any]) -> str:
         return ""
 
     lines: list[str] = []
-    lines.append("Workspace graph (ground truth from the structured graph store):")
+    scope_label = str(shape.get("scope_label") or "Workspace")
+    lines.append(
+        f"{scope_label} graph (ground truth from the structured graph store):"
+    )
     lines.append(f"Total entities: {entity_total}")
     lines.append(f"Total relationships: {edge_total}")
     lines.append("Entity types:")
@@ -201,6 +204,19 @@ async def retrieve(
     ):
         return [], [], 0, False, GRAPH_STRATEGY
 
+    agent_scope = str(scope.get("agent_id") or "").strip() or None
+    collection_scope = (
+        None
+        if agent_scope
+        else (str(scope.get("collection_id") or "").strip() or None)
+    )
+    document_scope: str | None = None
+    doc_ids = scope.get("document_ids") or []
+    if isinstance(doc_ids, list) and doc_ids:
+        document_scope = str(doc_ids[0]).strip() or None
+    elif isinstance(doc_ids, str) and doc_ids.strip():
+        document_scope = doc_ids.split(",")[0].strip() or None
+
     # ---- Graph-context grounding document --------------------------------
     graph_context_doc: ChatDocument | None = None
     graph_context_item: dict[str, Any] | None = None
@@ -210,13 +226,16 @@ async def retrieve(
             database_url,
             workspace_id=workspace_id,
             max_names_per_type=25,
+            agent_id=agent_scope,
+            collection_id=collection_scope,
+            document_id=document_scope,
         )
         rendered = _render_graph_context_document(shape)
         if rendered:
             graph_context_doc = ChatDocument(
                 id="graph_context:workspace_shape",
                 text=rendered,
-                title="Workspace graph shape",
+                title=f"{shape.get('scope_label') or 'Workspace'} graph shape",
                 metadata={"kind": "graph_context"},
             )
             graph_context_item = {
@@ -233,12 +252,13 @@ async def retrieve(
             type(exc).__name__,
         )
 
-    agent_scope = str(scope.get("agent_id") or "").strip() or None
-
     # ---- Graphiti hybrid search ------------------------------------------
     try:
         graphiti = await graphiti_for_workspace(
-            settings, workspace_id, agent_id=agent_scope
+            settings,
+            workspace_id,
+            agent_id=agent_scope,
+            collection_id=collection_scope,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -252,7 +272,9 @@ async def retrieve(
             graph_context_item,
         )
 
-    graph_group = memory_space_graph_name(workspace_id, agent_scope)
+    graph_group = memory_space_graph_name(
+        workspace_id, agent_scope, collection_scope
+    )
     try:
         edges = await graphiti.search(
             query=query_text, group_ids=[graph_group], num_results=top_k
@@ -307,6 +329,31 @@ async def retrieve(
             allowed_document_ids = allowed_document_ids & agent_docs
         else:
             allowed_document_ids = agent_docs
+    elif collection_scope:
+        from app.documents_repo import list_document_ids_for_collection
+
+        coll_docs = set(
+            await asyncio.to_thread(
+                list_document_ids_for_collection,
+                database_url,
+                workspace_id=workspace_id,
+                collection_id=collection_scope,
+            )
+        )
+        if not coll_docs:
+            return _finalize(
+                [],
+                [],
+                0,
+                False,
+                GRAPH_STRATEGY,
+                graph_context_doc,
+                graph_context_item,
+            )
+        if allowed_document_ids:
+            allowed_document_ids = allowed_document_ids & coll_docs
+        else:
+            allowed_document_ids = coll_docs
         if not allowed_document_ids:
             return _finalize(
                 [],

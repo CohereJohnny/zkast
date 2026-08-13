@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 export default async function GraphPage() {
   const workspace = await getCurrentWorkspace();
   return (
-    <div className="flex min-h-[calc(100vh-6rem)] flex-col p-2">
-      <GraphWorkspacePanel workspaceId={workspace.id} />
+    <div className="flex h-full min-h-0 flex-1 flex-col p-2">
+      <GraphWorkspacePanel workspaceId={workspace.id} fullHeight />
     </div>
   );
 }

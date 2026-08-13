@@ -1,11 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
+import { CompareRunModal } from "@/components/compare-run-modal";
 import { useToast } from "@/components/feedback-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { graphHref } from "@/lib/graph-backend";
+import { cn } from "@/lib/utils";
 
 type Plugin = { id: string; label: string; description?: string; implemented: boolean };
 type Option = { id: string; label: string };
@@ -46,6 +51,8 @@ function Arrow() {
 
 export function PipelinesPageClient({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const highlightHarness = searchParams.get("harness") === "1";
   const base = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`;
 
   const [configs, setConfigs] = useState<Config[]>([]);
@@ -54,6 +61,7 @@ export function PipelinesPageClient({ workspaceId }: { workspaceId: string }) {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
 
   const [draft, setDraft] = useState({
     name: "",
@@ -151,6 +159,63 @@ export function PipelinesPageClient({ workspaceId }: { workspaceId: string }) {
     return m;
   }, [stages]);
 
+  const harnessConfigs = useMemo(
+    () => configs.filter((c) => c.name.startsWith("harness-")),
+    [configs],
+  );
+  const otherConfigs = useMemo(
+    () => configs.filter((c) => !c.name.startsWith("harness-")),
+    [configs],
+  );
+
+  const renderConfigCard = (c: Config) => (
+    <div
+      key={c.id}
+      id={c.name.startsWith("harness-") ? `harness-${c.name}` : undefined}
+      className={cn(
+        "rounded-lg border border-border bg-card p-4",
+        highlightHarness && c.name.startsWith("harness-") && "ring-2 ring-primary/40",
+      )}
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-p font-medium text-foreground">{c.name}</span>
+        <span className="text-caption text-muted-foreground">v{c.version}</span>
+        {c.is_builtin && <Badge variant="info">built-in</Badge>}
+        <Badge variant="outline" className="font-mono">{c.content_hash.slice(0, 10)}</Badge>
+        {c.name.startsWith("harness-") ? (
+          <Button size="sm" variant="outline" onClick={() => setCompareOpen(true)}>
+            Launch compare
+          </Button>
+        ) : null}
+      </div>
+      {c.description ? <p className="mb-2 text-caption text-muted-foreground">{c.description}</p> : null}
+      <div className="flex flex-wrap items-stretch gap-2">
+        <StageCard label="Parse" value="parse" />
+        <Arrow />
+        <StageCard label="Extract" value={c.extractor} sub={ontologyName[c.ontology_version ?? ""] ?? c.ontology_version ?? undefined} />
+        <Arrow />
+        <StageCard label="Store" value={c.graph_store} />
+        <Arrow />
+        <StageCard label="Retrieve" value={c.retrieval_strategy} />
+        <div className="self-center">
+          <Badge variant="secondary">{c.provider}</Badge>
+        </div>
+        {c.graph_store === "graphrag_artifacts" || c.retrieval_strategy === "ms_graphrag" ? (
+          <Link
+            href={graphHref({ backend: "graphrag" })}
+            className="self-center text-caption text-primary hover:underline"
+          >
+            Open GraphRAG index →
+          </Link>
+        ) : c.graph_store === "graphiti_falkor" ? (
+          <Link href="/graph" className="self-center text-caption text-primary hover:underline">
+            Open graph →
+          </Link>
+        ) : null}
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       <header className="flex items-start justify-between">
@@ -207,35 +272,31 @@ export function PipelinesPageClient({ workspaceId }: { workspaceId: string }) {
         </section>
       )}
 
-      <div className="flex flex-col gap-3">
-        {configs.map((c) => (
-          <div key={c.id} className="rounded-lg border border-border bg-card p-4">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-p font-medium text-foreground">{c.name}</span>
-              <span className="text-caption text-muted-foreground">v{c.version}</span>
-              {c.is_builtin && <Badge variant="info">built-in</Badge>}
-              <Badge variant="outline" className="font-mono">{c.content_hash.slice(0, 10)}</Badge>
-            </div>
-            {c.description ? <p className="mb-2 text-caption text-muted-foreground">{c.description}</p> : null}
-            <div className="flex flex-wrap items-stretch gap-2">
-              <StageCard label="Parse" value="parse" />
-              <Arrow />
-              <StageCard label="Extract" value={c.extractor} sub={ontologyName[c.ontology_version ?? ""] ?? c.ontology_version ?? undefined} />
-              <Arrow />
-              <StageCard label="Store" value={c.graph_store} />
-              <Arrow />
-              <StageCard label="Retrieve" value={c.retrieval_strategy} />
-              <div className="self-center">
-                <Badge variant="secondary">{c.provider}</Badge>
-              </div>
-            </div>
+      {harnessConfigs.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <div>
+            <h2 className="text-h5 text-foreground">Harness presets</h2>
+            <p className="mt-1 max-w-2xl text-caption text-muted-foreground">
+              Hold-all-vary-one compositions for Graphiti vs MS GraphRAG comparison.
+              Preset 1 locks ontology; Preset 2 varies ontology on the GraphRAG side.
+            </p>
           </div>
-        ))}
+          {harnessConfigs.map(renderConfigCard)}
+        </section>
+      ) : null}
+
+      <div className="flex flex-col gap-3">
+        {otherConfigs.map(renderConfigCard)}
         {!loading && configs.length === 0 && (
           <p className="text-caption text-muted-foreground">No configurations yet.</p>
         )}
         {loading && <p className="text-caption text-muted-foreground">Loading…</p>}
       </div>
+      <CompareRunModal
+        open={compareOpen}
+        onClose={() => setCompareOpen(false)}
+        workspaceId={workspaceId}
+      />
     </div>
   );
 }

@@ -28,7 +28,8 @@ export type ActiveJobKind =
   | "extract_graph"
   | "dreaming"
   | "wiki_generation"
-  | "slack_import";
+  | "slack_import"
+  | "graphrag_index";
 
 export type ActiveJob = {
   jobId: string;
@@ -47,12 +48,19 @@ type Ctx = {
     kind?: ActiveJobKind | null,
   ) => void;
   unregisterActiveJob: (jobId: string) => void;
+  /** Drop stale localStorage jobs when the server reports nothing in flight. */
+  reconcileActiveJobs: (workspaceId: string) => Promise<void>;
   /** Increments when a feature asks the docked pipeline log to expand. */
   logConsoleOpenSignal: number;
   requestOpenLogConsole: () => void;
+  /** Shrinks library panels and graph rail so the activity theater dominates. */
+  theaterFocusMode: boolean;
+  setTheaterFocusMode: (next: boolean) => void;
+  toggleTheaterFocusMode: () => void;
 };
 
 const STORAGE_KEY = "zkast.workspace.activeJobs";
+const THEATER_FOCUS_KEY = "zkast.workspace.theaterFocus";
 const STORAGE_LIMIT = 12;
 
 /** Redis job hash statuses that mean the UI should stop treating the job as active. */
@@ -96,25 +104,64 @@ function saveToStorage(jobs: ActiveJob[]): void {
 export function JobEventsProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<ActiveJob[]>([]);
   const [logConsoleOpenSignal, setLogConsoleOpenSignal] = useState(0);
+  const [theaterFocusMode, setTheaterFocusModeState] = useState(false);
   const initialised = useRef(false);
 
   useEffect(() => {
     if (initialised.current) return;
     initialised.current = true;
     setJobs(loadFromStorage());
+    try {
+      if (window.localStorage.getItem(THEATER_FOCUS_KEY) === "1") {
+        setTheaterFocusModeState(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setTheaterFocusMode = useCallback((next: boolean) => {
+    setTheaterFocusModeState(next);
+    try {
+      window.localStorage.setItem(THEATER_FOCUS_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const toggleTheaterFocusMode = useCallback(() => {
+    setTheaterFocusModeState((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(THEATER_FOCUS_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
   }, []);
 
   const registerActiveJob = useCallback<Ctx["registerActiveJob"]>(
     (jobId, workspaceId, docId, kind) => {
       setJobs((prev) => {
+        const existing = prev.find((j) => j.jobId === jobId);
+        if (existing) {
+          const sameWorkspace = existing.workspaceId === workspaceId;
+          const sameDoc = (existing.documentId ?? null) === (docId ?? null);
+          const sameKind = (existing.kind ?? null) === (kind ?? null);
+          if (sameWorkspace && sameDoc && sameKind) {
+            // Idempotent — avoid new object refs that would reconnect SSE streams.
+            return prev;
+          }
+        }
         const without = prev.filter((j) => j.jobId !== jobId);
         const next: ActiveJob[] = [
           {
             jobId,
             workspaceId,
             documentId: docId ?? null,
-            kind: kind ?? null,
-            startedAt: Date.now(),
+            kind: kind ?? existing?.kind ?? null,
+            startedAt: existing?.startedAt ?? Date.now(),
           },
           ...without,
         ].slice(0, STORAGE_LIMIT);
@@ -136,9 +183,69 @@ export function JobEventsProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const reconcileActiveJobs = useCallback<Ctx["reconcileActiveJobs"]>(
+    async (workspaceId) => {
+      const snapshot = loadFromStorage().filter((j) => j.workspaceId === workspaceId);
+      if (snapshot.length === 0) return;
+
+      let overviewRunning = false;
+      try {
+        const res = await fetch(
+          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/jobs/overview`,
+          { cache: "no-store" },
+        );
+        if (res.ok) {
+          const body = (await res.json()) as {
+            arq?: { in_progress?: unknown[] };
+            pipeline_jobs?: Array<{ status?: string }>;
+          };
+          const arqBusy = (body.arq?.in_progress?.length ?? 0) > 0;
+          const pipelineBusy = (body.pipeline_jobs ?? []).some((j) => {
+            const st = (j.status ?? "").toLowerCase();
+            return st && !TERMINAL_JOB_STATUSES.has(st);
+          });
+          overviewRunning = arqBusy || pipelineBusy;
+        }
+      } catch {
+        /* offline — fall through to per-job checks */
+      }
+
+      if (!overviewRunning) {
+        for (const j of snapshot) {
+          unregisterActiveJob(j.jobId);
+        }
+        setTheaterFocusMode(false);
+        return;
+      }
+
+      for (const j of snapshot) {
+        try {
+          const res = await fetch(
+            `/api/v1/jobs/${encodeURIComponent(j.jobId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+            { cache: "no-store" },
+          );
+          if (res.status === 404) {
+            unregisterActiveJob(j.jobId);
+            continue;
+          }
+          if (!res.ok) continue;
+          const body = (await res.json()) as { job?: { status?: string } };
+          const st = body.job?.status;
+          if (st && TERMINAL_JOB_STATUSES.has(st)) {
+            unregisterActiveJob(j.jobId);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    [unregisterActiveJob, setTheaterFocusMode],
+  );
+
   const requestOpenLogConsole = useCallback(() => {
     setLogConsoleOpenSignal((n) => n + 1);
-  }, []);
+    setTheaterFocusMode(true);
+  }, [setTheaterFocusMode]);
 
   useEffect(() => {
     if (jobs.length === 0) return;
@@ -178,10 +285,24 @@ export function JobEventsProvider({ children }: { children: ReactNode }) {
       jobs,
       registerActiveJob,
       unregisterActiveJob,
+      reconcileActiveJobs,
       logConsoleOpenSignal,
       requestOpenLogConsole,
+      theaterFocusMode,
+      setTheaterFocusMode,
+      toggleTheaterFocusMode,
     }),
-    [jobs, registerActiveJob, unregisterActiveJob, logConsoleOpenSignal, requestOpenLogConsole],
+    [
+      jobs,
+      registerActiveJob,
+      unregisterActiveJob,
+      reconcileActiveJobs,
+      logConsoleOpenSignal,
+      requestOpenLogConsole,
+      theaterFocusMode,
+      setTheaterFocusMode,
+      toggleTheaterFocusMode,
+    ],
   );
 
   return (
@@ -196,8 +317,12 @@ export function useJobEvents(): Ctx {
       jobs: [],
       registerActiveJob: () => undefined,
       unregisterActiveJob: () => undefined,
+      reconcileActiveJobs: async () => undefined,
       logConsoleOpenSignal: 0,
       requestOpenLogConsole: () => undefined,
+      theaterFocusMode: false,
+      setTheaterFocusMode: () => undefined,
+      toggleTheaterFocusMode: () => undefined,
     };
   }
   return ctx;

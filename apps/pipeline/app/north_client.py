@@ -397,33 +397,54 @@ class NorthClient:
         cursor: str | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
+        """List North conversations.
+
+        North's ``agent_id`` query param is unreliable (often ignored or returns other
+        agents' rows). Prefer ``agentId`` (camelCase) and always client-filter rows
+        when ``agent_id`` is set.
+        """
         url = _north_api_url(self._base, "v1", "conversations")
+        expected = north_agent_id_for_api(agent_id) if agent_id else None
 
         async def _one_get(*, use_camel_agent: bool) -> httpx.Response:
             params: dict[str, Any] = {"limit": limit}
             if agent_id:
                 if use_camel_agent:
-                    params["agentId"] = agent_id
+                    params["agentId"] = expected or agent_id
                 else:
-                    params["agent_id"] = agent_id
+                    params["agent_id"] = expected or agent_id
             if cursor:
                 params["cursor"] = cursor
             async with httpx.AsyncClient(timeout=60.0) as client:
                 return await client.get(url, headers=self._headers, params=params, follow_redirects=False)
 
-        r = await _one_get(use_camel_agent=False)
-        _raise_for_north_response(r)
-        body = r.json()
-        items = _conversation_items_from_north_body(body)
-        raw_body: Any = body
-        if not items and agent_id:
-            r2 = await _one_get(use_camel_agent=True)
-            _raise_for_north_response(r2)
-            body2 = r2.json()
-            items2 = _conversation_items_from_north_body(body2)
-            if items2:
-                items = items2
-                raw_body = body2
+        def _filter(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if not expected:
+                return items
+            return [it for it in items if north_conversation_row_matches_expected_agent(it, expected)]
+
+        raw_body: Any = None
+        items: list[dict[str, Any]] = []
+        # agentId first — snake_case agent_id is ignored on several North deployments.
+        param_order = (True, False) if agent_id else (False,)
+        for use_camel in param_order:
+            r = await _one_get(use_camel_agent=use_camel)
+            _raise_for_north_response(r)
+            body = r.json()
+            batch = _conversation_items_from_north_body(body)
+            filtered = _filter(batch)
+            if filtered:
+                items = filtered
+                raw_body = body
+                break
+            if not agent_id and batch:
+                items = batch
+                raw_body = body
+                break
+            if batch and not filtered:
+                # Server returned rows for the wrong agent — try the other param name.
+                continue
+            raw_body = body
 
         next_cursor: Any = None
         if isinstance(raw_body, dict):

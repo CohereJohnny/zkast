@@ -194,6 +194,31 @@ def test_extract_evidence_spans_timeout_returns_empty() -> None:
     assert out == []
 
 
+def test_cohere_compat_openai_model_omits_n_param() -> None:
+    """Cohere's OpenAI-compat endpoint 422s on ``n`` — our subclass must omit it."""
+    from app.evidence_extractor import _cohere_compat_openai_model_class
+
+    ModelCls = _cohere_compat_openai_model_class()
+    model = ModelCls(
+        model_id="command-a",
+        api_key="test-key",
+        base_url="https://api.cohere.com/compatibility/v1",
+    )
+    captured: dict = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        choice = SimpleNamespace(message=SimpleNamespace(content='{"extractions": []}'))
+        return SimpleNamespace(choices=[choice])
+
+    model._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    model._process_single_prompt("extract entities from foo", {})
+    assert "n" not in captured
+    assert captured.get("model") == "command-a"
+
+
 def test_page_for_offset_binary_search() -> None:
     # Page offsets: [0, 100, 250, 400]
     offsets = [0, 100, 250, 400]

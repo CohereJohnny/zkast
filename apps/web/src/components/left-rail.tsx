@@ -16,7 +16,6 @@ import {
   StickyNote,
   Camera,
   Target,
-  Workflow,
   Layers,
 } from "lucide-react";
 import Link from "next/link";
@@ -32,10 +31,9 @@ const items = [
   { href: "/documents", label: "Documents", Icon: FileText },
   { href: "/jobs", label: "Jobs", Icon: Activity },
   { href: "/notes", label: "Notes", Icon: StickyNote },
-  { href: "/graph", label: "Graph", Icon: Network },
   { href: "/ontologies", label: "Ontologies", Icon: Boxes },
-  { href: "/graphrag", label: "GraphRAG", Icon: Workflow },
   { href: "/pipelines", label: "Pipelines", Icon: Layers },
+  { href: "/graph", label: "Graph", Icon: Network },
   { href: "/wiki", label: "Wiki", Icon: BookOpen },
   { href: "/chat", label: "Chat", Icon: MessageSquare },
   { href: "/evals", label: "Evals", Icon: BarChart3 },
@@ -58,7 +56,10 @@ export function LeftRail({ workspaceName }: { workspaceName: string }) {
       </div>
       <nav className="mt-2 flex flex-1 flex-col gap-0.5 px-2">
         {items.map(({ href, label, Icon }) => {
-          const active = pathname === href || pathname.startsWith(`${href}/`);
+          const active =
+            pathname === href ||
+            pathname.startsWith(`${href}/`) ||
+            (href === "/graph" && pathname === "/graphrag");
           return (
             <Link
               key={href}
