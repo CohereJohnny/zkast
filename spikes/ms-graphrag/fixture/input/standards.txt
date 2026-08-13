@@ -1,0 +1,13 @@
+The ISO 17636-1 standard specifies radiographic testing of welded joints and is
+referenced alongside ASME Section XI in Acme Power's inspection procedures.
+Dr. Elena Marsh presented the updated procedures at the 2025 Nuclear Materials
+Reliability Conference held in Houston.
+
+The conference, organized by EPRI, brought together regulators from the Nuclear
+Regulatory Commission, vendors such as Westinghouse and Framatome, and operators
+including Acme Power. A key theme was the management of stress-corrosion cracking
+across the operating fleet.
+
+Following the conference, Acme Power committed to a fleet-wide rollout of
+phased-array ultrasonic testing by 2027, coordinated by Dr. Marsh and supported
+by EPRI's materials reliability program.

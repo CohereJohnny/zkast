@@ -1,0 +1,2 @@
+# Spike dependency (isolated venv; NOT part of the pipeline image).
+graphrag==3.1.0

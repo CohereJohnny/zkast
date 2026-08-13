@@ -1,0 +1,14 @@
+Westinghouse supplies the reactor coolant pumps used at Riverbend Nuclear
+Station, while Framatome provides the steam generator replacement components.
+The Electric Power Research Institute (EPRI) published report EPRI 1012081,
+which documents materials-degradation data for austenitic stainless steel
+piping in pressurized water reactors.
+
+Acme Power's procurement lead, Tomas Vega, manages the supplier qualification
+process for safety-related equipment. Tomas works for Acme Power and coordinates
+with both Westinghouse and Framatome on the Riverbend modernization project.
+
+The modernization project, launched in early 2025, integrates digital
+instrumentation and control systems. Bluewave Controls, a vendor based in the
+Pacific Northwest, delivers the new control room equipment and integrates it
+with the existing plant process computer.
