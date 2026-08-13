@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.transcript_episodes import (
     build_episode_rows_from_transcript,
     count_north_episode_rows_from_conversation,
+    filter_messages,
     north_conversation_activity_iso,
     north_conversation_preview_payload,
 )
@@ -105,3 +106,69 @@ def test_north_conversation_activity_iso_from_messages() -> None:
 
 def test_north_conversation_activity_iso_none_when_empty() -> None:
     assert north_conversation_activity_iso({"messages": []}) is None
+
+
+def test_user_messages_only_excludes_assistant_from_episodes() -> None:
+    conv = {
+        "messages": [
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": "Answer"},
+        ],
+    }
+    settings = {"user_messages_only": True}
+    rows = build_episode_rows_from_transcript(
+        workspace_id="11111111-1111-1111-1111-111111111111",
+        document_id="22222222-2222-2222-2222-222222222222",
+        ingestion_run_id="33333333-3333-3333-3333-333333333333",
+        agent_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        raw_transcript=conv,
+        import_settings=settings,
+        north_metadata={"north_external_agent_id": "ext", "agent_display_name": "N", "conversation_title": "C"},
+    )
+    assert rows
+    joined = "\n".join(r[1] for r in rows)
+    assert "Question" in joined
+    assert "Answer" not in joined
+
+
+def test_user_messages_only_zero_episodes_for_assistant_only_conversation() -> None:
+    conv = {"messages": [{"role": "assistant", "content": "Solo reply"}]}
+    assert (
+        count_north_episode_rows_from_conversation(
+            conv=conv,
+            import_settings={"user_messages_only": True},
+            north_metadata={"north_external_agent_id": "ext-1", "agent_display_name": "A"},
+        )
+        == 0
+    )
+
+
+def test_include_roles_user_only_matches_user_messages_only_sugar() -> None:
+    conv = {
+        "messages": [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello"},
+            {"role": "tool", "content": "result"},
+        ],
+    }
+    filtered = filter_messages(
+        conv["messages"],
+        {"include_roles": ["user"], "exclude_roles": ["system", "assistant", "tool"]},
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["role"] == "user"
+
+
+def test_north_conversation_preview_payload_respects_import_settings() -> None:
+    conv = {
+        "title": "Filtered",
+        "messages": [
+            {"role": "user", "content": "keep"},
+            {"role": "assistant", "content": "drop"},
+        ],
+    }
+    p = north_conversation_preview_payload(conv, import_settings={"user_messages_only": True})
+    assert p["message_count"] == 1
+    assert len(p["messages"]) == 1
+    assert p["messages"][0]["role"] == "user"
+    assert p["messages"][0]["excerpt"] == "keep"

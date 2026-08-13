@@ -61,6 +61,7 @@ async def sse_job_events(
     if replay_history:
         async for chunk in _replay_from_stream(redis, job_id):
             yield chunk
+        yield _sse_format('{"type":"replay_end"}')
 
     # Phase 2 — live tail.
     pubsub = redis.pubsub()

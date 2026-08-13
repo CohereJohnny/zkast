@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { LayoutDashboard } from "lucide-react";
 
 import { AgentPicker } from "@/components/filters/agent-picker";
+import { MemorySpaceCompareStrip } from "@/components/memory-space-compare-strip";
+import { graphHref } from "@/lib/graph-backend";
 import { readApiErrorMessage } from "@/lib/api-error-message";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +57,36 @@ type DashboardPayload = {
     conversation?: ConversationRow | null;
   };
   drift_warnings?: string[];
+  graphrag?: {
+    total_indexes?: number;
+    status_counts?: Record<string, number>;
+    spaces?: GraphragSpaceSummary[];
+  };
+};
+
+type GraphragSpaceSummary = {
+  agent_id?: string | null;
+  index_id?: string;
+  status?: string;
+  provider?: string;
+  ontology_name?: string | null;
+  ontology_version?: string | null;
+  stats?: Record<string, number>;
+  failure_reason?: string | null;
+  created_at?: string | null;
+  ended_at?: string | null;
+};
+
+type GraphragAgentIndex = {
+  index_id?: string;
+  status?: string;
+  provider?: string;
+  ontology_name?: string | null;
+  ontology_version?: string | null;
+  stats?: Record<string, number>;
+  failure_reason?: string | null;
+  created_at?: string | null;
+  ended_at?: string | null;
 };
 
 type ConversationRow = {
@@ -79,6 +111,7 @@ type AgentSummary = {
     note_amem_orphaned?: number;
   };
   graph?: { entities: number; relationships: number; graphiti_entity_maps: number };
+  graphrag?: GraphragAgentIndex | null;
   notes?: number;
   wiki_spaces?: number;
   embeddings_by_kind?: Record<string, number>;
@@ -306,6 +339,11 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
             <KpiTile label="Eval runs" value={counts.chat_eval_runs ?? 0} />
           </div>
 
+          <MemorySpaceCompareStrip
+            workspaceId={workspaceId}
+            agentId={agentFilter || null}
+          />
+
           <div className="grid gap-4 lg:grid-cols-2">
             <RecordList
               title="Documents by source"
@@ -349,6 +387,41 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                   </div>
                 </dl>
                 <h3 className="mt-4 text-caption font-semibold uppercase tracking-wider text-muted-foreground">
+                  GraphRAG indexes ({data.graphrag?.total_indexes ?? 0})
+                </h3>
+                <ul className="mt-2 space-y-1 text-caption">
+                  {(data.graphrag?.spaces ?? []).length === 0 ? (
+                    <li className="text-muted-foreground">No indexes built yet.</li>
+                  ) : (
+                    (data.graphrag?.spaces ?? []).map((g) => {
+                      const label = g.agent_id ? `agent ${g.agent_id.slice(0, 8)}…` : "workspace";
+                      const stats = g.stats ?? {};
+                      return (
+                        <li key={`${g.agent_id ?? "ws"}-${g.index_id}`} className="flex justify-between gap-2">
+                          <Link
+                            href={graphHref({
+                              backend: "graphrag",
+                              indexId: g.index_id,
+                              agentId: g.agent_id,
+                            })}
+                            className="truncate text-primary hover:underline"
+                            title={g.index_id}
+                          >
+                            {label}: {g.status}
+                          </Link>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {g.status === "ready"
+                              ? `${stats.entities ?? 0} ent`
+                              : g.status === "failed"
+                                ? "failed"
+                                : "—"}
+                          </span>
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+                <h3 className="mt-4 text-caption font-semibold uppercase tracking-wider text-muted-foreground">
                   FalkorDB graphs ({(data.storage?.falkor_graphs ?? []).length})
                 </h3>
                 <ul className="mt-2 space-y-1 text-caption">
@@ -372,8 +445,13 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
 
           {(() => {
             const allAgents = data.agents ?? [];
-            const slackChannels = allAgents.filter((a) => a.provider === "slack");
-            const agents = allAgents.filter((a) => a.provider !== "slack");
+            const hasDocs = (a: AgentSummary) => (a.stats?.imported_documents ?? 0) > 0;
+            const slackAll = allAgents.filter((a) => a.provider === "slack");
+            const agentsAll = allAgents.filter((a) => a.provider !== "slack");
+            const slackChannels = slackAll.filter(hasDocs);
+            const agents = agentsAll.filter(hasDocs);
+            const hiddenAgents = agentsAll.length - agents.length;
+            const hiddenSlack = slackAll.length - slackChannels.length;
 
             const MemorySpaceTable = ({
               rows,
@@ -392,6 +470,7 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                         <th className="py-2 pr-4">Notes</th>
                         <th className="py-2 pr-4">A-MEM</th>
                         <th className="py-2 pr-4">Graph (PG)</th>
+                        <th className="py-2 pr-4">GraphRAG</th>
                         <th className="py-2">Actions</th>
                       </tr>
                     </thead>
@@ -416,6 +495,25 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                             ) : null}
                           </td>
                           <td className="py-2 pr-4 tabular-nums">{a.graph?.entities ?? 0}</td>
+                          <td className="py-2 pr-4">
+                            {a.graphrag?.status ? (
+                              <Link
+                                href={graphHref({
+                                  backend: "graphrag",
+                                  indexId: a.graphrag.index_id,
+                                  agentId: a.agent_id,
+                                })}
+                                className="text-link hover:underline"
+                              >
+                                {a.graphrag.status}
+                                {a.graphrag.status === "ready"
+                                  ? ` (${a.graphrag.stats?.entities ?? 0})`
+                                  : ""}
+                              </Link>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
                           <td className="py-2">
                             <button
                               type="button"
@@ -429,8 +527,8 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                       ))}
                       {rows.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="py-3 text-muted-foreground">
-                            None yet.
+                          <td colSpan={7} className="py-3 text-muted-foreground">
+                            No memory spaces with imported documents yet.
                           </td>
                         </tr>
                       ) : null}
@@ -448,6 +546,9 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                   </h2>
                   <p className="mt-1 text-caption text-muted-foreground">
                     Each agent has its own Falkor graph, scoped entities, and filtered embeddings.
+                    {hiddenAgents > 0
+                      ? ` Showing ${agents.length} with documents (${hiddenAgents} empty hidden).`
+                      : ""}
                   </p>
                   <MemorySpaceTable rows={agents} firstColLabel="Agent" />
                 </div>
@@ -459,6 +560,9 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                   <p className="mt-1 text-caption text-muted-foreground">
                     Each imported Slack channel is its own memory space — own Falkor graph, scoped
                     entities, notes, and embeddings.
+                    {hiddenSlack > 0
+                      ? ` Showing ${slackChannels.length} with documents (${hiddenSlack} empty hidden).`
+                      : ""}
                   </p>
                   <MemorySpaceTable rows={slackChannels} firstColLabel="Channel" />
                 </div>
@@ -486,7 +590,7 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
                     Notes
                   </Link>
                   <Link
-                    href={`/graph?agent_id=${selectedAgent.agent_id}`}
+                    href={`/graph?view=graphrag&agent_id=${selectedAgent.agent_id}`}
                     className="text-link hover:underline"
                   >
                     Graph
@@ -502,6 +606,12 @@ export function DashboardPageClient({ workspaceId }: { workspaceId: string }) {
               <p className="mt-1 font-mono text-caption text-muted-foreground">
                 Memory graph: {selectedAgent.memory_space_graph}
               </p>
+              <div className="mt-3">
+                <MemorySpaceCompareStrip
+                  workspaceId={workspaceId}
+                  agentId={selectedAgent.agent_id}
+                />
+              </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <KpiTile label="Conversations" value={selectedAgent.stats?.cached_conversations ?? 0} />
                 <KpiTile label="Wiki spaces" value={selectedAgent.wiki_spaces ?? 0} />

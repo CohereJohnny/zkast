@@ -60,27 +60,31 @@ const DEFAULT_DURATION_MS = 4000;
 
 function variantClasses(variant: ToastVariant): {
   container: string;
+  iconClass: string;
   iconPath: string;
 } {
   switch (variant) {
     case "success":
       return {
         container:
-          "border-success/40 bg-success/12 text-success-foreground shadow-lg",
+          "border-success/50 bg-card text-foreground shadow-lg ring-1 ring-success/15",
+        iconClass: "text-success",
         iconPath:
           "M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
       };
     case "error":
       return {
         container:
-          "border-destructive/40 bg-destructive/12 text-destructive-foreground shadow-lg",
+          "border-destructive/50 bg-card text-foreground shadow-lg ring-1 ring-destructive/15",
+        iconClass: "text-destructive",
         iconPath:
           "M12 9v3.75m0 3.75h.008v.008H12V16.5Zm9.75-4.5a9.75 9.75 0 1 1-19.5 0 9.75 9.75 0 0 1 19.5 0Z",
       };
     case "warning":
       return {
         container:
-          "border-caution/40 bg-caution/12 text-caution-foreground shadow-lg",
+          "border-caution/50 bg-card text-foreground shadow-lg ring-1 ring-caution/15",
+        iconClass: "text-caution",
         iconPath:
           "M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z",
       };
@@ -88,19 +92,20 @@ function variantClasses(variant: ToastVariant): {
     default:
       return {
         container:
-          "border-border bg-secondary text-foreground shadow-lg",
+          "border-border bg-card text-foreground shadow-lg",
+        iconClass: "text-muted-foreground",
         iconPath:
           "M11.25 11.25 12 12m0 0 .75.75M12 12V8.25m0 7.5h.008v.008H12v-.008ZM21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
       };
   }
 }
 
-function ToastIcon({ d }: { d: string }) {
+function ToastIcon({ d, className }: { d: string; className?: string }) {
   return (
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
-      className="h-5 w-5 shrink-0"
+      className={`h-5 w-5 shrink-0 ${className ?? ""}`}
       fill="none"
       stroke="currentColor"
       strokeWidth={1.7}
@@ -125,20 +130,20 @@ function ToastItem({
     <div
       role={isAlert ? "alert" : "status"}
       aria-live={isAlert ? "assertive" : "polite"}
-      className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-md border px-3 py-2.5 backdrop-blur transition-all duration-200 ${styles.container}`}
+      className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-md border px-3 py-2.5 shadow-md transition-all duration-200 ${styles.container}`}
     >
-      <ToastIcon d={styles.iconPath} />
+      <ToastIcon d={styles.iconPath} className={styles.iconClass} />
       <div className="min-w-0 flex-1">
-        <p className="text-caption font-medium leading-snug">{toast.message}</p>
+        <p className="text-caption font-medium leading-snug text-foreground">{toast.message}</p>
         {toast.description ? (
-          <p className="mt-0.5 text-caption leading-snug opacity-85">{toast.description}</p>
+          <p className="mt-0.5 text-caption leading-snug text-muted-foreground">{toast.description}</p>
         ) : null}
       </div>
       <button
         type="button"
         onClick={() => onDismiss(toast.id)}
         aria-label="Dismiss notification"
-        className="rounded text-caption opacity-70 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-current"
+        className="rounded text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
       >
         <svg
           aria-hidden="true"

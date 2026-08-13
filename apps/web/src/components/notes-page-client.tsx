@@ -35,6 +35,10 @@ export function NotesPageClient({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     const agentFromUrl = searchParams.get("agentId") ?? searchParams.get("agent_id");
     const docFromUrl = searchParams.get("document_id") ?? searchParams.get("documentId");
+    const noteFromUrl = searchParams.get("note");
+    if (noteFromUrl && UUID_RE.test(noteFromUrl)) {
+      setSelectedId(noteFromUrl);
+    }
     if (agentFromUrl && UUID_RE.test(agentFromUrl)) {
       setSource({ kind: "agent", id: agentFromUrl });
     } else if (docFromUrl && UUID_RE.test(docFromUrl)) {

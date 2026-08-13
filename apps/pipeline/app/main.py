@@ -36,6 +36,8 @@ from app.internal_workspace import router as internal_workspace_router
 from app.internal_prompt_sets import router as internal_prompt_sets_router
 from app.internal_providers import router as internal_providers_router
 from app.internal_graphrag import router as internal_graphrag_router
+from app.internal_pipelines import router as internal_pipelines_router
+from app.internal_collections import router as internal_collections_router
 from app.workspace_repo import fetch_pipeline_settings, merge_pipeline_settings, touch_llm_cohere_last_used
 
 logger = structlog.get_logger(__name__)
@@ -97,6 +99,7 @@ app = FastAPI(
 )
 
 app.include_router(internal_ingestion_router)
+app.include_router(internal_collections_router)
 app.include_router(internal_north_router)
 app.include_router(internal_slack_router)
 app.include_router(internal_jobs_router)
@@ -111,6 +114,7 @@ app.include_router(internal_dashboard_router)
 app.include_router(internal_prompt_sets_router)
 app.include_router(internal_providers_router)
 app.include_router(internal_graphrag_router)
+app.include_router(internal_pipelines_router)
 
 
 @app.middleware("http")

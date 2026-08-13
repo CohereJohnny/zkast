@@ -2,21 +2,43 @@
 
 from __future__ import annotations
 
-from app.graph_repo import _filter_entity_ids_sql
+from unittest.mock import patch
+
+from app.graph_repo import _filter_entity_ids_sql, memory_space_entity_filter_sql
 
 
-def test_filter_entity_ids_sql_includes_agent_clause() -> None:
+def test_filter_entity_ids_sql_scopes_agent_to_documents() -> None:
+    agent = "00000000-0000-4000-8000-000000000099"
+    docs = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]
     sql, params = _filter_entity_ids_sql(
         workspace_id="ws",
         entity_types=None,
         document_id=None,
         tag=None,
-        agent_id="00000000-0000-4000-8000-000000000099",
+        agent_id=agent,
+        agent_document_ids=docs,
     )
     assert "e.agent_id" in sql
-    assert "ep.agent_id" in sql
-    assert "n.agent_id" in sql
-    assert params.count("00000000-0000-4000-8000-000000000099") == 3
+    assert "ep.document_id = ANY" in sql
+    assert "entity_notes" not in sql
+    assert agent in params
+    assert docs in params
+
+
+def test_memory_space_entity_filter_sql_resolves_agent_documents() -> None:
+    agent = "00000000-0000-4000-8000-000000000099"
+    docs = ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+    with patch(
+        "app.documents_repo.list_document_ids_for_agent",
+        return_value=docs,
+    ):
+        sql, params = memory_space_entity_filter_sql(
+            "postgresql://stub",
+            workspace_id="ws",
+            agent_id=agent,
+        )
+    assert "ep.document_id = ANY" in sql
+    assert docs in params
 
 
 def test_memory_space_graph_name_has_no_hyphens() -> None:

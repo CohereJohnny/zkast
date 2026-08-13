@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { EntityMergeDialog } from "@/components/entity-merge-dialog";
 import { GraphEdgePopover, type IncidentEdge } from "@/components/graph-edge-popover";
+import { readApiErrorMessage } from "@/lib/api-error-message";
+import { documentEvidenceHref } from "@/lib/document-evidence-link";
+import { fetchWithTimeout, readJsonResponse } from "@/lib/fetch-with-timeout";
 
 type EvidenceRow = {
   id: string;
@@ -22,9 +25,11 @@ type EvidenceRow = {
 function EvidenceSection({
   workspaceId,
   entityId,
+  sourceNotes,
 }: {
   workspaceId: string;
   entityId: string;
+  sourceNotes?: Array<{ id: string; title: string; origin: string }>;
 }) {
   const [rows, setRows] = useState<EvidenceRow[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -80,9 +85,33 @@ function EvidenceSection({
       </p>
       {error ? <p className="mt-1 text-red-300">{error}</p> : null}
       {rows.length === 0 && !error ? (
-        <p className="mt-1 text-muted-foreground">
-          No source evidence recorded yet. Re-run ingestion with LangExtract enabled to populate.
-        </p>
+        <div className="mt-1 space-y-2 text-muted-foreground">
+          <p>
+            No source passage quotes linked yet. Char-offset evidence is created during{" "}
+            <strong className="font-medium text-foreground">Extract graph</strong> (LangExtract).
+            Retry <strong className="font-medium text-foreground">Graph</strong> on the source in
+            Documents, Conversations, or Slack — evidence is filled on the next successful extract
+            run.
+          </p>
+          {sourceNotes && sourceNotes.length > 0 ? (
+            <div>
+              <p className="text-caption text-muted-foreground">Linked atomic notes (provenance):</p>
+              <ul className="mt-1 space-y-1">
+                {sourceNotes.slice(0, 8).map((n) => (
+                  <li key={n.id}>
+                    <Link
+                      className="text-primary hover:underline"
+                      href={`/notes?note=${encodeURIComponent(n.id)}`}
+                    >
+                      {n.title}
+                    </Link>{" "}
+                    <span className="text-muted-foreground">({n.origin})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
       ) : null}
       <ul className="mt-2 space-y-2">
         {rows.map((r) => (
@@ -99,7 +128,12 @@ function EvidenceSection({
             </blockquote>
             <Link
               className="mt-1 inline-block text-foreground hover:underline"
-              href={`/documents/${encodeURIComponent(r.document_id)}?page=${r.page}&highlight=${r.char_start}`}
+              href={documentEvidenceHref(r.document_id, {
+                page: r.page,
+                charStart: r.char_start,
+                charEnd: r.char_end,
+                episodeId: r.episode_id,
+              })}
             >
               View in document →
             </Link>
@@ -150,13 +184,18 @@ export function GraphSelectionPanel({
   const load = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `/api/v1/workspaces/${workspaceId}/graph/entities/${entityId}?neighbor_depth=1&neighbor_limit=40`,
-        { cache: "no-store" },
+        { cache: "no-store", timeoutMs: 30_000 },
       );
-      const body = (await res.json()) as { entity?: EntityDetail; error?: { message?: string } };
+      const body = await readJsonResponse<{ entity?: EntityDetail }>(res);
       if (!res.ok || !body.entity) {
-        setError(body.error?.message ?? "Failed to load entity");
+        setError(
+          readApiErrorMessage(
+            body,
+            res.ok ? "Entity response was empty" : "Failed to load entity",
+          ),
+        );
         setDetail(null);
         return;
       }
@@ -241,7 +280,11 @@ export function GraphSelectionPanel({
         </ul>
       </section>
 
-      <EvidenceSection workspaceId={workspaceId} entityId={entityId} />
+        <EvidenceSection
+          workspaceId={workspaceId}
+          entityId={entityId}
+          sourceNotes={detail.source_notes}
+        />
 
       <section className="mt-4">
         <p className="font-medium text-muted-foreground">Source documents / pages</p>

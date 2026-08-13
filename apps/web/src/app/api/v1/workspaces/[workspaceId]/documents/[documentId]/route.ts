@@ -35,12 +35,18 @@ export async function GET(
       failure_reason: string | null;
       created_at: string;
       updated_at: string;
+      source_kind: string;
+      collection_id: string | null;
+      collection_name: string | null;
     }>(
       `
-      SELECT id::text, original_filename, mime_type, byte_size, page_count,
-             status, failure_reason, created_at, updated_at
-      FROM documents
-      WHERE id = $1::uuid AND workspace_id = $2::uuid
+      SELECT d.id::text, d.original_filename, d.mime_type, d.byte_size, d.page_count,
+             d.status, d.failure_reason, d.created_at, d.updated_at, d.source_kind,
+             d.collection_id::text AS collection_id,
+             dc.name AS collection_name
+      FROM documents d
+      LEFT JOIN document_collections dc ON dc.id = d.collection_id
+      WHERE d.id = $1::uuid AND d.workspace_id = $2::uuid
       LIMIT 1
       `,
       [documentId, workspaceId],
@@ -59,10 +65,13 @@ export async function GET(
       ended_at: string | null;
       status: string;
       pipeline_version: string;
+      ontology_name: string;
+      ontology_version: string;
       stats: unknown;
     }>(
       `
-      SELECT id::text, started_at, ended_at, status, pipeline_version, stats
+      SELECT id::text, started_at, ended_at, status, pipeline_version,
+             ontology_name, ontology_version, stats
       FROM ingestion_runs
       WHERE document_id = $1::uuid
       ORDER BY started_at DESC

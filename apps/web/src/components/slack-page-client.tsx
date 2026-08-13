@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useToast } from "@/components/feedback-provider";
+import { SlackChannelRetryButtons } from "@/components/slack-channel-retry-buttons";
 import { useJobEvents } from "@/lib/job-events";
 
 type SyncState = {
@@ -45,15 +46,23 @@ function fmtDate(iso?: string | null): string {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
 }
 
-export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
+export function SlackPageClient({
+  workspaceId,
+  initialSources = [],
+}: {
+  workspaceId: string;
+  initialSources?: SlackSource[];
+}) {
   const toast = useToast();
-  const { registerActiveJob, requestOpenLogConsole } = useJobEvents();
+  const { registerActiveJob, requestOpenLogConsole, reconcileActiveJobs } = useJobEvents();
   const base = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/slack`;
 
   const [connected, setConnected] = useState(false);
   const [team, setTeam] = useState<string | null>(null);
 
-  const [sources, setSources] = useState<SlackSource[]>([]);
+  const [sources, setSources] = useState<SlackSource[]>(initialSources);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
+  const [sourcesLoading, setSourcesLoading] = useState(initialSources.length === 0);
   const [ranges, setRanges] = useState<Record<string, string>>({});
   const [busySource, setBusySource] = useState<string | null>(null);
 
@@ -85,12 +94,23 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
   }, [base]);
 
   const loadSources = useCallback(async () => {
+    setSourcesLoading(true);
+    setSourcesError(null);
     try {
       const res = await fetch(`${base}/sources`, { cache: "no-store" });
-      const body = (await res.json()) as { items?: SlackSource[] };
+      const body = (await res.json().catch(() => ({}))) as {
+        items?: SlackSource[];
+        error?: { message?: string };
+      };
+      if (!res.ok) {
+        setSourcesError(body.error?.message ?? `Failed to load channels (${res.status})`);
+        return;
+      }
       setSources(body.items ?? []);
-    } catch {
-      /* non-fatal */
+    } catch (e) {
+      setSourcesError(e instanceof Error ? e.message : "Failed to load channels");
+    } finally {
+      setSourcesLoading(false);
     }
   }, [base]);
 
@@ -119,9 +139,16 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     void (async () => {
       const ok = await loadConnection();
-      if (ok) void loadSources();
+      if (ok) {
+        if (initialSources.length === 0) {
+          await loadSources();
+        } else {
+          setSourcesLoading(false);
+        }
+        void reconcileActiveJobs(workspaceId);
+      }
     })();
-  }, [loadConnection, loadSources]);
+  }, [loadConnection, loadSources, initialSources.length, reconcileActiveJobs, workspaceId]);
 
   const registerChannel = useCallback(
     async (channelId: string, name: string): Promise<string | null> => {
@@ -331,11 +358,22 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
                 Refresh
               </button>
             </div>
-            {sources.length === 0 ? (
+            {sourcesError ? (
+              <p className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-caption text-destructive">
+                {sourcesError}
+              </p>
+            ) : null}
+            {sourcesLoading && sources.length === 0 ? (
+              <p className="mt-3 text-caption text-muted-foreground" role="status">
+                Loading registered channels…
+              </p>
+            ) : null}
+            {!sourcesLoading && sources.length === 0 && !sourcesError ? (
               <p className="mt-3 text-caption text-muted-foreground">
                 No channels registered yet. Add one above by ID, or browse all channels below.
               </p>
-            ) : (
+            ) : null}
+            {sources.length > 0 ? (
               <ul className="mt-3 divide-y divide-border">
                 {sources.map((s) => {
                   const busy = busySource === s.source_id;
@@ -383,6 +421,13 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
                             {dreaming === s.source_id ? "Dreaming…" : "Dream"}
                           </button>
                         </div>
+                        <SlackChannelRetryButtons
+                          workspaceId={workspaceId}
+                          sourceId={s.source_id}
+                          channelName={s.name}
+                          imported={Boolean(s.sync?.last_imported_at)}
+                          onBulkComplete={() => void reconcileActiveJobs(workspaceId)}
+                        />
                       </div>
                       <select
                         value={range}
@@ -408,7 +453,7 @@ export function SlackPageClient({ workspaceId }: { workspaceId: string }) {
                   );
                 })}
               </ul>
-            )}
+            ) : null}
           </section>
 
           {/* Browse all channels — slow (rate-limited), cached server-side. */}

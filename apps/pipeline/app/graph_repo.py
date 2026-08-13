@@ -53,8 +53,12 @@ def _filter_entity_ids_sql(
     document_id: str | None,
     tag: str | None,
     agent_id: str | None = None,
+    agent_document_ids: list[str] | None = None,
+    collection_id: str | None = None,
+    collection_document_ids: list[str] | None = None,
 ) -> tuple[str, list[Any]]:
     """Returns SQL fragment AND ... for entities e, and params."""
+    _ = workspace_id
     parts: list[str] = []
     params: list[Any] = []
     if entity_types:
@@ -72,27 +76,51 @@ def _filter_entity_ids_sql(
         )
         params.append(document_id)
     if agent_id:
-        # Agent-isolated graph rows set ``entities.agent_id`` directly; many
-        # note-derived entities only have ``entity_notes`` provenance (no
-        # ``entity_episodes``), so match all three paths.
-        parts.append(
-            """
-            (
-              e.agent_id = %s::uuid
-              OR EXISTS (
-                SELECT 1 FROM entity_episodes ee
-                JOIN episodes ep ON ep.id = ee.episode_id
-                WHERE ee.entity_id = e.id AND ep.agent_id = %s::uuid
-              )
-              OR EXISTS (
-                SELECT 1 FROM entity_notes en
-                JOIN atomic_notes n ON n.id = en.note_id
-                WHERE en.entity_id = e.id AND n.agent_id = %s::uuid
-              )
+        # Memory-space scope matches Naive RAG: entities tied to this agent's
+        # imported documents (via entity_episodes) or stamped with agent_id.
+        # We intentionally do NOT match workspace-wide entities that only
+        # appear in notes without episode provenance from this agent's docs.
+        if agent_document_ids is not None and not agent_document_ids:
+            parts.append("FALSE")
+        elif agent_document_ids:
+            parts.append(
+                """
+                (
+                  e.agent_id = %s::uuid
+                  OR EXISTS (
+                    SELECT 1 FROM entity_episodes ee
+                    JOIN episodes ep ON ep.id = ee.episode_id
+                    WHERE ee.entity_id = e.id
+                      AND ep.document_id = ANY(%s::uuid[])
+                  )
+                )
+                """
             )
-            """
-        )
-        params.extend([agent_id, agent_id, agent_id])
+            params.extend([agent_id, agent_document_ids])
+        else:
+            parts.append("e.agent_id = %s::uuid")
+            params.append(agent_id)
+    elif collection_id:
+        if collection_document_ids is not None and not collection_document_ids:
+            parts.append("FALSE")
+        elif collection_document_ids:
+            parts.append(
+                """
+                (
+                  e.collection_id = %s::uuid
+                  OR EXISTS (
+                    SELECT 1 FROM entity_episodes ee
+                    JOIN episodes ep ON ep.id = ee.episode_id
+                    WHERE ee.entity_id = e.id
+                      AND ep.document_id = ANY(%s::uuid[])
+                  )
+                )
+                """
+            )
+            params.extend([collection_id, collection_document_ids])
+        else:
+            parts.append("e.collection_id = %s::uuid")
+            params.append(collection_id)
     if tag:
         parts.append(
             """
@@ -107,6 +135,47 @@ def _filter_entity_ids_sql(
     if not parts:
         return "", []
     return " AND " + " AND ".join(parts), params
+
+
+def memory_space_entity_filter_sql(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
+    entity_types: list[str] | None = None,
+    tag: str | None = None,
+) -> tuple[str, list[Any]]:
+    """Entity filter for chat/graph memory-space scope (resolves agent/collection documents)."""
+    agent_document_ids: list[str] | None = None
+    collection_document_ids: list[str] | None = None
+    if agent_id:
+        from app.documents_repo import list_document_ids_for_agent
+
+        agent_document_ids = list_document_ids_for_agent(
+            database_url,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+        )
+    elif collection_id:
+        from app.documents_repo import list_document_ids_for_collection
+
+        collection_document_ids = list_document_ids_for_collection(
+            database_url,
+            workspace_id=workspace_id,
+            collection_id=collection_id,
+        )
+    return _filter_entity_ids_sql(
+        workspace_id=workspace_id,
+        entity_types=entity_types,
+        document_id=document_id,
+        tag=tag,
+        agent_id=agent_id,
+        agent_document_ids=agent_document_ids,
+        collection_id=collection_id,
+        collection_document_ids=collection_document_ids,
+    )
 
 
 def _expand_neighbors(
@@ -156,6 +225,7 @@ def _expand_neighbors(
 def _bfs_entity_ids(
     conn: psycopg.Connection,
     *,
+    database_url: str,
     workspace_id: str,
     seed_ids: list[str],
     depth: int,
@@ -164,16 +234,19 @@ def _bfs_entity_ids(
     document_id: str | None,
     tag: str | None,
     agent_id: str | None,
+    collection_id: str | None,
     edge_types: list[str] | None,
     valid_at: datetime | None,
 ) -> tuple[set[str], bool]:
     """Returns (entity_ids, truncated)."""
-    filt_sql, filt_params = _filter_entity_ids_sql(
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
         workspace_id=workspace_id,
-        entity_types=entity_types,
-        document_id=document_id,
-        tag=tag,
         agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
+        entity_types=entity_types,
+        tag=tag,
     )
     seeds = [s for s in seed_ids if s]
     if not seeds:
@@ -232,6 +305,7 @@ def list_graph(
     document_id: str | None = None,
     tag: str | None = None,
     agent_id: str | None = None,
+    collection_id: str | None = None,
     valid_at: datetime | None = None,
     node_limit: int = 5000,
 ) -> dict[str, Any]:
@@ -239,12 +313,14 @@ def list_graph(
     depth = max(0, min(depth, 10))
     truncated = False
 
-    filt_sql, filt_params = _filter_entity_ids_sql(
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
         workspace_id=workspace_id,
-        entity_types=entity_types,
-        document_id=document_id,
-        tag=tag,
         agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
+        entity_types=entity_types,
+        tag=tag,
     )
     va_sql, va_params = _valid_at_clause(valid_at)
     et_sql = ""
@@ -258,6 +334,7 @@ def list_graph(
         if view == "subgraph" and seed_entity_ids:
             entity_ids, truncated = _bfs_entity_ids(
                 conn,
+                database_url=database_url,
                 workspace_id=workspace_id,
                 seed_ids=seed_entity_ids,
                 depth=depth,
@@ -266,6 +343,7 @@ def list_graph(
                 document_id=document_id,
                 tag=tag,
                 agent_id=agent_id,
+                collection_id=collection_id,
                 edge_types=edge_types,
                 valid_at=valid_at,
             )
@@ -367,6 +445,7 @@ def get_entity_detail(
         ).fetchall()
         n_ids, _ = _bfs_entity_ids(
             conn,
+            database_url=database_url,
             workspace_id=workspace_id,
             seed_ids=[entity_id],
             depth=neighbor_depth,
@@ -374,6 +453,8 @@ def get_entity_detail(
             entity_types=None,
             document_id=None,
             tag=None,
+            agent_id=None,
+            collection_id=None,
             edge_types=None,
             valid_at=None,
         )

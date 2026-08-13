@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from app.graph_edit_repo import delete_entity, end_relationship, insert_manual_relationship, merge_entities
-from app.graph_repo import count_workspace_entities, list_graph
+from app.graph_repo import count_workspace_entities, get_entity_detail, list_graph
 from app.snapshots_repo import SnapshotError, create_snapshot, delete_snapshot, list_snapshots
 from tests.db_helpers import atomic_notes_table_exists, graph_snapshots_table_exists
 
@@ -55,6 +55,37 @@ def test_list_graph_subgraph_shape() -> None:
         assert "nodes" in out and "edges" in out
         ids = {n["id"] for n in out["nodes"]}
         assert e1 in ids
+    finally:
+        delete_entity(db, workspace_id=DEFAULT_WS, entity_id=e1)
+
+
+def test_get_entity_detail_neighbors() -> None:
+    db = os.environ["DATABASE_URL"]
+    if not atomic_notes_table_exists(db):
+        pytest.skip("Run Alembic migrations through 0005_notes_graph for this test")
+    e1 = str(uuid.uuid4())
+    try:
+        with psycopg.connect(db) as conn:
+            conn.execute(
+                """
+                INSERT INTO entities (id, workspace_id, type, canonical_name, aliases, summary, properties, is_user_edited)
+                VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, false)
+                """,
+                (e1, DEFAULT_WS, "Process", f"Detail-{e1[:8]}", [], "summary", Json({})),
+            )
+            conn.commit()
+        detail = get_entity_detail(
+            db,
+            workspace_id=DEFAULT_WS,
+            entity_id=e1,
+            neighbor_depth=1,
+            neighbor_limit=40,
+        )
+        assert detail is not None
+        assert detail["id"] == e1
+        assert detail["name"].startswith("Detail-")
+        assert "neighbors_summary" in detail
+        assert "incident_relationships" in detail
     finally:
         delete_entity(db, workspace_id=DEFAULT_WS, entity_id=e1)
 

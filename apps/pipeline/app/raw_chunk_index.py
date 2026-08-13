@@ -69,6 +69,9 @@ def _list_raw_chunks(
             WHERE e.workspace_id = %s::uuid
               AND e.kind IN (
                 'pdf_chunk',
+                'text_chunk',
+                'markdown_chunk',
+                'email_chunk',
                 'north_message',
                 'north_turn_window',
                 'north_tool_event'

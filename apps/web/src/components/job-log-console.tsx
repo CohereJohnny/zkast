@@ -10,11 +10,16 @@ import {
 
 import { useToast } from "@/components/feedback-provider";
 import { emitGraphInvalidated } from "@/lib/graph-events";
+import { emitPipelineActivity } from "@/lib/pipeline-activity";
 import {
   type ActiveJob,
   useActiveJobs,
   useJobEvents,
 } from "@/lib/job-events";
+import { cn } from "@/lib/utils";
+import { usePathname } from "next/navigation";
+import { DocumentsUploadChip } from "@/components/documents-upload-chip";
+import { PipelineActivityTheater } from "@/components/pipeline-activity-theater";
 
 /**
  * Live, collapsible "build log" panel for source-ingestion telemetry.
@@ -37,7 +42,10 @@ import {
  */
 
 const STORAGE_KEY = "zkast.workspace.logConsole.open";
+const STORAGE_VIEW_KEY = "zkast.workspace.logConsole.view";
 const MAX_LINES = 1500;
+
+type ConsoleView = "theater" | "log";
 
 type Level = "info" | "warning" | "error";
 
@@ -80,6 +88,7 @@ const STAGE_LABEL: Record<string, string> = {
   building_graph: "Graph",
   dreaming: "Dream",
   wiki_generation: "Wiki",
+  graphrag_indexing: "GraphRAG",
 };
 
 function classifyLevel(ev: ServerEvent): Level {
@@ -167,12 +176,20 @@ function useEventSource(
     const url = `/api/v1/jobs/${encodeURIComponent(jobId)}/events?${qs.toString()}`;
     const es = new EventSource(url);
     let closed = false;
+    let replayDone = !replayHistory;
     es.onmessage = (msg) => {
       if (closed) return;
       try {
         const ev = JSON.parse(msg.data) as ServerEvent;
+        if (ev.type === "replay_end") {
+          replayDone = true;
+          return;
+        }
         onEvent(ev);
-        if (ev.type === "job_completed" || ev.type === "job_failed") {
+        if (
+          replayDone &&
+          (ev.type === "job_completed" || ev.type === "job_failed")
+        ) {
           closed = true;
           es.close();
           onTerminal();
@@ -212,12 +229,22 @@ function JobSubscription({
   return null;
 }
 
-export function JobLogConsole() {
+export function JobLogConsole({
+  theaterFocus = false,
+  workspaceId,
+}: {
+  theaterFocus?: boolean;
+  workspaceId?: string;
+}) {
+  const pathname = usePathname();
+  const isDocumentsRoute = pathname === "/documents";
   const jobs = useActiveJobs();
-  const { unregisterActiveJob, logConsoleOpenSignal } = useJobEvents();
+  const { unregisterActiveJob, logConsoleOpenSignal, theaterFocusMode, setTheaterFocusMode } =
+    useJobEvents();
   const toast = useToast();
 
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<ConsoleView>("theater");
   const [follow, setFollow] = useState(true);
   const [levelFilter, setLevelFilter] = useState<"all" | Level>("all");
   const [jobFilter, setJobFilter] = useState<string>("all");
@@ -225,11 +252,22 @@ export function JobLogConsole() {
   const lineCounter = useRef(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
-  // Hydrate collapsed state.
+  // Hydrate collapsed state + view preference.
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(STORAGE_KEY);
       if (stored === "1") setOpen(true);
+      const v = window.localStorage.getItem(STORAGE_VIEW_KEY);
+      if (v === "log" || v === "theater") setView(v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const persistView = useCallback((next: ConsoleView) => {
+    setView(next);
+    try {
+      window.localStorage.setItem(STORAGE_VIEW_KEY, next);
     } catch {
       /* ignore */
     }
@@ -247,8 +285,9 @@ export function JobLogConsole() {
   useEffect(() => {
     if (logConsoleOpenSignal > 0) {
       persistOpen(true);
+      persistView("theater");
     }
-  }, [logConsoleOpenSignal, persistOpen]);
+  }, [logConsoleOpenSignal, persistOpen, persistView]);
 
   const handleEvent = useCallback(
     (jobId: string, ev: ServerEvent) => {
@@ -269,7 +308,12 @@ export function JobLogConsole() {
       });
       if (ev.type === "metric" && ev.name) {
         if (["entity_count", "edge_count", "note_count"].includes(ev.name)) {
-          emitGraphInvalidated();
+          const stage = ev.stage ?? "";
+          if (stage === "extracting_graph" || stage === "building_graph") {
+            emitPipelineActivity({ jobId, stage, graphTouch: true });
+          } else {
+            emitGraphInvalidated();
+          }
         }
       }
     },
@@ -331,27 +375,35 @@ export function JobLogConsole() {
   const lineCountLabel = `${filteredLines.length}${
     filteredLines.length !== lines.length ? `/${lines.length}` : ""
   } lines`;
+  const focusActive = theaterFocus && hasJobs;
+
+  useEffect(() => {
+    if (focusActive && !open) {
+      persistOpen(true);
+      persistView("theater");
+    }
+  }, [focusActive, open, persistOpen, persistView]);
 
   return (
     <section
       aria-label="Ingestion log console"
-      // ``flex-1`` only kicks in when expanded so the closed state stays
-      // as a thin header row at the bottom of the Documents column and
-      // the documents list keeps its full height. Open state shares the
-      // column 50/50 with the documents list via the parent ``flex-col``.
-      className={`flex min-h-0 flex-col rounded-lg border border-border bg-card/60 ${
-        open ? "flex-1" : ""
-      }`}
+      className={cn(
+        "flex min-h-0 flex-col rounded-lg border border-border bg-card/60",
+        open || focusActive ? "min-h-0 flex-1 basis-0" : "shrink-0",
+        focusActive && "border-caution/30 bg-card/80 shadow-[inset_0_1px_0_rgba(250,204,21,0.08)]",
+      )}
     >
-      {jobs.map((j) => (
-        <JobSubscription
-          key={j.jobId}
-          job={j}
-          replayHistory
-          onEvent={handleEvent}
-          onTerminal={handleTerminal}
-        />
-      ))}
+      {view === "log"
+        ? jobs.map((j) => (
+            <JobSubscription
+              key={j.jobId}
+              job={j}
+              replayHistory
+              onEvent={handleEvent}
+              onTerminal={handleTerminal}
+            />
+          ))
+        : null}
       <button
         type="button"
         onClick={() => persistOpen(!open)}
@@ -359,18 +411,108 @@ export function JobLogConsole() {
         className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-caption text-muted-foreground transition-colors duration-150 hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <ConsoleIcon />
-        <span className="font-medium">Pipeline log</span>
+        <span className="font-medium">Pipeline activity</span>
         <span
           className={`${hasJobs ? "text-foreground" : "text-muted-foreground"}`}
           aria-live="polite"
         >
           {hasJobs ? `${jobs.length} active` : "idle"}
         </span>
-        <span className="ml-auto text-muted-foreground">{lineCountLabel}</span>
+        {open ? (
+          <span className="flex rounded border border-border text-[10px]">
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                persistView("theater");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  persistView("theater");
+                }
+              }}
+              className={cn(
+                "cursor-pointer px-2 py-0.5",
+                view === "theater" ? "bg-caution/20 text-foreground" : "text-muted-foreground",
+              )}
+            >
+              Theater
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                persistView("log");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  persistView("log");
+                }
+              }}
+              className={cn(
+                "cursor-pointer border-l border-border px-2 py-0.5",
+                view === "log" ? "bg-caution/20 text-foreground" : "text-muted-foreground",
+              )}
+            >
+              Log
+            </span>
+          </span>
+        ) : null}
+        {hasJobs ? (
+          <span
+            role="button"
+            tabIndex={0}
+            title={theaterFocusMode ? "Restore library panels" : "Maximize theater"}
+            onClick={(e) => {
+              e.stopPropagation();
+              setTheaterFocusMode(!theaterFocusMode);
+              if (!theaterFocusMode) {
+                persistOpen(true);
+                persistView("theater");
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                setTheaterFocusMode(!theaterFocusMode);
+              }
+            }}
+            className={cn(
+              "cursor-pointer rounded border px-2 py-0.5 text-[10px]",
+              theaterFocusMode
+                ? "border-caution/50 bg-caution/15 text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {theaterFocusMode ? "Restore" : "Focus"}
+          </span>
+        ) : null}
+        {focusActive && isDocumentsRoute && workspaceId ? (
+          <DocumentsUploadChip workspaceId={workspaceId} />
+        ) : null}
+        <span className="ml-auto text-muted-foreground">
+          {view === "log" ? lineCountLabel : hasJobs ? "live" : "—"}
+        </span>
         <ChevronIcon open={open} />
       </button>
       {open ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 border-t border-border px-3 py-2">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col border-t border-border",
+            focusActive ? "gap-3 px-3 py-3" : "gap-2 px-3 py-2",
+          )}
+        >
+          {view === "theater" ? (
+            <PipelineActivityTheater expanded={focusActive} />
+          ) : (
+            <>
           <div className="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
             <label className="flex items-center gap-1">
               <span>Level</span>
@@ -449,7 +591,7 @@ export function JobLogConsole() {
                     running and check the Jobs page for queue depth.
                   </>
                 ) : (
-                  "No active jobs. Import a conversation, run Dream, or upload a PDF to see live progress here."
+                  "No active jobs. Import a conversation, run Dream, build a GraphRAG index, or upload a PDF to see live progress here."
                 )}
               </p>
             ) : (
@@ -465,6 +607,8 @@ export function JobLogConsole() {
               ))
             )}
           </div>
+            </>
+          )}
         </div>
       ) : null}
     </section>

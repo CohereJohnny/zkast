@@ -1,36 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
-import { ChatComparePanel } from "@/components/chat-compare-panel";
+import {
+  ChatComparePanel,
+  HARNESS_COMPARE_MODES,
+} from "@/components/chat-compare-panel";
 import { ChatPanel } from "@/components/chat-panel";
-
-/**
- * Sprint 6b — tabbed shell over the chat surface.
- *
- * Two views share the route:
- *
- * - ``Chat`` — the regular grounded-chat panel with the per-session
- *   retrieval strategy selector.
- * - ``Compare`` — side-by-side execution of Naive RAG, GraphRAG, and
- *   Hybrid against the same question.
- *
- * Keeping these on the same page (rather than a separate admin route)
- * is the Sprint 6b intent: every user should be able to inspect how
- * the retrieval strategies differ, not just admins.
- */
+import type { RetrievalMode } from "@/components/chat-panel";
 
 type Tab = "chat" | "compare";
+
+function parseHarnessModes(raw: string | null): RetrievalMode[] | null {
+  if (!raw) return null;
+  const modes = raw
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean) as RetrievalMode[];
+  return modes.length > 0 ? modes : null;
+}
 
 export function ChatTabsClient({
   workspaceId,
   initialAgentId,
 }: {
   workspaceId: string;
-  /** Pre-fills North agent scope when arriving from an agent-scoped surface. */
   initialAgentId?: string | null;
 }) {
-  const [tab, setTab] = useState<Tab>("chat");
+  const searchParams = useSearchParams();
+  const harnessCompare = searchParams.get("compare") === "harness";
+  const harnessModes = useMemo(
+    () => parseHarnessModes(searchParams.get("modes")) ?? HARNESS_COMPARE_MODES,
+    [searchParams],
+  );
+  const [tab, setTab] = useState<Tab>(harnessCompare ? "compare" : "chat");
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -45,14 +49,22 @@ export function ChatTabsClient({
           active={tab === "compare"}
           onClick={() => setTab("compare")}
         >
-          Compare strategies
+          {harnessCompare ? "Graph harness compare" : "Compare strategies"}
         </TabButton>
       </nav>
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === "chat" ? (
           <ChatPanel workspaceId={workspaceId} initialAgentId={initialAgentId} />
+        ) : harnessCompare ? (
+          <ChatComparePanel
+            workspaceId={workspaceId}
+            modes={harnessModes}
+            initialAgentId={initialAgentId}
+            title="Graphiti vs MS GraphRAG"
+            description="Submit one question scoped to this memory space. Graphiti uses live graph retrieval; MS GraphRAG uses global search over community reports from the latest built index."
+          />
         ) : (
-          <ChatComparePanel workspaceId={workspaceId} />
+          <ChatComparePanel workspaceId={workspaceId} initialAgentId={initialAgentId} />
         )}
       </div>
     </div>

@@ -29,6 +29,11 @@ from arq.worker import func as arq_func
 from graphiti_core.nodes import EpisodeType
 
 from app.chunking import chunk_page_text
+from app.text_ingest import (
+    decode_utf8_bytes,
+    episode_rows_for_text,
+    parse_eml_headers_and_body,
+)
 from app.config import get_settings
 from app.prompt_sets_repo import resolve_ontology
 from app.evidence_extractor import (
@@ -43,6 +48,7 @@ from app.documents_repo import (
     delete_episodes_for_document,
     fail_running_ingestion_runs_for_document,
     fetch_document,
+    fetch_ingestion_run_ontology,
     finalize_ingestion_run_success,
     list_episodes_for_ingestion_run,
     list_stalled_active_documents,
@@ -53,11 +59,12 @@ from app.documents_repo import (
     update_ingestion_run_heartbeat,
     insert_episodes,
 )
-from app.entities_repo import upsert_entity_from_graphiti
+from app.entities_repo import entity_type_from_labels, upsert_entity_from_graphiti
 from app.graphiti_factory import graphiti_for_workspace, resolve_cohere_api_key
 from app.memory_space import memory_space_graph_name
 from app.usage_events_repo import record_ingestion_tokens
 from app.job_redis import (
+    emit_activity,
     job_hset,
     publish_job_event,
     record_log,
@@ -88,6 +95,29 @@ from app.slack_transcript import build_episode_rows_from_slack_unit
 from app import entities_repo, raw_chunk_index
 
 logger = structlog.get_logger(__name__)
+
+
+def _graph_batch_thought_label(
+    entity_samples: list[str],
+    entity_count: int,
+    edge_count: int,
+) -> str:
+    """Human-readable graph extraction moment for the activity theater."""
+    names = [n.strip() for n in entity_samples if n and n.strip()]
+    if names:
+        if len(names) == 1:
+            head = names[0]
+        elif len(names) == 2:
+            head = f"{names[0]} and {names[1]}"
+        else:
+            head = f"{names[0]}, {names[1]}, and {names[2]}"
+        extra = max(0, entity_count - len(names))
+        if extra:
+            return f"Spotted {head} (+{extra} more)"
+        return f"Spotted {head}"
+    if entity_count or edge_count:
+        return f"Wired {entity_count} entities with {edge_count} relationships"
+    return "No new entities in this chunk"
 
 
 async def _index_raw_chunk_embeddings(
@@ -481,6 +511,13 @@ async def _parse_north_transcript(
         database_url=database_url,
         ingestion_run_id=ingestion_run_id,
     )
+    await emit_activity(
+        redis,
+        job_id=job_id,
+        stage="parsing",
+        label="Reading North conversation transcript…",
+        detail=f"Agent scope · {str(agent_id)[:8]}…",
+    )
 
     await asyncio.to_thread(delete_episodes_for_document, database_url, document_id=document_id)
 
@@ -537,6 +574,14 @@ async def _parse_north_transcript(
         data={"chunk_count": chunk_count},
         database_url=database_url,
         ingestion_run_id=ingestion_run_id,
+    )
+    await emit_activity(
+        redis,
+        job_id=job_id,
+        stage="parsing",
+        label=f"Transcript split into {chunk_count} conversational episodes",
+        detail="Ready for note extraction",
+        data={"chunk_count": chunk_count},
     )
     await publish_job_event(redis, job_id, "stage_completed", stage="parsing")
 
@@ -717,6 +762,149 @@ async def _parse_slack_conversation(
     )
 
 
+_EPISODE_KIND_BY_SOURCE = {
+    "text": "text_chunk",
+    "markdown": "markdown_chunk",
+    "email": "email_chunk",
+}
+
+
+async def _parse_text_like_document(
+    ctx: dict[str, Any],
+    *,
+    workspace_id: str,
+    document_id: str,
+    ingestion_run_id: str,
+    job_id: str,
+    doc: dict[str, Any],
+    source_kind: str,
+    started_at: float,
+) -> None:
+    """Parse txt / md / eml uploads into episode chunks (synthetic page 1)."""
+    redis = ctx["redis"]
+    database_url: str = ctx["database_url"]
+    storage_root: str = ctx["zkast_storage_root"]
+    episode_kind = _EPISODE_KIND_BY_SOURCE.get(source_kind, "text_chunk")
+
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="parsing",
+        message=f"Parsing {source_kind} document",
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+
+    pipe = await asyncio.to_thread(fetch_pipeline_settings, database_url, workspace_id)
+    chunk_tokens = int(pipe.get("chunk_size") or 512)
+    max_chars = max(256, chunk_tokens * 4)
+
+    path = LocalStorage.absolute_path_from_uri(doc["storage_uri"], storage_root)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+
+    raw = await asyncio.to_thread(path.read_bytes)
+    if source_kind == "email":
+        text = parse_eml_headers_and_body(raw)
+    else:
+        text = decode_utf8_bytes(raw)
+
+    await asyncio.to_thread(delete_episodes_for_document, database_url, document_id=document_id)
+    episode_rows = episode_rows_for_text(text, kind=episode_kind, max_chars=max_chars)
+
+    if episode_rows:
+        await asyncio.to_thread(
+            insert_episodes,
+            database_url,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            ingestion_run_id=ingestion_run_id,
+            rows=episode_rows,
+        )
+        await _index_raw_chunk_embeddings(
+            redis=redis,
+            database_url=database_url,
+            workspace_id=workspace_id,
+            settings=get_settings(),
+            job_id=job_id,
+            ingestion_run_id=ingestion_run_id,
+            stage="parsing",
+        )
+
+    chunk_count = len(episode_rows)
+    await emit_activity(
+        redis,
+        job_id=job_id,
+        stage="parsing",
+        label=f"Parsed {chunk_count} text chunk(s) from {source_kind}",
+    )
+    await asyncio.to_thread(
+        merge_run_stats_incremental,
+        database_url,
+        run_id=ingestion_run_id,
+        extra={
+            "chunk_count": chunk_count,
+            "page_count": 1 if chunk_count else 0,
+            "stage": "parsing_done",
+            "source_kind": source_kind,
+        },
+    )
+    await asyncio.to_thread(
+        update_document,
+        database_url,
+        document_id=document_id,
+        page_count=1 if chunk_count else 0,
+    )
+    await record_log(
+        redis,
+        job_id=job_id,
+        level="info",
+        stage="parsing",
+        message=f"Parsed {source_kind} into {chunk_count} episodes",
+        data={"chunk_count": chunk_count, "elapsed_s": round(asyncio.get_event_loop().time() - started_at, 2)},
+        database_url=database_url,
+        ingestion_run_id=ingestion_run_id,
+    )
+    await publish_job_event(redis, job_id, "stage_completed", stage="parsing")
+
+    pool = await _ensure_arq_pool(ctx)
+    enqueued = await pool.enqueue_job(
+        "generate_atomic_notes",
+        workspace_id=workspace_id,
+        document_id=document_id,
+        ingestion_run_id=ingestion_run_id,
+        job_id=job_id,
+        _job_id=f"{job_id}:notes",
+    )
+    if enqueued is None:
+        raise RuntimeError(
+            "Failed to enqueue generate_atomic_notes — arq returned None "
+            "(stage may already be queued/in-flight)."
+        )
+    await asyncio.to_thread(
+        update_document,
+        database_url,
+        document_id=document_id,
+        status="generating_notes",
+    )
+    await job_hset(
+        redis,
+        job_id,
+        status="running",
+        progress=json.dumps(
+            {"percent": 5, "stage": "generating_notes", "message": "queued_notes"}
+        ),
+    )
+    await publish_job_event(
+        redis,
+        job_id,
+        "stage_progress",
+        stage="generating_notes",
+        percent=5,
+    )
+
+
 async def parse_document(
     ctx: dict[str, Any],
     *,
@@ -740,6 +928,12 @@ async def parse_document(
         progress=json.dumps({"percent": 0, "stage": "parsing"}),
     )
     await publish_job_event(redis, job_id, "stage_started", stage="parsing")
+    await emit_activity(
+        redis,
+        job_id=job_id,
+        stage="parsing",
+        label="Opening document and scanning for readable text…",
+    )
     _started_at = asyncio.get_event_loop().time()
 
     try:
@@ -778,6 +972,20 @@ async def parse_document(
                     ingestion_run_id=ingestion_run_id,
                     job_id=job_id,
                     doc=doc,
+                )
+                return
+
+            source_kind = str(doc.get("source_kind") or "pdf")
+            if source_kind in ("text", "markdown", "email"):
+                await _parse_text_like_document(
+                    ctx,
+                    workspace_id=workspace_id,
+                    document_id=document_id,
+                    ingestion_run_id=ingestion_run_id,
+                    job_id=job_id,
+                    doc=doc,
+                    source_kind=source_kind,
+                    started_at=_started_at,
                 )
                 return
 
@@ -909,6 +1117,14 @@ async def parse_document(
                     )
 
                 chunk_count = len(episode_rows)
+                await emit_activity(
+                    redis,
+                    job_id=job_id,
+                    stage="parsing",
+                    label=f"Split {page_count} pages into {chunk_count} text chunks",
+                    detail="Chunks are ready for note extraction",
+                    data={"page_count": page_count, "chunk_count": chunk_count},
+                )
                 await asyncio.to_thread(
                     merge_run_stats_incremental,
                     database_url,
@@ -1108,9 +1324,18 @@ async def generate_atomic_notes(
                 database_url=database_url,
                 ingestion_run_id=ingestion_run_id,
             )
+            await emit_activity(
+                redis,
+                job_id=job_id,
+                stage="generating_notes",
+                label=f"Reading {len(episodes)} chunks — looking for ideas worth keeping",
+                detail=f"Up to {max_notes} atomic notes · {model}",
+                data={"episodes": len(episodes), "max_notes": max_notes},
+            )
 
             token_budget = max(400, len(episodes) * 400, max_notes * 80)
             notes_pct_last = 5
+            llm_thought_emitted = False
 
             async def _emit_notes_progress(
                 *,
@@ -1160,6 +1385,7 @@ async def generate_atomic_notes(
             await _emit_notes_progress(tokens=0)
 
             async def _progress_cb(tokens: int) -> None:
+                nonlocal llm_thought_emitted
                 await record_metric(
                     redis,
                     job_id=job_id,
@@ -1180,6 +1406,14 @@ async def generate_atomic_notes(
                     model=model,
                 )
                 await _emit_notes_progress(tokens=tokens)
+                if not llm_thought_emitted and tokens > 0:
+                    llm_thought_emitted = True
+                    await emit_activity(
+                        redis,
+                        job_id=job_id,
+                        stage="generating_notes",
+                        label="LLM is drafting note candidates from the transcript…",
+                    )
 
             async def _warning_cb(message: str, data: dict[str, Any] | None) -> None:
                 # Surface notes_llm warnings (empty stream, unparseable
@@ -1207,6 +1441,22 @@ async def generate_atomic_notes(
                     streaming=streaming_enabled,
                     progress_callback=_progress_cb,
                     warning_callback=_warning_cb,
+                )
+
+            if note_payloads:
+                note_titles = [
+                    str(p.get("title") or "").strip()
+                    for p in note_payloads[:5]
+                    if str(p.get("title") or "").strip()
+                ]
+                await emit_activity(
+                    redis,
+                    job_id=job_id,
+                    stage="generating_notes",
+                    kind="note_batch",
+                    label=f"Outlined {len(note_payloads)} atomic notes",
+                    detail=note_titles[0] if len(note_titles) == 1 else None,
+                    data={"count": len(note_payloads), "note_titles": note_titles},
                 )
 
             created_ids: list[str] = []
@@ -1370,6 +1620,21 @@ async def generate_atomic_notes(
                 database_url=database_url,
                 ingestion_run_id=ingestion_run_id,
             )
+            if created_ids and redis:
+                saved_titles = [
+                    str(p.get("title") or "").strip()
+                    for p in note_payloads[:4]
+                    if str(p.get("title") or "").strip()
+                ]
+                await emit_activity(
+                    redis,
+                    job_id=job_id,
+                    stage="generating_notes",
+                    kind="note_batch",
+                    label=f"Saved {len(created_ids)} note(s) to the workspace",
+                    detail=f"Skipped {skipped} duplicate(s)" if skipped else None,
+                    data={"count": len(created_ids), "skipped": skipped, "note_titles": saved_titles},
+                )
 
             pool = await _ensure_arq_pool(ctx)
             enqueued = await pool.enqueue_job(
@@ -1507,9 +1772,19 @@ async def extract_graph(
             agent_scope = (
                 str(doc_row.get("agent_id") or "").strip() if doc_row else None
             ) or None
-            graph_group = memory_space_graph_name(workspace_id, agent_scope)
+            collection_scope = None
+            if not agent_scope and doc_row:
+                collection_scope = (
+                    str(doc_row.get("collection_id") or "").strip() or None
+                )
+            graph_group = memory_space_graph_name(
+                workspace_id, agent_scope, collection_scope
+            )
             graphiti = await graphiti_for_workspace(
-                settings, workspace_id, agent_id=agent_scope
+                settings,
+                workspace_id,
+                agent_id=agent_scope,
+                collection_id=collection_scope,
             )
             episodes = await asyncio.to_thread(
                 list_episodes_for_ingestion_run,
@@ -1574,17 +1849,43 @@ async def extract_graph(
                 database_url=database_url,
                 ingestion_run_id=ingestion_run_id,
             )
+            await emit_activity(
+                redis,
+                job_id=job_id,
+                stage="extracting_graph",
+                label=(
+                    f"Examining {len(episodes)} episodes and {len(note_ids)} notes "
+                    "for people, places, and connections"
+                ),
+                data={"episodes": len(episodes), "notes": len(note_ids)},
+            )
 
             sem = asyncio.Semaphore(concurrency)
             counters_lock = asyncio.Lock()
 
             # Resolve the extraction ontology from the versioned prompt-set store.
-            # Defaults to the builtin generic/v1, which rebuilds the exact same
-            # entity/edge schemas, edge_type_map, and instructions as the former
-            # hardcoded entity_schemas (proven in tests/test_ontology.py). A later
-            # slice will select the version per Pipeline Configuration. Resolved
-            # once per run; closed over by the episode/note processors below.
-            _ontology = await asyncio.to_thread(resolve_ontology, database_url)
+            # Document ingest persists ontology_name/version on the ingestion_run;
+            # defaults to builtin generic/v1 when unset.
+            ont_name, ont_version = await asyncio.to_thread(
+                fetch_ingestion_run_ontology,
+                database_url,
+                ingestion_run_id=ingestion_run_id,
+            )
+            _ontology = await asyncio.to_thread(
+                resolve_ontology,
+                database_url,
+                name=ont_name,
+                version=ont_version,
+                workspace_id=workspace_id,
+            )
+            await record_log(
+                redis,
+                job_id=job_id,
+                level="info",
+                stage="extracting_graph",
+                message=f"Using ontology {ont_name}/{ont_version}",
+                data={"ontology_name": ont_name, "ontology_version": ont_version},
+            )
             ontology_entity_types = _ontology.build_entity_types()
             ontology_edge_types = _ontology.build_edge_types()
             ontology_edge_type_map = _ontology.build_edge_type_map()
@@ -1610,6 +1911,9 @@ async def extract_graph(
                 ep_id = str(ep["id"])
                 local_entities = 0
                 local_edges = 0
+                entity_samples: list[str] = []
+                delta_nodes: list[dict[str, str]] = []
+                delta_edges: list[dict[str, str]] = []
                 # ``entity_index`` keys (normalized_name, type) → canonical
                 # entity uuid for this episode. Used by the LangExtract
                 # evidence link step below.
@@ -1628,9 +1932,21 @@ async def extract_graph(
                             episode_id=ep_id,
                             note_id=None,
                             agent_id=agent_scope,
+                            collection_id=collection_scope,
                         )
                         local_entities += 1
+                        if node.name and len(entity_samples) < 6:
+                            entity_samples.append(str(node.name))
                         if eid:
+                            etype = entity_type_from_labels(list(node.labels or []))
+                            if len(delta_nodes) < 20:
+                                delta_nodes.append(
+                                    {
+                                        "id": eid,
+                                        "name": str(node.name or "")[:120],
+                                        "type": etype,
+                                    }
+                                )
                             # Index by every non-Entity label so a LangExtract
                             # span that picked a slightly different type can
                             # still match.
@@ -1663,7 +1979,7 @@ async def extract_graph(
                     if not src or not tgt:
                         continue
                     try:
-                        await asyncio.to_thread(
+                        rid = await asyncio.to_thread(
                             insert_relationship_from_graphiti,
                             database_url,
                             workspace_id=workspace_id,
@@ -1678,8 +1994,18 @@ async def extract_graph(
                             episode_id=ep_id,
                             note_id=None,
                             agent_id=agent_scope,
+                            collection_id=collection_scope,
                         )
                         local_edges += 1
+                        if len(delta_edges) < 25:
+                            delta_edges.append(
+                                {
+                                    "id": rid,
+                                    "source": src,
+                                    "target": tgt,
+                                    "type": str(edge.name or "RELATED_TO")[:120],
+                                }
+                            )
                     except psycopg.errors.ForeignKeyViolation:
                         logger.warning(
                             "relationship_skipped_provenance_gone",
@@ -1771,6 +2097,24 @@ async def extract_graph(
                     database_url=database_url,
                     ingestion_run_id=ingestion_run_id,
                 )
+                await publish_job_event(
+                    redis,
+                    job_id,
+                    "activity",
+                    stage="extracting_graph",
+                    kind="graph_batch",
+                    label=_graph_batch_thought_label(entity_samples, local_entities, local_edges),
+                    detail=f"Episode {idx + 1} of {len(episodes)}",
+                    data={
+                        "episode_index": idx,
+                        "episode_total": len(episodes),
+                        "delta_entities": local_entities,
+                        "delta_edges": local_edges,
+                        "entity_samples": entity_samples[:5],
+                        "nodes": delta_nodes,
+                        "edges": delta_edges,
+                    },
+                )
                 await record_metric(
                     redis,
                     job_id=job_id,
@@ -1822,11 +2166,14 @@ async def extract_graph(
                 note_agent = (
                     str(note_row.get("agent_id") or "").strip() if note_row else None
                 ) or agent_scope
+                note_collection = None if note_agent else collection_scope
                 local_entities = 0
                 local_edges = 0
+                delta_nodes: list[dict[str, str]] = []
+                delta_edges: list[dict[str, str]] = []
                 for node in res.nodes:
                     try:
-                        await asyncio.to_thread(
+                        eid = await asyncio.to_thread(
                             upsert_entity_from_graphiti,
                             database_url,
                             workspace_id=workspace_id,
@@ -1838,8 +2185,17 @@ async def extract_graph(
                             episode_id=None,
                             note_id=nid,
                             agent_id=note_agent,
+                            collection_id=note_collection,
                         )
                         local_entities += 1
+                        if eid and len(delta_nodes) < 20:
+                            delta_nodes.append(
+                                {
+                                    "id": eid,
+                                    "name": str(node.name or "")[:120],
+                                    "type": entity_type_from_labels(list(node.labels or [])),
+                                }
+                            )
                     except psycopg.errors.ForeignKeyViolation:
                         logger.warning("entity_skipped_note_gone", note_id=nid)
                 for edge in res.edges:
@@ -1856,7 +2212,7 @@ async def extract_graph(
                     if not src or not tgt:
                         continue
                     try:
-                        await asyncio.to_thread(
+                        rid = await asyncio.to_thread(
                             insert_relationship_from_graphiti,
                             database_url,
                             workspace_id=workspace_id,
@@ -1871,10 +2227,31 @@ async def extract_graph(
                             episode_id=None,
                             note_id=nid,
                             agent_id=note_agent,
+                            collection_id=note_collection,
                         )
                         local_edges += 1
+                        if len(delta_edges) < 25:
+                            delta_edges.append(
+                                {
+                                    "id": rid,
+                                    "source": src,
+                                    "target": tgt,
+                                    "type": str(edge.name or "RELATED_TO")[:120],
+                                }
+                            )
                     except psycopg.errors.ForeignKeyViolation:
                         logger.warning("relationship_skipped_note_gone", note_id=nid)
+
+                if (delta_nodes or delta_edges) and redis:
+                    await publish_job_event(
+                        redis,
+                        job_id,
+                        "activity",
+                        stage="building_graph",
+                        kind="graph_batch",
+                        label=f"Note graph — +{local_entities} entities, +{local_edges} edges",
+                        data={"nodes": delta_nodes, "edges": delta_edges},
+                    )
 
                 async with counters_lock:
                     counters["entity"] += local_entities
@@ -1981,6 +2358,13 @@ async def extract_graph(
                 data={"entities": entity_count, "edges": edge_count},
                 database_url=database_url,
                 ingestion_run_id=ingestion_run_id,
+            )
+            await emit_activity(
+                redis,
+                job_id=job_id,
+                stage="building_graph",
+                kind="graph_batch",
+                label=f"Graph ready — {entity_count} entities linked by {edge_count} relationships",
             )
             await publish_job_event(redis, job_id, "stage_completed", stage="building_graph")
             await publish_job_event(redis, job_id, "job_completed", status="succeeded")

@@ -9,6 +9,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from app.transcript_episodes import validate_import_settings
+
 
 def _uuid(row: dict[str, Any], key: str) -> None:
     if row.get(key) is not None:
@@ -25,6 +27,64 @@ def _serialize_north_agent_row(row: dict[str, Any]) -> dict[str, Any]:
         if v is not None and hasattr(v, "isoformat"):
             r[ts] = v.isoformat()
     return r
+
+
+def merge_north_agent_import_settings(
+    existing: dict[str, Any] | None,
+    *,
+    import_settings_patch: dict[str, Any] | None = None,
+    user_messages_only: bool | None = None,
+) -> dict[str, Any]:
+    """Merge a patch into stored import settings, applying ``user_messages_only`` sugar."""
+    merged = dict(existing or {})
+    if import_settings_patch:
+        merged.update(import_settings_patch)
+    if user_messages_only is not None:
+        merged["user_messages_only"] = user_messages_only
+        if user_messages_only:
+            merged["include_roles"] = ["user"]
+            merged["exclude_roles"] = ["system", "assistant", "tool"]
+        else:
+            merged.pop("include_roles", None)
+            merged.pop("exclude_roles", None)
+    return merged
+
+
+def update_north_agent_import_settings(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str,
+    import_settings_patch: dict[str, Any] | None = None,
+    user_messages_only: bool | None = None,
+) -> dict[str, Any] | None:
+    agent = fetch_north_agent(database_url, workspace_id=workspace_id, agent_id=agent_id)
+    if not agent:
+        return None
+    existing = agent.get("import_settings")
+    existing_dict = dict(existing) if isinstance(existing, dict) else {}
+    merged = merge_north_agent_import_settings(
+        existing_dict,
+        import_settings_patch=import_settings_patch,
+        user_messages_only=user_messages_only,
+    )
+    validate_import_settings(merged)
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            UPDATE north_agents
+            SET import_settings = %s::jsonb, updated_at = now()
+            WHERE id = %s::uuid AND workspace_id = %s::uuid
+            RETURNING *
+            """,
+            (Json(merged), agent_id, workspace_id),
+        ).fetchone()
+        conn.commit()
+    if not row:
+        return None
+    return _serialize_north_agent_row(dict(row))
+
+
 def upsert_north_agent(
     database_url: str,
     *,
@@ -45,7 +105,10 @@ def upsert_north_agent(
             ON CONFLICT (workspace_id, provider, external_agent_id)
             DO UPDATE SET
               display_name = EXCLUDED.display_name,
-              import_settings = EXCLUDED.import_settings,
+              import_settings = CASE
+                WHEN %s THEN EXCLUDED.import_settings
+                ELSE north_agents.import_settings
+              END,
               updated_at = now()
             RETURNING *
             """,
@@ -56,6 +119,7 @@ def upsert_north_agent(
                 provider,
                 display_name[:500],
                 Json(import_settings or {}),
+                import_settings is not None,
             ),
         ).fetchone()
         conn.commit()

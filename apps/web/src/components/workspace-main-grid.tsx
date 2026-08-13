@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 import { GraphWorkspacePanel } from "@/components/graph-workspace-panel";
 import { JobLogConsole } from "@/components/job-log-console";
+import { useActiveJobs, useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEY_DOCS = "zkast.workspace.documentsCollapsed";
@@ -97,18 +98,49 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
   const isWikiRoute = pathname === "/wiki" || pathname.startsWith("/wiki/");
   const isEvalsRoute = pathname === "/evals" || pathname.startsWith("/evals/");
   const isSlackRoute = pathname === "/slack" || pathname.startsWith("/slack/");
+  const isGraphragRoute = pathname === "/graphrag";
+  const isGraphRoute = pathname === "/graph";
+  const { theaterFocusMode } = useJobEvents();
+  const activeJobs = useActiveJobs();
+  const hasGraphragJob = activeJobs.some((j) => j.kind === "graphrag_index");
   const dockJobLog =
     isConversationsRoute ||
     isJobsRoute ||
     isAgentDetailRoute ||
     isWikiRoute ||
     isEvalsRoute ||
-    isSlackRoute;
+    isSlackRoute ||
+    isGraphragRoute ||
+    (isGraphRoute && hasGraphragJob);
   // The main column on /graph is already a full graph view; don't render the
   // right-rail mini graph next to it.
   const showRailGraph = pathname !== "/graph";
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [graphCollapsed, setGraphCollapsed] = useState(false);
+  const theaterFocus = theaterFocusMode && activeJobs.length > 0;
+  const ingestTheaterKinds = new Set([
+    "document_parse",
+    "generate_atomic_notes",
+    "extract_graph",
+    "graphrag_index",
+  ]);
+  const hasIngestTheaterJob = activeJobs.some(
+    (j) => j.kind != null && ingestTheaterKinds.has(j.kind),
+  );
+  const theaterSplit =
+    isDocumentsRoute && (theaterFocus || hasIngestTheaterJob);
+
+  useEffect(() => {
+    if (!theaterSplit) return;
+    setDocsCollapsed(true);
+    setGraphCollapsed(false);
+    try {
+      window.localStorage.setItem(STORAGE_KEY_DOCS, "1");
+      window.localStorage.setItem(STORAGE_KEY_GRAPH, "0");
+    } catch {
+      /* ignore */
+    }
+  }, [theaterSplit]);
 
   useEffect(() => {
     try {
@@ -154,8 +186,9 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
 
   let gridClass: string;
   if (isDocumentsRoute) {
-    // /documents: library + job log column; collapsible graph rail on the right.
-    if (docsCollapsed && graphCollapsed) {
+    if (theaterSplit) {
+      gridClass = `${GRID_BASE} lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]`;
+    } else if (docsCollapsed && graphCollapsed) {
       gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)_2.25rem]`;
     } else if (docsCollapsed) {
       gridClass = `${GRID_BASE} lg:grid-cols-[2.25rem_minmax(0,1fr)]`;
@@ -188,14 +221,48 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
     return graphCollapsed ? (
       <CollapseRail onExpand={toggleGraph} label="Graph" side="right" />
     ) : (
-      <GraphWorkspacePanel workspaceId={workspaceId} onCollapse={toggleGraph} />
+      <div className="flex h-full min-h-0 flex-col overflow-hidden">
+        <GraphWorkspacePanel
+          workspaceId={workspaceId}
+          onCollapse={toggleGraph}
+          fullHeight
+        />
+      </div>
     );
   };
 
+  const renderDockedColumn = (content: ReactNode) => (
+    <>
+      {theaterFocus ? (
+        <div className="hidden" aria-hidden>
+          {content}
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">{content}</div>
+      )}
+      <JobLogConsole theaterFocus={theaterFocus} workspaceId={workspaceId} />
+    </>
+  );
+
   return (
-    <div className="flex h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden">
+    <div className={cn("flex h-[calc(100vh-2rem)] flex-col overflow-hidden", theaterFocus ? "gap-2" : "gap-4")}>
       <div className={gridClass}>
         {isDocumentsRoute ? (
+          theaterSplit ? (
+            <>
+              <div className="flex h-full min-h-0 flex-col overflow-hidden">
+                <GraphWorkspacePanel workspaceId={workspaceId} fullHeight theaterMode />
+              </div>
+              <section
+                id="main-content"
+                tabIndex={-1}
+                aria-label="Ingestion theater"
+                className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-caution/25 bg-card outline-none"
+              >
+                <JobLogConsole theaterFocus={theaterFocus} workspaceId={workspaceId} />
+              </section>
+            </>
+          ) : (
           <>
             {docsCollapsed ? (
               <CollapseRail
@@ -208,21 +275,21 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
                 id="main-content"
                 tabIndex={-1}
                 aria-label="Documents"
-                className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-lg border border-input bg-card p-4 outline-none"
+                className={cn(
+                  "flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-input bg-card outline-none",
+                  theaterFocus ? "gap-1 p-2" : "gap-3 p-4",
+                )}
               >
-                <div className="flex items-center gap-2">
-                  <CollapseHeaderButton
-                    onCollapse={toggleDocs}
-                    label="Documents"
-                    side="left"
-                  />
-                </div>
-                {/* Library panel takes the bulk of the column and scrolls
-                    inside; the log is bounded below — when open it
-                    shares the column ~50/50, when closed it shrinks to
-                    a thin header. */}
-                <div className="min-h-0 flex-1 overflow-auto">{children}</div>
-                <JobLogConsole />
+                {!theaterFocus ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <CollapseHeaderButton
+                      onCollapse={toggleDocs}
+                      label="Documents"
+                      side="left"
+                    />
+                  </div>
+                ) : null}
+                {renderDockedColumn(children)}
               </section>
             )}
             {/* Both rails collapsed: middle cell is an expand spacer. */}
@@ -231,39 +298,40 @@ export function WorkspaceMainGrid({ workspaceId, children }: Props) {
             ) : null}
             {renderGraphCell()}
           </>
+          )
         ) : (
           <>
             <section
               id="main-content"
               tabIndex={-1}
               aria-label={
-                isConversationsRoute
-                  ? "Conversations"
-                  : isJobsRoute
-                    ? "Jobs"
-                    : isAgentDetailRoute
-                      ? "Agent conversations"
-                      : isWikiRoute
-                        ? "Wiki"
-                        : isSlackRoute
-                          ? "Slack"
-                          : "Main workspace panel"
+                isGraphRoute
+                  ? "Graph"
+                  : isConversationsRoute
+                    ? "Conversations"
+                    : isJobsRoute
+                      ? "Jobs"
+                      : isAgentDetailRoute
+                        ? "Agent conversations"
+                        : isWikiRoute
+                          ? "Wiki"
+                          : isSlackRoute
+                            ? "Slack"
+                            : isGraphragRoute
+                              ? "GraphRAG"
+                              : "Main workspace panel"
               }
               className={cn(
                 "flex min-h-0 flex-col rounded-lg border border-input bg-card outline-none",
-                dockJobLog ? "gap-3 overflow-hidden p-4" : "overflow-auto",
+                isGraphRoute
+                  ? "h-full min-h-0 overflow-hidden p-0"
+                  : dockJobLog
+                    ? "overflow-hidden"
+                    : "overflow-auto",
+                dockJobLog && (theaterFocus ? "gap-1 p-2" : "gap-3 p-4"),
               )}
             >
-              {dockJobLog ? (
-                <>
-                  {/* Same split as Documents column: scroll library; dock log below
-                      so ingestion traces stay visible while browsing imports. */}
-                  <div className="min-h-0 flex-1 overflow-auto">{children}</div>
-                  <JobLogConsole />
-                </>
-              ) : (
-                children
-              )}
+              {dockJobLog ? renderDockedColumn(children) : children}
             </section>
             {renderGraphCell()}
           </>

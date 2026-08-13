@@ -11,6 +11,8 @@
   "dependencies": {
     "@opentelemetry/sdk-node": "^0.217.0",
     "@react-sigma/core": "^5.0.6",
+    "@sigma/edge-curve": "^3.1.0",
+    "@sigma/node-border": "^3.0.0",
     "@tailwindcss/postcss": "4.1.18",
     "@tanstack/react-query": "^5.100.10",
     "class-variance-authority": "0.7.1",

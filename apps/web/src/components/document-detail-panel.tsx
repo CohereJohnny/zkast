@@ -2,8 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { IngestionRetrySection } from "@/components/ingestion-retry-buttons";
+import {
+  DEFAULT_ONTOLOGY,
+  OntologyPicker,
+  type OntologyChoice,
+} from "@/components/ontology-picker";
 import { useToast } from "@/components/feedback-provider";
 import { emitGraphInvalidated } from "@/lib/graph-events";
+import { messageFromApiJson } from "@/lib/ingestion-retry";
 
 type IngestionRun = {
   id: string;
@@ -11,6 +18,8 @@ type IngestionRun = {
   ended_at: string | null;
   status: string;
   pipeline_version: string;
+  ontology_name?: string | null;
+  ontology_version?: string | null;
   stats: unknown;
 };
 
@@ -24,6 +33,9 @@ type DocDetail = {
   failure_reason: string | null;
   created_at: string;
   updated_at: string;
+  source_kind?: string | null;
+  collection_id?: string | null;
+  collection_name?: string | null;
 };
 
 type DeletePreview = {
@@ -32,31 +44,6 @@ type DeletePreview = {
   entity_touch_count: number;
   relationship_touch_count: number;
 };
-
-/** Next routes may return `{ error }`; proxied FastAPI uses `{ detail: string | { error?: { message } } }`. */
-function messageFromApiJson(raw: string): string | null {
-  try {
-    const j = JSON.parse(raw) as Record<string, unknown>;
-    const topErr = j.error;
-    if (typeof topErr === "object" && topErr !== null && "message" in topErr) {
-      const m = (topErr as { message?: unknown }).message;
-      if (typeof m === "string" && m.trim()) return m;
-    }
-    const det = j.detail;
-    if (typeof det === "string" && det.trim()) return det;
-    if (typeof det === "object" && det !== null) {
-      const d = det as Record<string, unknown>;
-      const inner = d.error;
-      if (typeof inner === "object" && inner !== null && "message" in inner) {
-        const m = (inner as { message?: unknown }).message;
-        if (typeof m === "string" && m.trim()) return m;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
 
 function ingestionRunStatusLabel(status: string): string {
   switch (status) {
@@ -109,7 +96,6 @@ export function DocumentDetailPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [retryBusy, setRetryBusy] = useState<string | null>(null);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [preview, setPreview] = useState<DeletePreview | null>(null);
@@ -119,6 +105,7 @@ export function DocumentDetailPanel({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [force, setForce] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [reingestOntology, setReingestOntology] = useState<OntologyChoice>(DEFAULT_ONTOLOGY);
   const toast = useToast();
 
   const reingestRef = useRef<HTMLInputElement>(null);
@@ -140,7 +127,15 @@ export function DocumentDetailPanel({
         return;
       }
       setDoc(body.document);
-      setRuns(body.ingestion_runs ?? []);
+      const nextRuns = body.ingestion_runs ?? [];
+      setRuns(nextRuns);
+      const latest = nextRuns[0];
+      if (latest?.ontology_name && latest?.ontology_version) {
+        setReingestOntology({
+          name: latest.ontology_name,
+          version: latest.ontology_version,
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load document");
     } finally {
@@ -187,35 +182,6 @@ export function DocumentDetailPanel({
   useEffect(() => {
     if (deleteOpen) void loadPreview();
   }, [deleteOpen, loadPreview]);
-
-  const postRetry = async (from_stage: "parsing" | "generating_notes" | "extracting_graph") => {
-    setActionError(null);
-    setRetryBusy(from_stage);
-    try {
-      const res = await fetch(`/api/v1/workspaces/${workspaceId}/documents/${documentId}/ingestion-runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from_stage }),
-      });
-      const raw = await res.text();
-      let j: { job_id?: string; error?: { message?: string } } = {};
-      try {
-        j = JSON.parse(raw) as typeof j;
-      } catch {
-        /* ignore */
-      }
-      if (!res.ok) {
-        setActionError(messageFromApiJson(raw) ?? `Retry failed (${res.status})`);
-        return;
-      }
-      if (j.job_id) {
-        onJobStarted(documentId, j.job_id);
-      }
-      await load();
-    } finally {
-      setRetryBusy(null);
-    }
-  };
 
   const ingestionActive = doc
     ? new Set([
@@ -264,6 +230,8 @@ export function DocumentDetailPanel({
     const fd = new FormData();
     fd.append("file", file);
     fd.append("replaces_document_id", documentId);
+    fd.append("ontology_name", reingestOntology.name);
+    fd.append("ontology_version", reingestOntology.version);
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/documents`, {
       method: "POST",
       body: fd,
@@ -307,6 +275,12 @@ export function DocumentDetailPanel({
                 {(doc.byte_size / 1024).toFixed(1)} KB ·{" "}
                 <span className="text-muted-foreground">{doc.status.replace(/_/g, " ")}</span>
               </p>
+              {doc.collection_name ? (
+                <p className="mt-1 text-caption text-teal-100/90">
+                  Collection: {doc.collection_name}
+                  <span className="text-muted-foreground"> (read-only)</span>
+                </p>
+              ) : null}
               <p className="mt-1 text-caption text-muted-foreground/90">
                 Current pipeline stage for this document. Each ingestion run below is one attempt (newest first).
               </p>
@@ -334,40 +308,36 @@ export function DocumentDetailPanel({
           </p>
         ) : null}
 
-        <section aria-label="Retry ingestion" className="mb-6">
-          <p className="text-p font-medium text-muted-foreground">Retry from stage</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {(
-              [
-                ["parsing", "Parsing"],
-                ["generating_notes", "Notes"],
-                ["extracting_graph", "Graph"],
-              ] as const
-            ).map(([stage, label]) => (
-              <button
-                key={stage}
-                type="button"
-                disabled={retryBusy !== null}
-                className="rounded-md border border-input px-2 py-1 text-caption text-muted-foreground hover:bg-card disabled:opacity-50"
-                onClick={() => void postRetry(stage)}
-              >
-                {retryBusy === stage ? "…" : label}
-              </button>
-            ))}
-          </div>
-        </section>
+        <IngestionRetrySection
+          workspaceId={workspaceId}
+          documentId={documentId}
+          disabled={ingestionActive}
+          onJobStarted={onJobStarted}
+          onError={setActionError}
+          onComplete={() => void load()}
+          className="mb-6"
+        />
 
         {doc ? (
-          doc.mime_type === "application/pdf" ? (
+          ["application/pdf", "text/plain", "text/markdown", "message/rfc822"].includes(
+            doc.mime_type,
+          ) ? (
             <section aria-label="Re-ingest" className="mb-6">
-              <p className="text-p font-medium text-muted-foreground">Re-ingest (new PDF)</p>
+              <p className="text-p font-medium text-muted-foreground">Re-ingest (new file)</p>
               <p className="mt-1 text-caption text-muted-foreground">
                 Upload replaces this document id in metadata; prior episodes and notes are kept until you delete them.
               </p>
+              <OntologyPicker
+                workspaceId={workspaceId}
+                value={reingestOntology}
+                onChange={setReingestOntology}
+                className="mt-2 max-w-xs"
+                compact
+              />
               <input
                 ref={reingestRef}
                 type="file"
-                accept="application/pdf,.pdf"
+                accept="application/pdf,.pdf,text/plain,.txt,text/markdown,.md,.markdown,message/rfc822,.eml"
                 className="sr-only"
                 onChange={(e) => void onReingestPick(e)}
               />
@@ -376,7 +346,7 @@ export function DocumentDetailPanel({
                 className="mt-2 rounded-md bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground"
                 onClick={() => reingestRef.current?.click()}
               >
-                Choose replacement PDF
+                Choose replacement file
               </button>
             </section>
           ) : (
@@ -415,6 +385,12 @@ export function DocumentDetailPanel({
                     <span className="text-muted-foreground"> · </span>
                     {new Date(r.started_at).toLocaleString()}
                     {r.ended_at ? ` → ${new Date(r.ended_at).toLocaleString()}` : ""}
+                    {r.ontology_name && r.ontology_version ? (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · ontology {r.ontology_name}/{r.ontology_version}
+                      </span>
+                    ) : null}
                   </li>
                 );
               })}

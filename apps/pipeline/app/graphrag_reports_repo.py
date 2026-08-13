@@ -62,10 +62,11 @@ def fetch_reports_for_space(
     *,
     workspace_id: str,
     agent_id: str | None,
+    collection_id: str | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
     """Top community reports (by rank) from the latest READY index for a memory
-    space (agent or whole workspace). Empty if no ready index exists.
+    space (agent, collection, or whole workspace). Empty if no ready index exists.
     """
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         idx = conn.execute(
@@ -73,11 +74,12 @@ def fetch_reports_for_space(
             SELECT id FROM graphrag_indexes
             WHERE workspace_id = %s::uuid
               AND agent_id IS NOT DISTINCT FROM %s::uuid
+              AND collection_id IS NOT DISTINCT FROM %s::uuid
               AND status = 'ready'
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (workspace_id, agent_id),
+            (workspace_id, agent_id, collection_id),
         ).fetchone()
         if not idx:
             return []

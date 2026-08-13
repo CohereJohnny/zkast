@@ -1,0 +1,21 @@
+# Auto-tune advantage preset: Graphiti generic_v1 vs GraphRAG auto-tuned ontology.
+# Ontology is intentionally varied — not a fair apples-to-apples comparison.
+name: harness-graphrag-autotune
+description: >-
+  Graphiti generic_v1 vs MS GraphRAG with auto-tuned ontology. Ontology differs
+  by design to measure auto-tune benefit; use harness-graphiti-vs-graphrag for fair compare.
+is_builtin: true
+version: 1
+extractor: graphiti
+ontology_version: generic_v1
+graph_store: graphiti_falkor
+retrieval_strategy: graph
+provider: cohere_compat
+params:
+  harness_role: graphiti_generic
+  compare_with:
+    name: harness-graphrag-autotune-ms
+    extractor: graphrag
+    ontology_version: auto_tuned
+    graph_store: graphrag_artifacts
+    retrieval_strategy: ms_graphrag

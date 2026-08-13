@@ -37,6 +37,24 @@ HYBRID_PATH_STRATEGY = "hybrid_path_v1"
 HYBRID_VECTOR_STRATEGY = "hybrid_vector_v1"
 
 
+def _memory_scope_ids(
+    scope: dict[str, Any],
+) -> tuple[str | None, str | None, str | None]:
+    agent_id = str(scope.get("agent_id") or "").strip() or None
+    collection_id = (
+        None
+        if agent_id
+        else (str(scope.get("collection_id") or "").strip() or None)
+    )
+    document_id: str | None = None
+    doc_ids = scope.get("document_ids") or []
+    if isinstance(doc_ids, list) and doc_ids:
+        document_id = str(doc_ids[0]).strip() or None
+    elif isinstance(doc_ids, str) and doc_ids.strip():
+        document_id = doc_ids.split(",")[0].strip() or None
+    return agent_id, collection_id, document_id
+
+
 async def retrieve(
     settings: Any,
     database_url: str,
@@ -52,6 +70,8 @@ async def retrieve(
     LLM treats it as the primary grounding."""
     if not query_text.strip():
         return [], [], 0, False, HYBRID_VECTOR_STRATEGY
+
+    agent_id, collection_id, document_id = _memory_scope_ids(scope)
 
     # ---- Intent + handler dispatch --------------------------------------
     try:
@@ -82,6 +102,9 @@ async def retrieve(
                 database_url,
                 workspace_id=workspace_id,
                 intent=intent,
+                agent_id=agent_id,
+                collection_id=collection_id,
+                document_id=document_id,
             )
             if handler_docs:
                 chosen_strategy = HYBRID_TYPED_STRATEGY
@@ -99,6 +122,9 @@ async def retrieve(
                 database_url,
                 workspace_id=workspace_id,
                 intent=intent,
+                agent_id=agent_id,
+                collection_id=collection_id,
+                document_id=document_id,
             )
             if handler_docs:
                 chosen_strategy = HYBRID_PATH_STRATEGY

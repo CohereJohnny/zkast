@@ -9,6 +9,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.memory_space import list_memory_space_graph_names, memory_space_graph_name
+from app.graphrag_index_repo import fetch_latest_index, list_graphrag_indexes
+from app.graphrag_indexer import SAMPLE_INDEX_KINDS
 from app.north_repo import (
     fetch_agent_stats,
     fetch_conversation_memory_stats_by_agent,
@@ -83,6 +85,121 @@ def _entities_by_agent(conn: psycopg.Connection, workspace_id: str) -> list[dict
         aid = r.get("agent_id")
         out.append({"agent_id": str(aid) if aid else None, "count": int(r["c"])})
     return out
+
+
+def _corpus_doc_count(
+    conn: psycopg.Connection, *, workspace_id: str, agent_id: str | None
+) -> int:
+    """Documents in scope for GraphRAG indexing (mirrors export_corpus kinds)."""
+    if agent_id:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)::int AS c FROM retrieval_embeddings
+            WHERE workspace_id = %s::uuid AND agent_id = %s::uuid
+              AND index_kind = ANY(%s)
+            """,
+            (workspace_id, agent_id, list(SAMPLE_INDEX_KINDS)),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)::int AS c FROM retrieval_embeddings
+            WHERE workspace_id = %s::uuid AND agent_id IS NULL
+              AND index_kind = ANY(%s)
+            """,
+            (workspace_id, list(SAMPLE_INDEX_KINDS)),
+        ).fetchone()
+    return int(row["c"]) if row else 0
+
+
+def _compare_for_space(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str | None,
+    graph: dict[str, Any],
+    graphrag: dict[str, Any] | None,
+) -> dict[str, Any]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        corpus_now = _corpus_doc_count(conn, workspace_id=workspace_id, agent_id=agent_id)
+    stats = (graphrag or {}).get("stats") if isinstance((graphrag or {}).get("stats"), dict) else {}
+    build_docs = int(stats.get("documents") or 0) if stats else 0
+    growth_ratio = (corpus_now / build_docs) if build_docs > 0 else None
+    stale = growth_ratio is not None and growth_ratio > 1.1
+    return {
+        "graphiti": {
+            "entities": int(graph.get("entities") or 0),
+            "relationships": int(graph.get("relationships") or 0),
+        },
+        "graphrag": {
+            "status": (graphrag or {}).get("status"),
+            "index_id": (graphrag or {}).get("index_id"),
+            "entities": int(stats.get("entities") or 0) if stats else 0,
+            "relationships": int(stats.get("relationships") or 0) if stats else 0,
+            "communities": int(stats.get("communities") or 0) if stats else 0,
+            "community_reports": int(stats.get("community_reports") or 0) if stats else 0,
+            "build_documents": build_docs,
+            "ended_at": (graphrag or {}).get("ended_at"),
+        },
+        "corpus_now": corpus_now,
+        "stale": stale,
+    }
+
+
+def _graphrag_workspace_summary(database_url: str, *, workspace_id: str) -> dict[str, Any]:
+    """Latest GraphRAG index row per memory space (agent_id NULL = workspace)."""
+    indexes = list_graphrag_indexes(database_url, workspace_id=workspace_id)
+    by_space: dict[str | None, dict[str, Any]] = {}
+    for row in indexes:
+        aid = row.get("agent_id")
+        key = str(aid) if aid else None
+        if key not in by_space:
+            by_space[key] = row
+    spaces = []
+    for aid, row in by_space.items():
+        stats = row.get("stats") if isinstance(row.get("stats"), dict) else {}
+        spaces.append(
+            {
+                "agent_id": aid,
+                "index_id": row.get("id"),
+                "status": row.get("status"),
+                "provider": row.get("provider"),
+                "ontology_name": row.get("ontology_name"),
+                "ontology_version": row.get("ontology_version"),
+                "stats": stats,
+                "failure_reason": row.get("failure_reason"),
+                "created_at": row.get("created_at"),
+                "ended_at": row.get("ended_at"),
+            }
+        )
+    spaces.sort(key=lambda s: (s.get("agent_id") is not None, s.get("agent_id") or ""))
+    status_counts: dict[str, int] = {}
+    for row in indexes:
+        st = str(row.get("status") or "unknown")
+        status_counts[st] = status_counts.get(st, 0) + 1
+    return {
+        "total_indexes": len(indexes),
+        "status_counts": status_counts,
+        "spaces": spaces,
+    }
+
+
+def _graphrag_for_agent(database_url: str, *, workspace_id: str, agent_id: str) -> dict[str, Any] | None:
+    row = fetch_latest_index(database_url, workspace_id=workspace_id, agent_id=agent_id)
+    if not row:
+        return None
+    stats = row.get("stats") if isinstance(row.get("stats"), dict) else {}
+    return {
+        "index_id": row.get("id"),
+        "status": row.get("status"),
+        "provider": row.get("provider"),
+        "ontology_name": row.get("ontology_name"),
+        "ontology_version": row.get("ontology_version"),
+        "stats": stats,
+        "failure_reason": row.get("failure_reason"),
+        "created_at": row.get("created_at"),
+        "ended_at": row.get("ended_at"),
+    }
 
 
 def _embeddings_by_agent(conn: psycopg.Connection, workspace_id: str) -> list[dict[str, Any]]:
@@ -240,6 +357,7 @@ def build_agent_summaries(
             database_url, workspace_id=workspace_id, agent_id=aid
         )
         usage = usage_totals_by_source(database_url, workspace_id=workspace_id, agent_id=aid)
+        graphrag = _graphrag_for_agent(database_url, workspace_id=workspace_id, agent_id=aid)
         with psycopg.connect(database_url, row_factory=dict_row) as conn:
             graph = _scoped_graph_counts(conn, workspace_id, aid)
             notes = _count(
@@ -284,6 +402,14 @@ def build_agent_summaries(
                 "provider": agent.get("provider") or "north",
                 "stats": stats,
                 "graph": graph,
+                "graphrag": graphrag,
+                "compare": _compare_for_space(
+                    database_url,
+                    workspace_id=workspace_id,
+                    agent_id=aid,
+                    graph=graph,
+                    graphrag=graphrag,
+                ),
                 "notes": notes,
                 "wiki_spaces": wiki_spaces,
                 "embeddings_by_kind": {
@@ -380,6 +506,26 @@ def fetch_dashboard_metrics(
     agent_summaries = build_agent_summaries(
         database_url, workspace_id=workspace_id, agents=agents
     )
+    graphrag_summary = _graphrag_workspace_summary(database_url, workspace_id=workspace_id)
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        ws_graph = _scoped_graph_counts(conn, workspace_id, None)
+    ws_graphrag_row = fetch_latest_index(database_url, workspace_id=workspace_id, agent_id=None)
+    ws_graphrag_serialized = None
+    if ws_graphrag_row:
+        stats = ws_graphrag_row.get("stats") if isinstance(ws_graphrag_row.get("stats"), dict) else {}
+        ws_graphrag_serialized = {
+            "index_id": ws_graphrag_row.get("id"),
+            "status": ws_graphrag_row.get("status"),
+            "stats": stats,
+            "ended_at": ws_graphrag_row.get("ended_at"),
+        }
+    workspace_compare = _compare_for_space(
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=None,
+        graph=ws_graph,
+        graphrag=ws_graphrag_serialized,
+    )
 
     selected_agent = None
     selected_conversation = None
@@ -422,6 +568,8 @@ def fetch_dashboard_metrics(
             "by_source": usage_by_source,
         },
         "agents": agent_summaries,
+        "graphrag": graphrag_summary,
+        "workspace_compare": workspace_compare,
         "filters": {
             "agent_id": agent_id,
             "conversation_id": conversation_id,

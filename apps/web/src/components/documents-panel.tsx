@@ -9,8 +9,13 @@ import {
   type ConversationMemoryStats,
 } from "@/components/conversation-memory-telemetry";
 import { DocumentDetailPanel } from "@/components/document-detail-panel";
+import {
+  DEFAULT_ONTOLOGY,
+  OntologyPicker,
+  type OntologyChoice,
+} from "@/components/ontology-picker";
 import { emitGraphInvalidated } from "@/lib/graph-events";
-import { useJobEvents } from "@/lib/job-events";
+import { useActiveJobs, useJobEvents } from "@/lib/job-events";
 import { cn } from "@/lib/utils";
 
 /** Document rows in these states advance in the worker; poll the list so UI stays in sync with the DB. */
@@ -30,6 +35,9 @@ type DocRow = {
   status: string;
   failure_reason: string | null;
   created_at: string;
+  source_kind?: string;
+  collection_id?: string | null;
+  collection_name?: string | null;
   /** Present when listing ``north_conversation`` documents. */
   agent_id?: string | null;
   agent_display_name?: string;
@@ -38,6 +46,51 @@ type DocRow = {
   conversation_activity_at?: string | null;
   memory?: ConversationMemoryStats | null;
 };
+
+type CollectionRow = {
+  id: string;
+  name: string;
+  document_count?: number;
+};
+
+const UPLOAD_ACCEPT =
+  "application/pdf,.pdf,text/plain,.txt,text/markdown,.md,.markdown,message/rfc822,.eml";
+
+function isAcceptedUpload(file: File): boolean {
+  const name = file.name.toLowerCase();
+  if (
+    name.endsWith(".pdf") ||
+    name.endsWith(".txt") ||
+    name.endsWith(".md") ||
+    name.endsWith(".markdown") ||
+    name.endsWith(".eml")
+  ) {
+    return true;
+  }
+  const t = file.type;
+  return (
+    t === "application/pdf" ||
+    t === "text/plain" ||
+    t === "text/markdown" ||
+    t === "text/x-markdown" ||
+    t === "message/rfc822" ||
+    t === "application/eml" ||
+    t === ""
+  );
+}
+
+function sourceKindBadge(kind: string | undefined): { label: string; className: string } {
+  switch (kind) {
+    case "text":
+      return { label: "TXT", className: "bg-sky-500/15 text-sky-100" };
+    case "markdown":
+      return { label: "MD", className: "bg-emerald-500/15 text-emerald-100" };
+    case "email":
+      return { label: "EML", className: "bg-orange-500/15 text-orange-100" };
+    default:
+      return { label: "PDF", className: "bg-primary/15 text-foreground" };
+  }
+}
 
 function formatLocalTs(iso: string | undefined | null): string {
   if (!iso) return "—";
@@ -141,7 +194,7 @@ export function DocumentsPanel({
 }: {
   workspaceId: string;
   variant?: "compact" | "full";
-  /** ``documents`` = PDF uploads; ``conversations`` = North agent transcript imports (same DB row shape). */
+  /** ``documents`` = file uploads; ``conversations`` = North agent transcript imports (same DB row shape). */
   library?: "documents" | "conversations";
 }) {
   const [docs, setDocs] = useState<DocRow[]>([]);
@@ -154,6 +207,10 @@ export function DocumentsPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listRefreshNonce, setListRefreshNonce] = useState(0);
   const [collapsedAgentSections, setCollapsedAgentSections] = useState<Set<string>>(() => new Set());
+  const [uploadOntology, setUploadOntology] = useState<OntologyChoice>(DEFAULT_ONTOLOGY);
+  const [collections, setCollections] = useState<CollectionRow[]>([]);
+  const [uploadCollection, setUploadCollection] = useState("");
+  const [filterCollectionId, setFilterCollectionId] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const activeJobsRef = useRef<Record<string, string>>({});
 
@@ -161,13 +218,30 @@ export function DocumentsPanel({
 
   activeJobsRef.current = activeJobs;
 
-  const listSourceKind = library === "conversations" ? "north_conversation" : "pdf";
+  const listSourceKind = library === "conversations" ? "north_conversation" : "uploads";
+
+  const loadCollections = useCallback(async () => {
+    if (library !== "documents") return;
+    try {
+      const res = await fetch(`/api/v1/workspaces/${workspaceId}/document-collections`, {
+        cache: "no-store",
+      });
+      const body = (await res.json().catch(() => ({}))) as { items?: CollectionRow[] };
+      if (res.ok) setCollections(body.items ?? []);
+    } catch {
+      /* ignore */
+    }
+  }, [library, workspaceId]);
 
   const load = useCallback(async () => {
     setListError(null);
     try {
+      const qs = new URLSearchParams({ source_kind: listSourceKind });
+      if (library === "documents" && filterCollectionId) {
+        qs.set("collection_id", filterCollectionId);
+      }
       const res = await fetch(
-        `/api/v1/workspaces/${workspaceId}/documents?source_kind=${listSourceKind}`,
+        `/api/v1/workspaces/${workspaceId}/documents?${qs.toString()}`,
         { cache: "no-store" },
       );
       const body = (await res.json()) as { items?: DocRow[]; error?: { message?: string } };
@@ -191,11 +265,15 @@ export function DocumentsPanel({
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, listSourceKind]);
+  }, [workspaceId, listSourceKind, library, filterCollectionId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadCollections();
+  }, [loadCollections]);
 
   const hasActiveIngestion = useMemo(
     () => docs.some((d) => INGESTION_ACTIVE_STATUSES.has(d.status)),
@@ -242,7 +320,9 @@ export function DocumentsPanel({
     [clearJob, load],
   );
 
-  const { registerActiveJob, requestOpenLogConsole } = useJobEvents();
+  const { registerActiveJob, requestOpenLogConsole, theaterFocusMode } = useJobEvents();
+  const activeJobCount = useActiveJobs().length;
+  const theaterFocus = theaterFocusMode && activeJobCount > 0;
 
   const registerJob = useCallback(
     (docId: string, jobId: string) => {
@@ -304,12 +384,24 @@ export function DocumentsPanel({
         setUploadError(`"${f.name}" exceeds maximum upload size`);
         return;
       }
-      const okType = f.type === "application/pdf" || f.type === "" || f.name.toLowerCase().endsWith(".pdf");
-      if (!okType) {
-        setUploadError(`"${f.name}" is not a PDF`);
+      if (!isAcceptedUpload(f)) {
+        setUploadError(`"${f.name}" is not an accepted type (PDF, TXT, MD, EML)`);
         return;
       }
       fd.append("file", f);
+    }
+    fd.append("ontology_name", uploadOntology.name);
+    fd.append("ontology_version", uploadOntology.version);
+    const coll = uploadCollection.trim();
+    if (coll) {
+      const existing = collections.find(
+        (c) => c.name.toLowerCase() === coll.toLowerCase() || c.id === coll,
+      );
+      if (existing) {
+        fd.append("collection_id", existing.id);
+      } else {
+        fd.append("collection_name", coll);
+      }
     }
 
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/documents`, {
@@ -357,7 +449,9 @@ export function DocumentsPanel({
   const dropZoneClass =
     variant === "full"
       ? "min-h-[180px] rounded-lg border-2 border-dashed px-6 py-10"
-      : "min-h-[120px] rounded-lg border border-dashed px-4 py-6";
+      : theaterFocus
+        ? "rounded-md border border-dashed px-3 py-2"
+        : "rounded-lg border border-dashed px-3 py-2.5";
 
   const selected = docs.find((d) => d.id === selectedId) ?? null;
 
@@ -410,7 +504,12 @@ export function DocumentsPanel({
         : "Documents";
 
   return (
-    <div className={variant === "full" ? "flex flex-col gap-6" : "flex h-full flex-col gap-3"}>
+    <div
+      className={cn(
+        variant === "full" ? "flex flex-col gap-6" : "flex flex-col gap-3",
+        variant !== "full" && !theaterFocus && "h-full",
+      )}
+    >
       {Object.entries(activeJobs).map(([docId, jobId]) => (
         <JobStreamBridge
           key={`${docId}-${jobId}`}
@@ -423,21 +522,69 @@ export function DocumentsPanel({
       ))}
 
       {isPdfLibrary ? (
-        <section aria-label="Upload PDFs">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-h5 text-muted-foreground">{listHeading}</p>
-            <button
-              type="button"
-              className="rounded-md bg-primary px-3 py-1.5 text-p font-medium text-primary-foreground"
-              onClick={() => inputRef.current?.click()}
-            >
-              Choose PDFs
-            </button>
-          </div>
+        <section aria-label="Upload documents" className={theaterFocus ? "shrink-0" : undefined}>
+          {!theaterFocus ? (
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <p className="text-h5 text-muted-foreground">{listHeading}</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-caption text-muted-foreground">
+                  Collection
+                  <input
+                    list={`doc-collections-${workspaceId}`}
+                    value={uploadCollection}
+                    onChange={(e) => setUploadCollection(e.target.value)}
+                    placeholder="Optional name"
+                    className="mt-1 block min-w-[10rem] rounded border border-input bg-card px-2 py-1 text-muted-foreground"
+                  />
+                  <datalist id={`doc-collections-${workspaceId}`}>
+                    {collections.map((c) => (
+                      <option key={c.id} value={c.name} />
+                    ))}
+                  </datalist>
+                </label>
+                <OntologyPicker
+                  workspaceId={workspaceId}
+                  value={uploadOntology}
+                  onChange={setUploadOntology}
+                  className="min-w-[12rem]"
+                  compact
+                />
+                <button
+                  type="button"
+                  className="rounded-md bg-primary px-3 py-1.5 text-p font-medium text-primary-foreground"
+                  onClick={() => inputRef.current?.click()}
+                >
+                  Choose files
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-2 flex flex-wrap items-end gap-2">
+              <input
+                list={`doc-collections-theater-${workspaceId}`}
+                value={uploadCollection}
+                onChange={(e) => setUploadCollection(e.target.value)}
+                placeholder="Collection (optional)"
+                className="min-w-[8rem] flex-1 rounded border border-input bg-card px-2 py-1 text-caption text-muted-foreground"
+              />
+              <datalist id={`doc-collections-theater-${workspaceId}`}>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.name} />
+                ))}
+              </datalist>
+              <OntologyPicker
+                workspaceId={workspaceId}
+                value={uploadOntology}
+                onChange={setUploadOntology}
+                className="min-w-[10rem] flex-1"
+                compact
+              />
+            </div>
+          )}
           <input
             ref={inputRef}
             type="file"
-            accept="application/pdf,.pdf"
+            accept={UPLOAD_ACCEPT}
             multiple
             className="sr-only"
             onChange={(e) => {
@@ -449,9 +596,12 @@ export function DocumentsPanel({
           <div
             role="button"
             tabIndex={0}
-            className={`${dropZoneClass} mt-3 flex cursor-pointer flex-col items-center justify-center gap-2 text-center text-caption outline-none transition-colors ${
-              dragOver ? "border-primary bg-primary/10" : "border-input bg-card/60"
-            }`}
+            className={cn(
+              dropZoneClass,
+              "flex cursor-pointer items-center justify-between gap-2 text-caption outline-none transition-colors",
+              theaterFocus ? "mt-0" : "mt-3 flex-col justify-center text-center",
+              dragOver ? "border-primary bg-primary/10" : "border-input bg-card/60",
+            )}
             onDragOver={(e) => {
               e.preventDefault();
               setDragOver(true);
@@ -466,13 +616,41 @@ export function DocumentsPanel({
             }}
             onClick={() => inputRef.current?.click()}
           >
-            <span className="text-p text-muted-foreground">Drop PDFs here or click to browse</span>
-            <span className="text-caption text-muted-foreground">Max {Math.round(uploadLimit / (1024 * 1024))} MB per file</span>
+            <span className="text-p text-muted-foreground">
+              {theaterFocus
+                ? "Drop PDF/TXT/MD/EML or browse"
+                : "Drop PDF, TXT, MD, or EML files here or click to browse"}
+            </span>
+            <span className="shrink-0 text-caption text-muted-foreground">
+              {theaterFocus ? (
+                <span className="rounded border border-border px-2 py-0.5">Choose</span>
+              ) : (
+                <>Max {Math.round(uploadLimit / (1024 * 1024))} MB per file</>
+              )}
+            </span>
           </div>
           {uploadError ? (
             <p className="mt-2 text-caption text-red-300" role="alert">
               {uploadError}
             </p>
+          ) : null}
+          {!theaterFocus && collections.length > 0 ? (
+            <label className="mt-3 block text-caption text-muted-foreground">
+              Filter by collection
+              <select
+                className="mt-1 w-full max-w-xs cursor-pointer rounded border border-input bg-card px-2 py-1 text-muted-foreground"
+                value={filterCollectionId}
+                onChange={(e) => setFilterCollectionId(e.target.value)}
+              >
+                <option value="">All uploads</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {typeof c.document_count === "number" ? ` (${c.document_count})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
           ) : null}
         </section>
       ) : (
@@ -488,6 +666,7 @@ export function DocumentsPanel({
         </section>
       )}
 
+      {!theaterFocus ? (
       <section aria-label="Document list" className="min-h-0 flex-1 overflow-auto">
         {loading ? (
           <p className="text-caption text-muted-foreground">
@@ -501,7 +680,7 @@ export function DocumentsPanel({
           <p className="text-caption text-muted-foreground">
             {library === "conversations"
               ? "No imported conversations yet. Open an agent under Agents and import from North."
-              : "No PDFs uploaded yet."}
+              : "No documents uploaded yet."}
           </p>
         ) : library === "conversations" ? (
           <div className="flex flex-col gap-6">
@@ -642,7 +821,21 @@ export function DocumentsPanel({
                     onClick={() => setSelectedId(d.id)}
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-p font-medium text-muted-foreground">{d.original_filename}</span>
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <span
+                          className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${sourceKindBadge(d.source_kind).className}`}
+                        >
+                          {sourceKindBadge(d.source_kind).label}
+                        </span>
+                        <span className="truncate text-p font-medium text-muted-foreground">
+                          {d.original_filename}
+                        </span>
+                        {d.collection_name ? (
+                          <span className="shrink-0 rounded bg-teal-500/15 px-1.5 py-0.5 text-[10px] text-teal-100">
+                            {d.collection_name}
+                          </span>
+                        ) : null}
+                      </span>
                       <span
                         className={`rounded-full px-2 py-0.5 text-caption capitalize ${statusStyles(d.status)}`}
                       >
@@ -670,6 +863,7 @@ export function DocumentsPanel({
           </ul>
         )}
       </section>
+      ) : null}
 
       {variant === "full" && selected ? (
         <DocumentDetailPanel

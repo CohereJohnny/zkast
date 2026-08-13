@@ -23,9 +23,13 @@ logger = structlog.get_logger(__name__)
 COHERE_COMPAT_BASE = "https://api.cohere.com/compatibility/v1"
 
 
-def falkor_database_for_workspace(workspace_id: str, agent_id: str | None = None) -> str:
+def falkor_database_for_workspace(
+    workspace_id: str,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+) -> str:
     """FalkorDB graph name; must match Graphiti ``group_id`` for reads/writes."""
-    return falkor_database_for_memory_space(workspace_id, agent_id)
+    return falkor_database_for_memory_space(workspace_id, agent_id, collection_id)
 
 
 def resolve_stored_cohere_api_key(settings: Settings, workspace_id: str) -> str | None:
@@ -50,6 +54,7 @@ def build_graphiti(
     api_key: str,
     pipeline: dict[str, object],
     agent_id: str | None = None,
+    collection_id: str | None = None,
     semaphore_limit: int | None = None,
 ) -> Graphiti:
     os.environ.setdefault("GRAPHITI_TELEMETRY_ENABLED", "false")
@@ -57,7 +62,7 @@ def build_graphiti(
     driver = FalkorDriver(
         host=settings.falkordb_host,
         port=settings.falkordb_port,
-        database=falkor_database_for_workspace(workspace_id, agent_id),
+        database=falkor_database_for_workspace(workspace_id, agent_id, collection_id),
     )
 
     llm_cfg = LLMConfig(
@@ -101,6 +106,7 @@ async def graphiti_for_workspace(
     settings: Settings,
     workspace_id: str,
     agent_id: str | None = None,
+    collection_id: str | None = None,
 ) -> Graphiti:
     api_key = resolve_cohere_api_key(settings, workspace_id)
     if not api_key:
@@ -112,13 +118,15 @@ async def graphiti_for_workspace(
         api_key=api_key,
         pipeline=pipeline,
         agent_id=agent_id,
+        collection_id=collection_id,
     )
     await g.build_indices_and_constraints()
-    graph_name = memory_space_graph_name(workspace_id, agent_id)
+    graph_name = memory_space_graph_name(workspace_id, agent_id, collection_id)
     logger.info(
         "graphiti_ready",
         workspace_id=workspace_id,
         agent_id=agent_id,
+        collection_id=collection_id,
         falkor_db=graph_name,
     )
     return g

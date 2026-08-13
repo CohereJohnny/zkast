@@ -9,7 +9,9 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-VALID_SOURCES = frozenset({"chat", "ingestion", "wiki", "dream", "eval", "retrieval", "other"})
+VALID_SOURCES = frozenset(
+    {"chat", "ingestion", "wiki", "dream", "eval", "retrieval", "graphrag", "other"}
+)
 
 
 def insert_usage_event(
@@ -27,12 +29,13 @@ def insert_usage_event(
     stage: str | None = None,
     model: str | None = None,
     metadata: dict[str, Any] | None = None,
+    allow_zero_tokens: bool = False,
 ) -> None:
     if usage_source not in VALID_SOURCES:
         usage_source = "other"
     tin = max(0, int(tokens_in))
     tout = max(0, int(tokens_out))
-    if tin == 0 and tout == 0:
+    if tin == 0 and tout == 0 and not allow_zero_tokens:
         return
     eid = str(uuid4())
     with psycopg.connect(database_url) as conn:

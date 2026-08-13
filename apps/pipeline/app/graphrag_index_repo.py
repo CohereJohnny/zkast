@@ -12,7 +12,7 @@ from psycopg.types.json import Json
 
 def _serialize(row: dict[str, Any]) -> dict[str, Any]:
     r = dict(row)
-    for key in ("id", "workspace_id", "agent_id", "configuration_id"):
+    for key in ("id", "workspace_id", "agent_id", "collection_id", "configuration_id"):
         if r.get(key) is not None:
             r[key] = str(r[key])
     for ts in ("started_at", "ended_at", "created_at", "updated_at"):
@@ -35,22 +35,28 @@ def insert_graphrag_index(
     ontology_name: str | None,
     ontology_version: str | None,
     job_id: str | None = None,
+    collection_id: str | None = None,
 ) -> dict[str, Any]:
+    if agent_id and collection_id:
+        raise ValueError("agent_id and collection_id are mutually exclusive")
     gid = str(uuid4())
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
             """
             INSERT INTO graphrag_indexes (
-              id, workspace_id, agent_id, configuration_id, status, provider,
+              id, workspace_id, agent_id, collection_id, configuration_id, status, provider,
               embedding_dim, ontology_name, ontology_version, job_id
             )
-            VALUES (%s::uuid, %s::uuid, %s::uuid, %s::uuid, 'pending', %s, %s, %s, %s, %s)
+            VALUES (
+              %s::uuid, %s::uuid, %s::uuid, %s::uuid, %s::uuid, 'pending', %s, %s, %s, %s, %s
+            )
             RETURNING *
             """,
             (
                 gid,
                 workspace_id,
                 agent_id,
+                collection_id,
                 configuration_id,
                 provider,
                 int(embedding_dim),
@@ -77,7 +83,32 @@ def mark_running(database_url: str, *, index_id: str) -> None:
 def mark_ready(
     database_url: str, *, index_id: str, artifact_uri: str, stats: dict[str, Any]
 ) -> None:
-    with psycopg.connect(database_url) as conn:
+    superseded_reason = "Superseded by a newer GraphRAG index for this memory space."
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT workspace_id, agent_id, collection_id FROM graphrag_indexes "
+            "WHERE id=%s::uuid LIMIT 1",
+            (index_id,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                """
+                UPDATE graphrag_indexes
+                SET status='failed', failure_reason=%s, ended_at=now(), updated_at=now()
+                WHERE workspace_id=%s::uuid
+                  AND agent_id IS NOT DISTINCT FROM %s::uuid
+                  AND collection_id IS NOT DISTINCT FROM %s::uuid
+                  AND status='ready'
+                  AND id != %s::uuid
+                """,
+                (
+                    superseded_reason,
+                    row["workspace_id"],
+                    row["agent_id"],
+                    row["collection_id"],
+                    index_id,
+                ),
+            )
         conn.execute(
             "UPDATE graphrag_indexes SET status='ready', artifact_uri=%s, stats=%s::jsonb, "
             "ended_at=now(), updated_at=now() WHERE id=%s::uuid",
@@ -96,6 +127,31 @@ def mark_failed(database_url: str, *, index_id: str, reason: str) -> None:
         conn.commit()
 
 
+def supersede_active_indexes(
+    database_url: str,
+    *,
+    workspace_id: str,
+    agent_id: str | None,
+    reason: str,
+    collection_id: str | None = None,
+) -> int:
+    """Mark pending/running indexes for this memory space failed before a new build."""
+    with psycopg.connect(database_url) as conn:
+        cur = conn.execute(
+            """
+            UPDATE graphrag_indexes
+            SET status='failed', failure_reason=%s, ended_at=now(), updated_at=now()
+            WHERE workspace_id=%s::uuid
+              AND agent_id IS NOT DISTINCT FROM %s::uuid
+              AND collection_id IS NOT DISTINCT FROM %s::uuid
+              AND status IN ('pending', 'running')
+            """,
+            (reason[:2000], workspace_id, agent_id, collection_id),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
 def fetch_graphrag_index(database_url: str, *, index_id: str) -> dict[str, Any] | None:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
@@ -110,11 +166,14 @@ def fetch_latest_index(
     workspace_id: str,
     agent_id: str | None,
     configuration_id: str | None = None,
+    collection_id: str | None = None,
 ) -> dict[str, Any] | None:
     clauses = ["workspace_id = %s::uuid"]
     args: list[Any] = [workspace_id]
     clauses.append("agent_id IS NOT DISTINCT FROM %s::uuid")
     args.append(agent_id)
+    clauses.append("collection_id IS NOT DISTINCT FROM %s::uuid")
+    args.append(collection_id)
     if configuration_id is not None:
         clauses.append("configuration_id = %s::uuid")
         args.append(configuration_id)
@@ -125,6 +184,16 @@ def fetch_latest_index(
             tuple(args),
         ).fetchone()
     return _serialize(dict(row)) if row else None
+
+
+def list_active_graphrag_indexes(database_url: str) -> list[dict[str, Any]]:
+    """Indexes still marked pending/running (candidates for orphan reconciliation)."""
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            "SELECT * FROM graphrag_indexes WHERE status IN ('pending', 'running') "
+            "ORDER BY created_at ASC LIMIT 200",
+        ).fetchall()
+    return [_serialize(dict(r)) for r in rows]
 
 
 def list_graphrag_indexes(database_url: str, *, workspace_id: str) -> list[dict[str, Any]]:

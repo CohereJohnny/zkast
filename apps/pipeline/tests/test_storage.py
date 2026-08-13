@@ -29,10 +29,14 @@ async def test_storage_write_checksum(tmp_path) -> None:
     doc_id = "00000000-0000-4000-8000-000000000099"
     buf = BytesIO(raw)
     uf = UploadFile(file=buf, filename="t.pdf")
-    uri, checksum, size = await storage.write_upload(ws, doc_id, uf, max_bytes=10_000_000)
+    uri, checksum, size, kind, mime = await storage.write_upload(
+        ws, doc_id, uf, max_bytes=10_000_000
+    )
     assert uri == f"local://{ws}/{doc_id}.pdf"
     assert checksum == expected
     assert size == len(raw)
+    assert kind == "pdf"
+    assert mime == "application/pdf"
     path = storage.absolute_path(ws, doc_id)
     assert path.is_file()
     assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
@@ -45,3 +49,20 @@ async def test_storage_rejects_non_pdf(tmp_path) -> None:
     uf = UploadFile(file=buf, filename="x.pdf")
     with pytest.raises(ValueError, match="not_pdf"):
         await storage.write_upload("ws", "doc", uf, max_bytes=1000)
+
+
+@pytest.mark.asyncio
+async def test_storage_write_text(tmp_path) -> None:
+    raw = b"hello collection\n"
+    storage = LocalStorage(str(tmp_path))
+    ws = "00000000-0000-4000-8000-000000000002"
+    doc_id = "00000000-0000-4000-8000-000000000098"
+    uf = UploadFile(file=BytesIO(raw), filename="notes.txt", headers={"content-type": "text/plain"})
+    uri, checksum, size, kind, mime = await storage.write_upload(
+        ws, doc_id, uf, max_bytes=10_000_000
+    )
+    assert uri.endswith(".txt")
+    assert kind == "text"
+    assert mime == "text/plain"
+    assert checksum == hashlib.sha256(raw).hexdigest()
+    assert size == len(raw)

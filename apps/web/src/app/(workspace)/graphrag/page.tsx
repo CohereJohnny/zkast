@@ -1,13 +1,19 @@
-import { GraphragPageClient } from "@/components/graphrag-page-client";
-import { getCurrentWorkspace } from "@/lib/auth";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function GraphragPage() {
-  const workspace = await getCurrentWorkspace();
-  return (
-    <div className="flex min-h-[520px] flex-col gap-4 p-2">
-      <GraphragPageClient workspaceId={workspace.id} />
-    </div>
-  );
+/** GraphRAG admin merged into /graph — preserve deep links. */
+export default function GraphragRedirectPage({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>;
+}) {
+  const p = new URLSearchParams();
+  p.set("view", "graphrag");
+  for (const [k, v] of Object.entries(searchParams)) {
+    if (k === "view") continue;
+    if (Array.isArray(v)) v.forEach((item) => p.append(k, item));
+    else if (v) p.set(k, v);
+  }
+  redirect(`/graph?${p.toString()}`);
 }

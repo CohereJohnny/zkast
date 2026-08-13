@@ -86,18 +86,23 @@ def summarize_workspace_graph(
     *,
     workspace_id: str,
     max_names_per_type: int = 25,
+    agent_id: str | None = None,
+    collection_id: str | None = None,
+    document_id: str | None = None,
 ) -> dict[str, Any]:
     """Return a compact, structured "shape of the graph" snapshot.
 
     Backs the graph-context grounding document that Sprint 6 injects into
     every chat turn. The shape includes:
 
-    - ``entity_total``, ``edge_total`` — workspace-wide counts.
+    - ``entity_total``, ``edge_total`` — counts (scoped when ``agent_id``,
+      ``collection_id``, or ``document_id`` is set).
     - ``entity_types`` — ordered list of ``{name, count, top_examples}``
       where ``top_examples`` are the entity ``canonical_name`` values for
       that type, ordered by degree desc, capped at
       ``max_names_per_type``.
     - ``edge_types`` — ordered list of ``{name, count}``.
+    - ``scope_label`` — human label for the grounding document header.
 
     Cheap (3 grouped queries + 1 indexed select per type) and intended to
     be called per chat turn before the LLM step. Always returns *all*
@@ -105,86 +110,186 @@ def summarize_workspace_graph(
     so a question like "list all locations" can be answered correctly
     when there are <= 25 Locations.
     """
-    with psycopg.connect(database_url, row_factory=dict_row) as conn:
-        entity_total_row = conn.execute(
-            "SELECT COUNT(*) AS c FROM entities WHERE workspace_id = %s::uuid",
-            (workspace_id,),
-        ).fetchone()
-        entity_total = int(entity_total_row["c"]) if entity_total_row else 0
+    from app.graph_repo import memory_space_entity_filter_sql
 
-        edge_total_row = conn.execute(
-            "SELECT COUNT(*) AS c FROM relationships WHERE workspace_id = %s::uuid",
-            (workspace_id,),
-        ).fetchone()
+    filt_sql, filt_params = memory_space_entity_filter_sql(
+        database_url,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        collection_id=collection_id,
+        document_id=document_id,
+    )
+    scoped = bool(filt_sql)
+    if agent_id:
+        scope_label = "Memory space"
+    elif collection_id:
+        scope_label = "Collection"
+    elif document_id:
+        scope_label = "Document"
+    else:
+        scope_label = "Workspace"
+
+    scoped_cte = f"""
+        scoped_entities AS (
+          SELECT e.id
+          FROM entities e
+          WHERE e.workspace_id = %s::uuid
+          {filt_sql}
+        )
+    """
+    cte_params: list[Any] = [workspace_id, *filt_params]
+
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        if scoped:
+            entity_total_row = conn.execute(
+                f"""
+                WITH {scoped_cte}
+                SELECT COUNT(*) AS c FROM scoped_entities
+                """,
+                cte_params,
+            ).fetchone()
+            edge_total_row = conn.execute(
+                f"""
+                WITH {scoped_cte}
+                SELECT COUNT(*) AS c
+                FROM relationships r
+                WHERE r.workspace_id = %s::uuid
+                  AND r.source_entity_id IN (SELECT id FROM scoped_entities)
+                  AND r.target_entity_id IN (SELECT id FROM scoped_entities)
+                """,
+                [*cte_params, workspace_id],
+            ).fetchone()
+        else:
+            entity_total_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM entities WHERE workspace_id = %s::uuid",
+                (workspace_id,),
+            ).fetchone()
+            edge_total_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM relationships WHERE workspace_id = %s::uuid",
+                (workspace_id,),
+            ).fetchone()
+        entity_total = int(entity_total_row["c"]) if entity_total_row else 0
         edge_total = int(edge_total_row["c"]) if edge_total_row else 0
 
         type_rows = conn.execute(
-            """
-            SELECT type AS name, COUNT(*) AS count
-            FROM entities
-            WHERE workspace_id = %s::uuid
-            GROUP BY type
-            ORDER BY COUNT(*) DESC, type ASC
+            f"""
+            SELECT e.type AS name, COUNT(*) AS count
+            FROM entities e
+            WHERE e.workspace_id = %s::uuid
+            {filt_sql}
+            GROUP BY e.type
+            ORDER BY COUNT(*) DESC, e.type ASC
             """,
-            (workspace_id,),
+            [workspace_id, *filt_params],
         ).fetchall()
 
         entity_types: list[dict[str, Any]] = []
         for r in type_rows:
             ttype = r["name"]
             count = int(r["count"])
-            # Degree-ordered exemplars give the LLM both "what types exist"
-            # *and* "which instances of this type matter". We cap names at
-            # ``max_names_per_type`` so the grounding document stays small
-            # enough to fit comfortably inside the per-turn token budget.
-            name_rows = conn.execute(
-                """
-                WITH inc AS (
-                    SELECT source_entity_id AS entity_id
-                    FROM relationships
-                    WHERE workspace_id = %s::uuid
-                    UNION ALL
-                    SELECT target_entity_id AS entity_id
-                    FROM relationships
-                    WHERE workspace_id = %s::uuid
-                ),
-                deg AS (
-                    SELECT entity_id, COUNT(*) AS degree
-                    FROM inc
-                    GROUP BY entity_id
-                )
-                SELECT e.canonical_name AS name,
-                       COALESCE(deg.degree, 0) AS degree
-                FROM entities e
-                LEFT JOIN deg ON deg.entity_id = e.id
-                WHERE e.workspace_id = %s::uuid AND e.type = %s
-                ORDER BY COALESCE(deg.degree, 0) DESC, e.canonical_name ASC
-                LIMIT %s
-                """,
-                (workspace_id, workspace_id, workspace_id, ttype, int(max_names_per_type)),
-            ).fetchall()
+            if scoped:
+                name_rows = conn.execute(
+                    f"""
+                    WITH {scoped_cte},
+                    inc AS (
+                      SELECT r.source_entity_id AS entity_id
+                      FROM relationships r
+                      WHERE r.workspace_id = %s::uuid
+                        AND r.source_entity_id IN (SELECT id FROM scoped_entities)
+                        AND r.target_entity_id IN (SELECT id FROM scoped_entities)
+                      UNION ALL
+                      SELECT r.target_entity_id AS entity_id
+                      FROM relationships r
+                      WHERE r.workspace_id = %s::uuid
+                        AND r.source_entity_id IN (SELECT id FROM scoped_entities)
+                        AND r.target_entity_id IN (SELECT id FROM scoped_entities)
+                    ),
+                    deg AS (
+                      SELECT entity_id, COUNT(*) AS degree
+                      FROM inc
+                      GROUP BY entity_id
+                    )
+                    SELECT e.canonical_name AS name,
+                           COALESCE(deg.degree, 0) AS degree
+                    FROM entities e
+                    LEFT JOIN deg ON deg.entity_id = e.id
+                    WHERE e.workspace_id = %s::uuid
+                      AND e.type = %s
+                      AND e.id IN (SELECT id FROM scoped_entities)
+                    ORDER BY COALESCE(deg.degree, 0) DESC, e.canonical_name ASC
+                    LIMIT %s
+                    """,
+                    [
+                        *cte_params,
+                        workspace_id,
+                        workspace_id,
+                        workspace_id,
+                        ttype,
+                        int(max_names_per_type),
+                    ],
+                ).fetchall()
+            else:
+                name_rows = conn.execute(
+                    """
+                    WITH inc AS (
+                        SELECT source_entity_id AS entity_id
+                        FROM relationships
+                        WHERE workspace_id = %s::uuid
+                        UNION ALL
+                        SELECT target_entity_id AS entity_id
+                        FROM relationships
+                        WHERE workspace_id = %s::uuid
+                    ),
+                    deg AS (
+                        SELECT entity_id, COUNT(*) AS degree
+                        FROM inc
+                        GROUP BY entity_id
+                    )
+                    SELECT e.canonical_name AS name,
+                           COALESCE(deg.degree, 0) AS degree
+                    FROM entities e
+                    LEFT JOIN deg ON deg.entity_id = e.id
+                    WHERE e.workspace_id = %s::uuid AND e.type = %s
+                    ORDER BY COALESCE(deg.degree, 0) DESC, e.canonical_name ASC
+                    LIMIT %s
+                    """,
+                    (workspace_id, workspace_id, workspace_id, ttype, int(max_names_per_type)),
+                ).fetchall()
             top_examples = [str(nr["name"]) for nr in name_rows if nr.get("name")]
             entity_types.append(
                 {
                     "name": ttype,
                     "count": count,
                     "top_examples": top_examples,
-                    # ``truncated_examples`` lets the LLM know it is seeing
-                    # a sample rather than the full list when applicable.
                     "truncated_examples": count > len(top_examples),
                 }
             )
 
-        edge_rows = conn.execute(
-            """
-            SELECT type AS name, COUNT(*) AS count
-            FROM relationships
-            WHERE workspace_id = %s::uuid
-            GROUP BY type
-            ORDER BY COUNT(*) DESC, type ASC
-            """,
-            (workspace_id,),
-        ).fetchall()
+        if scoped:
+            edge_rows = conn.execute(
+                f"""
+                WITH {scoped_cte}
+                SELECT r.type AS name, COUNT(*) AS count
+                FROM relationships r
+                WHERE r.workspace_id = %s::uuid
+                  AND r.source_entity_id IN (SELECT id FROM scoped_entities)
+                  AND r.target_entity_id IN (SELECT id FROM scoped_entities)
+                GROUP BY r.type
+                ORDER BY COUNT(*) DESC, r.type ASC
+                """,
+                [*cte_params, workspace_id],
+            ).fetchall()
+        else:
+            edge_rows = conn.execute(
+                """
+                SELECT type AS name, COUNT(*) AS count
+                FROM relationships
+                WHERE workspace_id = %s::uuid
+                GROUP BY type
+                ORDER BY COUNT(*) DESC, type ASC
+                """,
+                (workspace_id,),
+            ).fetchall()
         edge_types = [
             {"name": str(r["name"]), "count": int(r["count"])} for r in edge_rows
         ]
@@ -194,6 +299,7 @@ def summarize_workspace_graph(
         "edge_total": edge_total,
         "entity_types": entity_types,
         "edge_types": edge_types,
+        "scope_label": scope_label,
     }
 
 
